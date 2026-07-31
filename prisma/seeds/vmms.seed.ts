@@ -107,10 +107,13 @@ export async function seedVmms(prisma: PrismaClient) {
 
   const oilChangeTemplate = seededTemplates.find(t => t.type === 'Oil Change');
   const brakeInspectionTemplate = seededTemplates.find(t => t.type === 'Brake Inspection');
+  const tireRotationTemplate = seededTemplates.find(t => t.type === 'Tire Rotation');
+  const engineTuneupTemplate = seededTemplates.find(t => t.type === 'Engine Tune-up');
   const generalInspectionTemplate = seededTemplates.find(t => t.type === 'General Inspection');
 
   const staRosaGarage = garages.find(g => g.name === 'Sta. Rosa');
   const marikinaGarage = garages.find(g => g.name === 'Marikina');
+  const pulilanGarage = garages.find(g => g.name === 'Pulilan') ?? garages[2];
 
   const maintenanceSchedulesData = [
     {
@@ -191,9 +194,96 @@ export async function seedVmms(prisma: PrismaClient) {
       assignedMechanic: mechanics[4].name, // Carl Santos
       accountType: AccountType.IN_HOUSE,
       checklistTemplateId: generalInspectionTemplate?.id,
-      garageId: garages[2].id, // Pulilan
+      garageId: pulilanGarage?.id,
       odometerReading: 145100,
       triggerType: MaintenanceTriggerType.MANUAL,
+    },
+    {
+      vehicleId: vehicles[0].plateNumber, // ABC-1234
+      title: tireRotationTemplate?.type ?? 'Tire Rotation',
+      status: MaintenanceStatus.PENDING,
+      createdAt: new Date('2026-06-30T00:00:00.000Z'),
+      assignedMechanic: mechanics[2].name, // Isabel Reyes
+      accountType: AccountType.IN_HOUSE,
+      checklistTemplateId: tireRotationTemplate?.id,
+      garageId: staRosaGarage?.id,
+      odometerReading: 51000,
+      triggerType: MaintenanceTriggerType.ODOMETER,
+      intervalKm: 8000,
+      bufferDistanceKm: 400,
+      startingReferenceReadingKm: 43000,
+    },
+    {
+      vehicleId: vehicles[1].plateNumber, // XYZ-5678
+      title: engineTuneupTemplate?.type ?? 'Engine Tune-up',
+      status: MaintenanceStatus.IN_PROGRESS,
+      createdAt: new Date('2026-06-27T00:00:00.000Z'),
+      assignedMechanic: mechanics[3].name, // Carl Santos
+      accountType: AccountType.IN_HOUSE,
+      checklistTemplateId: engineTuneupTemplate?.id,
+      garageId: marikinaGarage?.id,
+      odometerReading: 63800,
+      triggerType: MaintenanceTriggerType.ODOMETER,
+      intervalKm: 12000,
+      bufferDistanceKm: 800,
+      startingReferenceReadingKm: 50000,
+    },
+    {
+      vehicleId: vehicles[2].plateNumber, // DEF-9012
+      title: brakeInspectionTemplate?.type ?? 'Brake Inspection',
+      status: MaintenanceStatus.COMPLETED,
+      createdAt: new Date('2026-06-21T00:00:00.000Z'),
+      assignedMechanic: mechanics[2].name, // Isabel Reyes
+      accountType: AccountType.OUTSOURCED,
+      checklistTemplateId: brakeInspectionTemplate?.id,
+      garageId: staRosaGarage?.id,
+      odometerReading: 34800,
+      triggerType: MaintenanceTriggerType.ODOMETER,
+      intervalKm: 6000,
+      bufferDistanceKm: 300,
+      startingReferenceReadingKm: 28800,
+    },
+    {
+      vehicleId: vehicles[3].plateNumber, // GHI-3456
+      title: oilChangeTemplate?.type ?? 'Oil Change',
+      status: MaintenanceStatus.OVERDUE,
+      createdAt: new Date('2026-06-16T00:00:00.000Z'),
+      assignedMechanic: mechanics[1].name, // Pedro Santos
+      accountType: AccountType.IN_HOUSE,
+      checklistTemplateId: oilChangeTemplate?.id,
+      garageId: marikinaGarage?.id,
+      odometerReading: 23650,
+      triggerType: MaintenanceTriggerType.TIME,
+      intervalType: MaintenanceIntervalType.MONTHLY,
+      startReferenceDate: new Date('2026-05-16T00:00:00.000Z'),
+    },
+    {
+      vehicleId: vehicles[4].plateNumber, // JKL-7890
+      title: generalInspectionTemplate?.type ?? 'General Inspection',
+      status: MaintenanceStatus.PENDING,
+      createdAt: new Date('2026-06-24T00:00:00.000Z'),
+      assignedMechanic: mechanics[0].name, // Juan dela Cruz
+      accountType: AccountType.IN_HOUSE,
+      checklistTemplateId: generalInspectionTemplate?.id,
+      garageId: pulilanGarage?.id,
+      odometerReading: 98500,
+      triggerType: MaintenanceTriggerType.TIME,
+      intervalType: MaintenanceIntervalType.QUARTERLY,
+      startReferenceDate: new Date('2026-03-24T00:00:00.000Z'),
+    },
+    {
+      vehicleId: vehicles[5].plateNumber, // MNO-1122
+      title: tireRotationTemplate?.type ?? 'Tire Rotation',
+      status: MaintenanceStatus.PENDING,
+      createdAt: new Date('2026-06-18T00:00:00.000Z'),
+      assignedMechanic: mechanics[4].name, // Carl Santos
+      accountType: AccountType.OUTSOURCED,
+      checklistTemplateId: tireRotationTemplate?.id,
+      garageId: marikinaGarage?.id,
+      odometerReading: 154200,
+      triggerType: MaintenanceTriggerType.TIME,
+      intervalType: MaintenanceIntervalType.SEMI_ANNUALLY,
+      startReferenceDate: new Date('2026-06-01T00:00:00.000Z'),
     },
   ];
 

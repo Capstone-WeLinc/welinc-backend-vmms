@@ -29,7 +29,7 @@ export class MaintenanceSchedulesService {
         vehicleId: schedule.vehicleId,
         title: schedule.title,
         status: schedule.status,
-        date: schedule.createdAt.toISOString().slice(0, 10),
+        date: this.formatDateOnly(schedule.createdAt),
         assignedMechanic: schedule.assignedMechanic,
         assignedDriver: schedule.assignedMechanic,
         accountType: schedule.accountType ?? null,
@@ -42,9 +42,7 @@ export class MaintenanceSchedulesService {
         startingReferenceReadingKm:
           schedule.startingReferenceReadingKm?.toString() ?? null,
         intervalType: schedule.intervalType ?? null,
-        startReferenceDate: schedule.startReferenceDate
-          ? schedule.startReferenceDate.toISOString().slice(0, 10)
-          : null,
+        startReferenceDate: this.formatDateOnly(schedule.startReferenceDate),
         previousScheduleId: schedule.previousScheduleId ?? null,
         workOrderProgress: schedule.workOrderProgress ?? null,
       }));
@@ -228,7 +226,7 @@ export class MaintenanceSchedulesService {
       vehicleId: schedule.vehicleId,
       title: schedule.title,
       status: schedule.status,
-      date: schedule.createdAt.toISOString().slice(0, 10),
+      date: this.formatDateOnly(schedule.createdAt),
       assignedMechanic: schedule.assignedMechanic,
       assignedDriver: schedule.assignedMechanic,
       accountType: schedule.accountType ?? null,
@@ -241,9 +239,7 @@ export class MaintenanceSchedulesService {
       startingReferenceReadingKm:
         schedule.startingReferenceReadingKm?.toString() ?? null,
       intervalType: schedule.intervalType ?? null,
-      startReferenceDate: schedule.startReferenceDate
-        ? schedule.startReferenceDate.toISOString().slice(0, 10)
-        : null,
+      startReferenceDate: this.formatDateOnly(schedule.startReferenceDate),
       previousScheduleId: schedule.previousScheduleId ?? null,
       workOrderProgress: schedule.workOrderProgress ?? null,
     };
@@ -320,9 +316,18 @@ export class MaintenanceSchedulesService {
 
   private formatDateOnly(value: Date | string | null): string | null {
     if (value == null) return null;
-    return value instanceof Date
-      ? value.toISOString().slice(0, 10)
-      : String(value).slice(0, 10);
+
+    const date = value instanceof Date ? value : new Date(value);
+
+    if (Number.isNaN(date.getTime())) {
+      return null;
+    }
+
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+
+    return `${year}-${month}-${day}`;
   }
 
   private async getMaintenanceScheduleColumns(): Promise<Set<string>> {
