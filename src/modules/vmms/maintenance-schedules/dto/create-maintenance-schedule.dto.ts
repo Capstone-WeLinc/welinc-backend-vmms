@@ -4,7 +4,14 @@ import {
   MaintenanceStatus,
   MaintenanceTriggerType,
 } from '@prisma/client';
-import { IsEnum, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import {
+  IsEnum,
+  IsNotEmpty,
+  IsNumber,
+  IsOptional,
+  IsString,
+} from 'class-validator';
+import { Type } from 'class-transformer';
 
 export class CreateMaintenanceScheduleDto {
   @IsString()
@@ -39,6 +46,36 @@ export class CreateMaintenanceScheduleDto {
   @IsOptional()
   account_type?: AccountType;
 
+  @Type(() => Number)
+  @IsNumber()
+  @IsOptional()
+  partsCost?: number;
+
+  @Type(() => Number)
+  @IsNumber()
+  @IsOptional()
+  parts_cost?: number;
+
+  @Type(() => Number)
+  @IsNumber()
+  @IsOptional()
+  laborCost?: number;
+
+  @Type(() => Number)
+  @IsNumber()
+  @IsOptional()
+  labor_cost?: number;
+
+  @Type(() => Number)
+  @IsNumber()
+  @IsOptional()
+  totalCost?: number;
+
+  @Type(() => Number)
+  @IsNumber()
+  @IsOptional()
+  total_cost?: number;
+
   @IsString()
   @IsOptional()
   odometerReading?: string;
@@ -70,4 +107,10 @@ export class CreateMaintenanceScheduleDto {
   @IsString()
   @IsOptional()
   checklistTemplateId?: string;
+
+  @IsOptional()
+  workOrderProgress?: unknown;
+
+  @IsOptional()
+  work_order_progress?: unknown;
 }

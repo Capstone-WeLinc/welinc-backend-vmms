@@ -156,10 +156,42 @@ export async function seedVmms(prisma: PrismaClient) {
       garageId: staRosaGarage?.id,
       odometerReading: 32000,
       triggerType: MaintenanceTriggerType.MANUAL,
+      partsCost: 650.0,
+      laborCost: 320.0,
+      totalCost: 970.0,
       workOrderProgress: {
-        partsCost: 650.0,
-        laborCost: 320.0,
-        totalCost: 970.0,
+        checklist: [
+          {
+            item: 'Check all fluid levels',
+            completed: true,
+            notes: 'Washer fluid topped up and coolant level confirmed.',
+            selectedOption: 'yes',
+          },
+          {
+            item: 'Inspect belts and hoses',
+            completed: true,
+            notes: 'No cracks found. Tightened the serpentine belt.',
+            selectedOption: 'yes',
+          },
+          {
+            item: 'Test battery and charging system',
+            completed: true,
+            notes: 'Battery voltage stable at 13.8V.',
+            selectedOption: 'yes',
+          },
+          {
+            item: 'Check exterior and interior lights',
+            completed: true,
+            notes: 'All lights operational except one fog lamp replaced.',
+            selectedOption: 'no',
+          },
+          {
+            item: 'Inspect wiper blades',
+            completed: true,
+            notes: 'Front wiper blades replaced with new set.',
+            selectedOption: 'yes',
+          },
+        ],
       },
     },
     {
@@ -175,10 +207,42 @@ export async function seedVmms(prisma: PrismaClient) {
       triggerType: MaintenanceTriggerType.TIME,
       intervalType: MaintenanceIntervalType.MONTHLY,
       startReferenceDate: new Date('2026-06-01T00:00:00.000Z'),
+      partsCost: 480.0,
+      laborCost: 290.0,
+      totalCost: 770.0,
       workOrderProgress: {
-        partsCost: 480.0,
-        laborCost: 290.0,
-        totalCost: 770.0,
+        checklist: [
+          {
+            item: 'Check all fluid levels',
+            completed: true,
+            note: 'Oil level checked and within range.',
+            selectedOption: 'yes',
+          },
+          {
+            item: 'Inspect belts and hoses',
+            completed: true,
+            note: 'Minor wear on hose, no replacement needed.',
+            selectedOption: 'yes',
+          },
+          {
+            item: 'Test battery and charging system',
+            completed: true,
+            note: 'Alternator output normal.',
+            selectedOption: 'yes',
+          },
+          {
+            item: 'Check exterior and interior lights',
+            completed: true,
+            note: 'Replaced one burned-out interior bulb.',
+            selectedOption: 'yes',
+          },
+          {
+            item: 'Inspect wiper blades',
+            completed: true,
+            note: 'Wipers good; no action required.',
+            selectedOption: 'yes',
+          },
+        ],
       },
     },
     {
@@ -252,10 +316,42 @@ export async function seedVmms(prisma: PrismaClient) {
       intervalKm: 6000,
       bufferDistanceKm: 300,
       startingReferenceReadingKm: 28800,
+      partsCost: 420.0,
+      laborCost: 260.0,
+      totalCost: 680.0,
       workOrderProgress: {
-        partsCost: 420.0,
-        laborCost: 260.0,
-        totalCost: 680.0,
+        checklist: [
+          {
+            item: 'Check brake pad thickness',
+            completed: true,
+            notes: 'Brake pads at 7mm, within acceptable limit.',
+            selectedOption: 'yes',
+          },
+          {
+            item: 'Inspect brake rotors for wear',
+            completed: true,
+            notes: 'Rotors cleaned and minor scoring addressed.',
+            selectedOption: 'yes',
+          },
+          {
+            item: 'Check brake fluid level and condition',
+            completed: true,
+            notes: 'Fluid topped off and no contamination found.',
+            selectedOption: 'yes',
+          },
+          {
+            item: 'Inspect brake lines for leaks',
+            completed: true,
+            notes: 'No leaks detected on the brake lines.',
+            selectedOption: 'yes',
+          },
+          {
+            item: 'Test brake pedal feel',
+            completed: true,
+            notes: 'Pedal response is firm and even.',
+            selectedOption: 'yes',
+          },
+        ],
       },
     },
     {
@@ -301,6 +397,14 @@ export async function seedVmms(prisma: PrismaClient) {
       startReferenceDate: new Date('2026-06-01T00:00:00.000Z'),
     },
   ];
+
+  const assertCompletedScheduleHasProgress = (schedule: any) => {
+    if (schedule.status === MaintenanceStatus.COMPLETED && schedule.workOrderProgress == null) {
+      throw new Error(
+        `Completed maintenance schedule for vehicle ${schedule.vehicleId} must include workOrderProgress in seed data.`,
+      );
+    }
+  };
 
   const getNextMaintenanceDate = (date: Date, intervalType?: MaintenanceIntervalType | null) => {
     const next = new Date(date);
@@ -363,6 +467,8 @@ export async function seedVmms(prisma: PrismaClient) {
 
   let createdMaintenanceSchedulesCount = 0;
   for (const schedule of maintenanceSchedulesData) {
+    assertCompletedScheduleHasProgress(schedule);
+
     const createdSchedule = await prisma.maintenanceSchedule.create({
       data: schedule,
     });

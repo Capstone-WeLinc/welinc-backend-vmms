@@ -366,6 +366,9 @@ model MaintenanceSchedule {
   startReferenceDate       DateTime?         @map("start_reference_date") @db.Timestamptz(6)
   previousScheduleId       String?           @unique @map("previous_schedule_id") @db.Uuid
   workOrderProgress        Json?             @map("work_order_progress")
+  partsCost                Decimal?          @map("parts_cost") @db.Decimal(10, 2)
+  laborCost                Decimal?          @map("labor_cost") @db.Decimal(10, 2)
+  totalCost                Decimal?          @map("total_cost") @db.Decimal(10, 2)
   deletedAt                DateTime?         @map("deleted_at") @db.Timestamptz(6)
   createdAt                DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt                DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)

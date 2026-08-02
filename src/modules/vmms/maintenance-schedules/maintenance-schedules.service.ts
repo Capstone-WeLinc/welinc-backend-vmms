@@ -24,28 +24,39 @@ export class MaintenanceSchedulesService {
         orderBy: { createdAt: 'desc' },
       });
 
-      return schedules.map((schedule) => ({
-        id: schedule.id,
-        vehicleId: schedule.vehicleId,
-        title: schedule.title,
-        status: schedule.status,
-        date: this.formatDateOnly(schedule.createdAt),
-        assignedMechanic: schedule.assignedMechanic,
-        assignedDriver: schedule.assignedMechanic,
-        accountType: schedule.accountType ?? null,
-        checklistTemplateId: schedule.checklistTemplateId ?? null,
-        garageId: schedule.garageId ?? null,
-        odometerReading: schedule.odometerReading?.toString() ?? null,
-        triggerType: schedule.triggerType ?? null,
-        intervalKm: schedule.intervalKm?.toString() ?? null,
-        bufferDistanceKm: schedule.bufferDistanceKm?.toString() ?? null,
-        startingReferenceReadingKm:
-          schedule.startingReferenceReadingKm?.toString() ?? null,
-        intervalType: schedule.intervalType ?? null,
-        startReferenceDate: this.formatDateOnly(schedule.startReferenceDate),
-        previousScheduleId: schedule.previousScheduleId ?? null,
-        workOrderProgress: schedule.workOrderProgress ?? null,
-      }));
+      return schedules.map((schedule) => {
+        const costs = this.normalizeCostPayload({
+          partsCost: schedule.partsCost,
+          laborCost: schedule.laborCost,
+          totalCost: schedule.totalCost,
+        });
+
+        return {
+          id: schedule.id,
+          vehicleId: schedule.vehicleId,
+          title: schedule.title,
+          status: schedule.status,
+          date: this.formatDateOnly(schedule.createdAt),
+          assignedMechanic: schedule.assignedMechanic,
+          assignedDriver: schedule.assignedMechanic,
+          accountType: schedule.accountType ?? null,
+          checklistTemplateId: schedule.checklistTemplateId ?? null,
+          garageId: schedule.garageId ?? null,
+          odometerReading: schedule.odometerReading?.toString() ?? null,
+          triggerType: schedule.triggerType ?? null,
+          intervalKm: schedule.intervalKm?.toString() ?? null,
+          bufferDistanceKm: schedule.bufferDistanceKm?.toString() ?? null,
+          startingReferenceReadingKm:
+            schedule.startingReferenceReadingKm?.toString() ?? null,
+          intervalType: schedule.intervalType ?? null,
+          startReferenceDate: this.formatDateOnly(schedule.startReferenceDate),
+          previousScheduleId: schedule.previousScheduleId ?? null,
+          workOrderProgress: schedule.workOrderProgress ?? null,
+          partsCost: costs.partsCost,
+          laborCost: costs.laborCost,
+          totalCost: costs.totalCost,
+        };
+      });
     } catch (err) {
       // If the database schema is missing columns (e.g. during development), fall
       // back to a resilient raw query selecting a minimal set of columns. This
@@ -72,6 +83,9 @@ export class MaintenanceSchedulesService {
         start_reference_date?: Date | string | null;
         previous_schedule_id?: string | null;
         work_order_progress?: Prisma.JsonValue | null;
+        parts_cost?: number | null;
+        labor_cost?: number | null;
+        total_cost?: number | null;
       };
 
       const columns = await this.getMaintenanceScheduleColumns();
@@ -81,43 +95,63 @@ export class MaintenanceSchedulesService {
           ? 'scheduled_date'
           : null;
       const optionalColumn = (column: string) =>
-        columns.has(column) ? column : `NULL AS ${column}`;
+        columns.has(column) ? column : 'NULL';
       const dateOrder = createdDateColumn ?? 'id';
       const whereClause = columns.has('deleted_at') ? 'WHERE deleted_at IS NULL' : '';
       const rows = await this.prisma.$queryRawUnsafe<RawScheduleRow[]>(
-        `SELECT id, "vehicleId", title, status, ${optionalColumn('created_at')}, ${optionalColumn('scheduled_date')}, assigned_mechanic, account_type, checklist_template_id, ${optionalColumn('garage_id')}, odometer_reading, trigger_type, ${optionalColumn('interval_km')}, ${optionalColumn('buffer_distance_km')}, ${optionalColumn('starting_reference_reading_km')}, ${optionalColumn('interval_type')}, ${optionalColumn('start_reference_date')}, ${optionalColumn('previous_schedule_id')}, ${optionalColumn('work_order_progress')} FROM maintenance_schedules ${whereClause} ORDER BY ${dateOrder} DESC`,
+        `SELECT id, ${optionalColumn('vehicle_id')} AS vehicleId, title, status, ${optionalColumn('created_at')} AS created_at, ${optionalColumn('scheduled_date')} AS scheduled_date, assigned_mechanic, account_type, checklist_template_id, ${optionalColumn('garage_id')} AS garage_id, odometer_reading, trigger_type, ${optionalColumn('interval_km')} AS interval_km, ${optionalColumn('buffer_distance_km')} AS buffer_distance_km, ${optionalColumn('starting_reference_reading_km')} AS starting_reference_reading_km, ${optionalColumn('interval_type')} AS interval_type, ${optionalColumn('start_reference_date')} AS start_reference_date, ${optionalColumn('previous_schedule_id')} AS previous_schedule_id, ${optionalColumn('work_order_progress')} AS work_order_progress, ${optionalColumn('parts_cost')} AS parts_cost, ${optionalColumn('labor_cost')} AS labor_cost, ${optionalColumn('total_cost')} AS total_cost FROM maintenance_schedules ${whereClause} ORDER BY ${dateOrder} DESC`,
       );
 
-      return rows.map((r) => ({
-        id: String(r.id),
-        vehicleId: r.vehicleId ?? '',
-        title: r.title ?? '',
-        status: r.status ?? MaintenanceStatus.PENDING,
-        date: this.formatDateOnly(r.created_at ?? r.scheduled_date ?? null),
-        assignedMechanic: r.assigned_mechanic ?? null,
-        assignedDriver: r.assigned_mechanic ?? null,
-        accountType: r.account_type ?? null,
-        checklistTemplateId: r.checklist_template_id ?? null,
-        garageId: r.garage_id ?? null,
-        odometerReading:
-          r.odometer_reading != null ? String(r.odometer_reading) : null,
-        triggerType: r.trigger_type ?? null,
-        intervalKm: r.interval_km != null ? String(r.interval_km) : null,
-        bufferDistanceKm:
-          r.buffer_distance_km != null ? String(r.buffer_distance_km) : null,
-        startingReferenceReadingKm:
-          r.starting_reference_reading_km != null
-            ? String(r.starting_reference_reading_km)
-            : null,
-        intervalType: r.interval_type ?? null,
-        startReferenceDate: this.formatDateOnly(r.start_reference_date ?? null),
-        previousScheduleId: r.previous_schedule_id ?? null,
-        workOrderProgress: r.work_order_progress ?? null,
-      }));
+      return rows.map((r) => {
+        const costs = this.normalizeCostPayload({
+          partsCost: r.parts_cost,
+          laborCost: r.labor_cost,
+          totalCost: r.total_cost,
+        });
+
+        return {
+          id: String(r.id),
+          vehicleId: r.vehicleId ?? '',
+          title: r.title ?? '',
+          status: r.status ?? MaintenanceStatus.PENDING,
+          date: this.formatDateOnly(r.created_at ?? r.scheduled_date ?? null),
+          assignedMechanic: r.assigned_mechanic ?? null,
+          assignedDriver: r.assigned_mechanic ?? null,
+          accountType: r.account_type ?? null,
+          checklistTemplateId: r.checklist_template_id ?? null,
+          garageId: r.garage_id ?? null,
+          odometerReading:
+            r.odometer_reading != null ? String(r.odometer_reading) : null,
+          triggerType: r.trigger_type ?? null,
+          intervalKm: r.interval_km != null ? String(r.interval_km) : null,
+          bufferDistanceKm:
+            r.buffer_distance_km != null ? String(r.buffer_distance_km) : null,
+          startingReferenceReadingKm:
+            r.starting_reference_reading_km != null
+              ? String(r.starting_reference_reading_km)
+              : null,
+          intervalType: r.interval_type ?? null,
+          startReferenceDate: this.formatDateOnly(r.start_reference_date ?? null),
+          previousScheduleId: r.previous_schedule_id ?? null,
+          workOrderProgress: r.work_order_progress ?? null,
+          partsCost: costs.partsCost,
+          laborCost: costs.laborCost,
+          totalCost: costs.totalCost,
+        };
+      });
     }
   }
 
   async create(data: CreateMaintenanceScheduleDto) {
+    const workOrderProgress = this.normalizeWorkOrderProgress(
+      data.workOrderProgress ?? data.work_order_progress,
+    );
+    const normalizedCosts = this.normalizeCostPayload({
+      partsCost: data.partsCost ?? data.parts_cost,
+      laborCost: data.laborCost ?? data.labor_cost,
+      totalCost: data.totalCost ?? data.total_cost,
+    });
+
     const schedule = await this.prisma.maintenanceSchedule.create({
       data: {
         vehicleId: data.vehicleId,
@@ -142,7 +176,19 @@ export class MaintenanceSchedulesService {
         startReferenceDate: data.startReferenceDate
           ? new Date(`${data.startReferenceDate}T00:00:00.000Z`)
           : undefined,
+        ...(workOrderProgress !== undefined
+          ? { workOrderProgress }
+          : {}),
+        partsCost: normalizedCosts.partsCost ?? undefined,
+        laborCost: normalizedCosts.laborCost ?? undefined,
+        totalCost: normalizedCosts.totalCost ?? undefined,
       },
+    });
+
+    const costs = this.normalizeCostPayload({
+      partsCost: schedule.partsCost,
+      laborCost: schedule.laborCost,
+      totalCost: schedule.totalCost,
     });
 
     return {
@@ -168,10 +214,22 @@ export class MaintenanceSchedulesService {
         : null,
       previousScheduleId: schedule.previousScheduleId ?? null,
       workOrderProgress: schedule.workOrderProgress ?? null,
+      partsCost: costs.partsCost,
+      laborCost: costs.laborCost,
+      totalCost: costs.totalCost,
     };
   }
 
   async update(id: string, data: CreateMaintenanceScheduleDto) {
+    const workOrderProgress = this.normalizeWorkOrderProgress(
+      data.workOrderProgress ?? data.work_order_progress,
+    );
+    const normalizedCosts = this.normalizeCostPayload({
+      partsCost: data.partsCost ?? data.parts_cost,
+      laborCost: data.laborCost ?? data.labor_cost,
+      totalCost: data.totalCost ?? data.total_cost,
+    });
+
     const schedule = await this.prisma.$transaction(async (tx) => {
       const previous = await tx.maintenanceSchedule.findUniqueOrThrow({
         where: { id },
@@ -202,6 +260,10 @@ export class MaintenanceSchedulesService {
           startReferenceDate: data.startReferenceDate
             ? new Date(`${data.startReferenceDate}T00:00:00.000Z`)
             : undefined,
+          ...(workOrderProgress !== undefined ? { workOrderProgress } : {}),
+          partsCost: normalizedCosts.partsCost ?? undefined,
+          laborCost: normalizedCosts.laborCost ?? undefined,
+          totalCost: normalizedCosts.totalCost ?? undefined,
         },
       });
 
@@ -220,6 +282,12 @@ export class MaintenanceSchedulesService {
     if (data.vehicleId && data.status) {
       await this.syncVehicleStatus(data.vehicleId, data.status);
     }
+
+    const costs = this.normalizeCostPayload({
+      partsCost: schedule.partsCost,
+      laborCost: schedule.laborCost,
+      totalCost: schedule.totalCost,
+    });
 
     return {
       id: schedule.id,
@@ -242,21 +310,80 @@ export class MaintenanceSchedulesService {
       startReferenceDate: this.formatDateOnly(schedule.startReferenceDate),
       previousScheduleId: schedule.previousScheduleId ?? null,
       workOrderProgress: schedule.workOrderProgress ?? null,
+      partsCost: costs.partsCost,
+      laborCost: costs.laborCost,
+      totalCost: costs.totalCost,
     };
   }
 
-  async updateProgress(id: string, progress: unknown) {
+  async updateProgress(id: string, progress: any) {
+    const normalizedProgress = this.getUpdateProgressPayload(progress);
+    const normalizedCosts = this.normalizeCostPayload({
+      partsCost: progress.partsCost ?? progress.parts_cost,
+      laborCost: progress.laborCost ?? progress.labor_cost,
+      totalCost: progress.totalCost ?? progress.total_cost,
+    });
+
+    const payload: Record<string, any> = {
+      partsCost: normalizedCosts.partsCost ?? undefined,
+      laborCost: normalizedCosts.laborCost ?? undefined,
+      totalCost: normalizedCosts.totalCost ?? undefined,
+    };
+
+    if (normalizedProgress !== undefined) {
+      payload.workOrderProgress = normalizedProgress;
+    }
+
     const schedule = await this.prisma.maintenanceSchedule.update({
       where: { id },
-      data: {
-        workOrderProgress: progress as Prisma.InputJsonValue,
-      },
+      data: payload,
+    });
+
+    const costs = this.normalizeCostPayload({
+      partsCost: schedule.partsCost,
+      laborCost: schedule.laborCost,
+      totalCost: schedule.totalCost,
     });
 
     return {
       id: schedule.id,
       workOrderProgress: schedule.workOrderProgress ?? null,
+      partsCost: costs.partsCost,
+      laborCost: costs.laborCost,
+      totalCost: costs.totalCost,
     };
+  }
+
+  private getUpdateProgressPayload(progress: any): Prisma.InputJsonValue | undefined {
+    if (progress == null) return undefined;
+
+    const explicitProgress =
+      progress.workOrderProgress ?? progress.work_order_progress;
+
+    if (explicitProgress !== undefined) {
+      return this.normalizeWorkOrderProgress(explicitProgress);
+    }
+
+    const costKeys = [
+      'partsCost',
+      'parts_cost',
+      'laborCost',
+      'labor_cost',
+      'totalCost',
+      'total_cost',
+    ];
+
+    const hasOnlyCostKeys =
+      typeof progress === 'object' &&
+      !Array.isArray(progress) &&
+      Object.keys(progress).length > 0 &&
+      Object.keys(progress).every((key) => costKeys.includes(key));
+
+    if (Array.isArray(progress) || !hasOnlyCostKeys) {
+      return this.normalizeWorkOrderProgress(progress);
+    }
+
+    return undefined;
   }
 
   async remove(id: string) {
@@ -328,6 +455,93 @@ export class MaintenanceSchedulesService {
     const day = String(date.getDate()).padStart(2, '0');
 
     return `${year}-${month}-${day}`;
+  }
+
+  private normalizeCostValue(value: unknown): number | null {
+    if (value == null || value === '') {
+      return null;
+    }
+
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? value : null;
+    }
+
+    if (typeof value === 'string') {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+
+    if (typeof value === 'bigint') {
+      return Number(value);
+    }
+
+    if (typeof value === 'object' && value !== null) {
+      const maybeDecimal = value as {
+        toNumber?: () => number;
+        toJSON?: () => unknown;
+        toString?: () => string;
+      };
+
+      if (typeof maybeDecimal.toNumber === 'function') {
+        const parsed = maybeDecimal.toNumber();
+        return Number.isFinite(parsed) ? parsed : null;
+      }
+
+      if (typeof maybeDecimal.toJSON === 'function') {
+        const parsed = Number(maybeDecimal.toJSON());
+        return Number.isFinite(parsed) ? parsed : null;
+      }
+
+      if (typeof maybeDecimal.toString === 'function') {
+        const parsed = Number(maybeDecimal.toString());
+        return Number.isFinite(parsed) ? parsed : null;
+      }
+    }
+
+    return null;
+  }
+
+  private normalizeCostPayload(values: {
+    partsCost?: unknown;
+    laborCost?: unknown;
+    totalCost?: unknown;
+  }): { partsCost: number | null; laborCost: number | null; totalCost: number | null } {
+    const partsCost = this.normalizeCostValue(values.partsCost);
+    const laborCost = this.normalizeCostValue(values.laborCost);
+    const totalCost =
+      this.normalizeCostValue(values.totalCost) ??
+      (partsCost != null && laborCost != null ? partsCost + laborCost : null);
+
+    return { partsCost, laborCost, totalCost };
+  }
+
+  private normalizeWorkOrderProgress(
+    progress: any,
+  ): Prisma.InputJsonValue | undefined {
+    if (progress == null) {
+      return undefined;
+    }
+
+    const normalize = (value: any): any => {
+      if (Array.isArray(value)) {
+        return value.map(normalize);
+      }
+      if (value && typeof value === 'object') {
+        return Object.fromEntries(
+          Object.entries(value).map(([key, val]) => [
+            key,
+            key.match(/^(note|notes)$/i)
+              ? val == null
+                ? ''
+                : normalize(val)
+              : normalize(val),
+          ]),
+        );
+      }
+      return value;
+    };
+
+    return normalize(progress);
   }
 
   private async getMaintenanceScheduleColumns(): Promise<Set<string>> {
