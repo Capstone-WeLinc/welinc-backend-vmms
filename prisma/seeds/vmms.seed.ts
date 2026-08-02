@@ -156,6 +156,11 @@ export async function seedVmms(prisma: PrismaClient) {
       garageId: staRosaGarage?.id,
       odometerReading: 32000,
       triggerType: MaintenanceTriggerType.MANUAL,
+      workOrderProgress: {
+        partsCost: 650.0,
+        laborCost: 320.0,
+        totalCost: 970.0,
+      },
     },
     {
       vehicleId: vehicles[3].plateNumber, // GHI-3456
@@ -170,6 +175,11 @@ export async function seedVmms(prisma: PrismaClient) {
       triggerType: MaintenanceTriggerType.TIME,
       intervalType: MaintenanceIntervalType.MONTHLY,
       startReferenceDate: new Date('2026-06-01T00:00:00.000Z'),
+      workOrderProgress: {
+        partsCost: 480.0,
+        laborCost: 290.0,
+        totalCost: 770.0,
+      },
     },
     {
       vehicleId: vehicles[4].plateNumber, // JKL-7890
@@ -242,6 +252,11 @@ export async function seedVmms(prisma: PrismaClient) {
       intervalKm: 6000,
       bufferDistanceKm: 300,
       startingReferenceReadingKm: 28800,
+      workOrderProgress: {
+        partsCost: 420.0,
+        laborCost: 260.0,
+        totalCost: 680.0,
+      },
     },
     {
       vehicleId: vehicles[3].plateNumber, // GHI-3456
