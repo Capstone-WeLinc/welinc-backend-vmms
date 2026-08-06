@@ -752,6 +752,361 @@ export async function seedVmms(prisma: PrismaClient) {
       bufferDistanceKm: 800,
       startingReferenceReadingKm: 138000,
     },
+    // --- ADDITIONAL REALISTIC MAINTENANCE SCHEDULES ---
+    {
+      vehicleId: vehicles[0].plateNumber,
+      title: 'Coolant Flush & Radiator Inspection',
+      status: MaintenanceStatus.COMPLETED,
+      createdAt: new Date('2026-01-15T00:00:00.000Z'),
+      assignedMechanic: mechanics[0].name,
+      accountType: AccountType.IN_HOUSE,
+      checklistTemplateId: generalInspectionTemplate?.id,
+      garageId: staRosaGarage?.id,
+      odometerReading: 41000,
+      triggerType: MaintenanceTriggerType.TIME,
+      intervalType: MaintenanceIntervalType.SEMI_ANNUALLY,
+      startReferenceDate: new Date('2026-01-15T00:00:00.000Z'),
+      partsCost: 850.0,
+      laborCost: 450.0,
+      totalCost: 1300.0,
+      workOrderProgress: {
+        checklist: [
+          { item: 'Flush radiator coolant', completed: true, notes: 'System flushed and refilled with OEM coolant.', selectedOption: 'yes' },
+          { item: 'Inspect radiator hoses & clamps', completed: true, notes: 'Hoses intact, upper clamp tightened.', selectedOption: 'yes' }
+        ]
+      }
+    },
+    {
+      vehicleId: vehicles[0].plateNumber,
+      title: 'Transmission Fluid & Filter Service',
+      status: MaintenanceStatus.COMPLETED,
+      createdAt: new Date('2026-03-10T00:00:00.000Z'),
+      assignedMechanic: mechanics[1].name,
+      accountType: AccountType.OUTSOURCED,
+      checklistTemplateId: generalInspectionTemplate?.id,
+      garageId: staRosaGarage?.id,
+      odometerReading: 43000,
+      triggerType: MaintenanceTriggerType.ODOMETER,
+      intervalKm: 20000,
+      startingReferenceReadingKm: 23000,
+      partsCost: 1400.0,
+      laborCost: 600.0,
+      totalCost: 2000.0,
+      workOrderProgress: {
+        checklist: [
+          { item: 'Drain transmission fluid', completed: true, notes: 'Fluid dark, replaced filter pan gasket.', selectedOption: 'yes' },
+          { item: 'Refill fluid to spec level', completed: true, notes: 'Filled 4.5L synthetic ATF.', selectedOption: 'yes' }
+        ]
+      }
+    },
+    {
+      vehicleId: vehicles[0].plateNumber,
+      title: 'Air & Cabin Filter Replacement',
+      status: MaintenanceStatus.DUE,
+      createdAt: new Date('2026-08-01T00:00:00.000Z'),
+      assignedMechanic: mechanics[2].name,
+      accountType: AccountType.IN_HOUSE,
+      checklistTemplateId: generalInspectionTemplate?.id,
+      garageId: staRosaGarage?.id,
+      odometerReading: 45200,
+      triggerType: MaintenanceTriggerType.TIME,
+      intervalType: MaintenanceIntervalType.QUARTERLY,
+      startReferenceDate: new Date('2026-08-05T00:00:00.000Z'),
+    },
+    {
+      vehicleId: vehicles[1].plateNumber,
+      title: 'Battery & Electrical System Check',
+      status: MaintenanceStatus.COMPLETED,
+      createdAt: new Date('2026-02-18T00:00:00.000Z'),
+      assignedMechanic: mechanics[3].name,
+      accountType: AccountType.IN_HOUSE,
+      checklistTemplateId: generalInspectionTemplate?.id,
+      garageId: marikinaGarage?.id,
+      odometerReading: 68000,
+      triggerType: MaintenanceTriggerType.TIME,
+      intervalType: MaintenanceIntervalType.SEMI_ANNUALLY,
+      startReferenceDate: new Date('2026-02-18T00:00:00.000Z'),
+      partsCost: 350.0,
+      laborCost: 250.0,
+      totalCost: 600.0,
+      workOrderProgress: {
+        checklist: [
+          { item: 'Test battery voltage & load', completed: true, notes: 'Passed load test at 12.6V.', selectedOption: 'yes' },
+          { item: 'Clean battery terminals', completed: true, notes: 'Corrosion cleaned and anti-corrosion spray applied.', selectedOption: 'yes' }
+        ]
+      }
+    },
+    {
+      vehicleId: vehicles[1].plateNumber,
+      title: 'Suspension & Wheel Alignment',
+      status: MaintenanceStatus.COMPLETED,
+      createdAt: new Date('2026-05-02T00:00:00.000Z'),
+      assignedMechanic: mechanics[4].name,
+      accountType: AccountType.OUTSOURCED,
+      checklistTemplateId: generalInspectionTemplate?.id,
+      garageId: marikinaGarage?.id,
+      odometerReading: 70500,
+      triggerType: MaintenanceTriggerType.MANUAL,
+      partsCost: 1100.0,
+      laborCost: 750.0,
+      totalCost: 1850.0,
+      workOrderProgress: {
+        checklist: [
+          { item: 'Perform 4-wheel alignment', completed: true, notes: 'Camber and toe adjusted to factory specs.', selectedOption: 'yes' },
+          { item: 'Inspect leaf springs and shocks', completed: true, notes: 'Rear shocks showing minor weeping, monitor next service.', selectedOption: 'yes' }
+        ]
+      }
+    },
+    {
+      vehicleId: vehicles[1].plateNumber,
+      title: 'Exhaust System & Emissions Test',
+      status: MaintenanceStatus.PENDING,
+      createdAt: new Date('2026-08-04T00:00:00.000Z'),
+      assignedMechanic: mechanics[0].name,
+      accountType: AccountType.IN_HOUSE,
+      checklistTemplateId: generalInspectionTemplate?.id,
+      garageId: marikinaGarage?.id,
+      odometerReading: 72100,
+      triggerType: MaintenanceTriggerType.TIME,
+      intervalType: MaintenanceIntervalType.ANNUALLY,
+      startReferenceDate: new Date('2026-08-25T00:00:00.000Z'),
+    },
+    {
+      vehicleId: vehicles[2].plateNumber,
+      title: 'Differential Oil Replacement',
+      status: MaintenanceStatus.COMPLETED,
+      createdAt: new Date('2026-01-28T00:00:00.000Z'),
+      assignedMechanic: mechanics[1].name,
+      accountType: AccountType.IN_HOUSE,
+      checklistTemplateId: oilChangeTemplate?.id,
+      garageId: pulilanGarage?.id,
+      odometerReading: 28000,
+      triggerType: MaintenanceTriggerType.ODOMETER,
+      intervalKm: 15000,
+      startingReferenceReadingKm: 13000,
+      partsCost: 720.0,
+      laborCost: 380.0,
+      totalCost: 1100.0,
+      workOrderProgress: {
+        checklist: [
+          { item: 'Drain differential gear oil', completed: true, notes: 'Drained gear oil, no metal shavings found.', selectedOption: 'yes' },
+          { item: 'Refill 80W-90 gear oil', completed: true, notes: 'Refilled 3.2L gear oil.', selectedOption: 'yes' }
+        ]
+      }
+    },
+    {
+      vehicleId: vehicles[2].plateNumber,
+      title: 'Fuel Filter Replacement',
+      status: MaintenanceStatus.COMPLETED,
+      createdAt: new Date('2026-04-15T00:00:00.000Z'),
+      assignedMechanic: mechanics[2].name,
+      accountType: AccountType.IN_HOUSE,
+      checklistTemplateId: generalInspectionTemplate?.id,
+      garageId: pulilanGarage?.id,
+      odometerReading: 30000,
+      triggerType: MaintenanceTriggerType.ODOMETER,
+      intervalKm: 10000,
+      startingReferenceReadingKm: 20000,
+      partsCost: 480.0,
+      laborCost: 220.0,
+      totalCost: 700.0,
+      workOrderProgress: {
+        checklist: [
+          { item: 'Replace primary fuel filter', completed: true, notes: 'Primary filter canister replaced and primed.', selectedOption: 'yes' },
+          { item: 'Bleed fuel lines', completed: true, notes: 'Air purged, engine started smoothly.', selectedOption: 'yes' }
+        ]
+      }
+    },
+    {
+      vehicleId: vehicles[2].plateNumber,
+      title: 'Grease Chassis & Driveshaft U-Joints',
+      status: MaintenanceStatus.OVERDUE,
+      createdAt: new Date('2026-07-15T00:00:00.000Z'),
+      assignedMechanic: mechanics[3].name,
+      accountType: AccountType.IN_HOUSE,
+      checklistTemplateId: generalInspectionTemplate?.id,
+      garageId: pulilanGarage?.id,
+      odometerReading: 31500,
+      triggerType: MaintenanceTriggerType.TIME,
+      intervalType: MaintenanceIntervalType.QUARTERLY,
+      startReferenceDate: new Date('2026-07-20T00:00:00.000Z'),
+    },
+    {
+      vehicleId: vehicles[3].plateNumber,
+      title: 'Engine Valve Clearance Adjustment',
+      status: MaintenanceStatus.COMPLETED,
+      createdAt: new Date('2026-02-05T00:00:00.000Z'),
+      assignedMechanic: mechanics[4].name,
+      accountType: AccountType.IN_HOUSE,
+      checklistTemplateId: engineTuneupTemplate?.id,
+      garageId: staRosaGarage?.id,
+      odometerReading: 15000,
+      triggerType: MaintenanceTriggerType.MANUAL,
+      partsCost: 950.0,
+      laborCost: 550.0,
+      totalCost: 1500.0,
+      workOrderProgress: {
+        checklist: [
+          { item: 'Check intake/exhaust valve clearance', completed: true, notes: 'Adjusted intake valves to 0.20mm cold spec.', selectedOption: 'yes' },
+          { item: 'Replace valve cover gasket', completed: true, notes: 'New OEM rubber gasket fitted.', selectedOption: 'yes' }
+        ]
+      }
+    },
+    {
+      vehicleId: vehicles[3].plateNumber,
+      title: 'Front & Rear Brake Pad Replacement',
+      status: MaintenanceStatus.COMPLETED,
+      createdAt: new Date('2026-05-18T00:00:00.000Z'),
+      assignedMechanic: mechanics[0].name,
+      accountType: AccountType.OUTSOURCED,
+      checklistTemplateId: brakeInspectionTemplate?.id,
+      garageId: staRosaGarage?.id,
+      odometerReading: 17200,
+      triggerType: MaintenanceTriggerType.ODOMETER,
+      intervalKm: 15000,
+      startingReferenceReadingKm: 2200,
+      partsCost: 1800.0,
+      laborCost: 650.0,
+      totalCost: 2450.0,
+      workOrderProgress: {
+        checklist: [
+          { item: 'Replace front ceramic brake pads', completed: true, notes: 'Installed ceramic pads, resurfaced rotors.', selectedOption: 'yes' },
+          { item: 'Flush brake fluid', completed: true, notes: 'DOT 4 fluid flushed.', selectedOption: 'yes' }
+        ]
+      }
+    },
+    {
+      vehicleId: vehicles[3].plateNumber,
+      title: 'Drive Belt & Tensioner Replacement',
+      status: MaintenanceStatus.OVERDUE,
+      createdAt: new Date('2026-07-10T00:00:00.000Z'),
+      assignedMechanic: mechanics[1].name,
+      accountType: AccountType.IN_HOUSE,
+      checklistTemplateId: generalInspectionTemplate?.id,
+      garageId: staRosaGarage?.id,
+      odometerReading: 18000,
+      triggerType: MaintenanceTriggerType.TIME,
+      intervalType: MaintenanceIntervalType.SEMI_ANNUALLY,
+      startReferenceDate: new Date('2026-07-15T00:00:00.000Z'),
+    },
+    {
+      vehicleId: vehicles[4].plateNumber,
+      title: 'Turbocharger & Intercooler Hose Check',
+      status: MaintenanceStatus.COMPLETED,
+      createdAt: new Date('2026-03-22T00:00:00.000Z'),
+      assignedMechanic: mechanics[2].name,
+      accountType: AccountType.IN_HOUSE,
+      checklistTemplateId: generalInspectionTemplate?.id,
+      garageId: marikinaGarage?.id,
+      odometerReading: 88000,
+      triggerType: MaintenanceTriggerType.MANUAL,
+      partsCost: 1250.0,
+      laborCost: 650.0,
+      totalCost: 1900.0,
+      workOrderProgress: {
+        checklist: [
+          { item: 'Inspect intercooler silicone hoses', completed: true, notes: 'Replaced lower boost hose clamp.', selectedOption: 'yes' },
+          { item: 'Check turbo shaft play', completed: true, notes: 'Zero axial play detected.', selectedOption: 'yes' }
+        ]
+      }
+    },
+    {
+      vehicleId: vehicles[4].plateNumber,
+      title: 'Clutch Master & Slave Cylinder Service',
+      status: MaintenanceStatus.COMPLETED,
+      createdAt: new Date('2026-06-05T00:00:00.000Z'),
+      assignedMechanic: mechanics[3].name,
+      accountType: AccountType.OUTSOURCED,
+      checklistTemplateId: generalInspectionTemplate?.id,
+      garageId: marikinaGarage?.id,
+      odometerReading: 90500,
+      triggerType: MaintenanceTriggerType.ODOMETER,
+      intervalKm: 25000,
+      startingReferenceReadingKm: 65500,
+      partsCost: 1650.0,
+      laborCost: 800.0,
+      totalCost: 2450.0,
+      workOrderProgress: {
+        checklist: [
+          { item: 'Replace clutch slave cylinder', completed: true, notes: 'Replaced leaking slave cylinder.', selectedOption: 'yes' },
+          { item: 'Bleed hydraulic clutch fluid', completed: true, notes: 'Hydraulic system bled, pedal pressure restored.', selectedOption: 'yes' }
+        ]
+      }
+    },
+    {
+      vehicleId: vehicles[4].plateNumber,
+      title: 'Power Steering Pump Fluid Flush',
+      status: MaintenanceStatus.DUE,
+      createdAt: new Date('2026-08-02T00:00:00.000Z'),
+      assignedMechanic: mechanics[4].name,
+      accountType: AccountType.IN_HOUSE,
+      checklistTemplateId: generalInspectionTemplate?.id,
+      garageId: marikinaGarage?.id,
+      odometerReading: 92000,
+      triggerType: MaintenanceTriggerType.TIME,
+      intervalType: MaintenanceIntervalType.QUARTERLY,
+      startReferenceDate: new Date('2026-08-08T00:00:00.000Z'),
+    },
+    {
+      vehicleId: vehicles[5].plateNumber,
+      title: 'Heavy Duty Air Brake Dryer Cartridge Service',
+      status: MaintenanceStatus.COMPLETED,
+      createdAt: new Date('2026-01-10T00:00:00.000Z'),
+      assignedMechanic: mechanics[0].name,
+      accountType: AccountType.IN_HOUSE,
+      checklistTemplateId: brakeInspectionTemplate?.id,
+      garageId: pulilanGarage?.id,
+      odometerReading: 138000,
+      triggerType: MaintenanceTriggerType.TIME,
+      intervalType: MaintenanceIntervalType.SEMI_ANNUALLY,
+      startReferenceDate: new Date('2026-01-10T00:00:00.000Z'),
+      partsCost: 2100.0,
+      laborCost: 750.0,
+      totalCost: 2850.0,
+      workOrderProgress: {
+        checklist: [
+          { item: 'Replace air dryer desiccant cartridge', completed: true, notes: 'Desiccant cartridge replaced.', selectedOption: 'yes' },
+          { item: 'Drain wet tank moisture', completed: true, notes: 'Wet tank drained, no excessive oil found.', selectedOption: 'yes' }
+        ]
+      }
+    },
+    {
+      vehicleId: vehicles[5].plateNumber,
+      title: 'Diesel Particulate Filter (DPF) Cleaning',
+      status: MaintenanceStatus.COMPLETED,
+      createdAt: new Date('2026-04-20T00:00:00.000Z'),
+      assignedMechanic: mechanics[1].name,
+      accountType: AccountType.OUTSOURCED,
+      checklistTemplateId: generalInspectionTemplate?.id,
+      garageId: pulilanGarage?.id,
+      odometerReading: 141000,
+      triggerType: MaintenanceTriggerType.ODOMETER,
+      intervalKm: 30000,
+      startingReferenceReadingKm: 111000,
+      partsCost: 3200.0,
+      laborCost: 1500.0,
+      totalCost: 4700.0,
+      workOrderProgress: {
+        checklist: [
+          { item: 'Perform thermal DPF bake & flush', completed: true, notes: 'Soot load reduced from 85% to 4%.', selectedOption: 'yes' },
+          { item: 'Reset DPF differential pressure sensor', completed: true, notes: 'Sensor reset via OBD scanner.', selectedOption: 'yes' }
+        ]
+      }
+    },
+    {
+      vehicleId: vehicles[5].plateNumber,
+      title: 'Fifth Wheel Coupling Plate Lubrication & Inspection',
+      status: MaintenanceStatus.PENDING,
+      createdAt: new Date('2026-08-05T00:00:00.000Z'),
+      assignedMechanic: mechanics[2].name,
+      accountType: AccountType.IN_HOUSE,
+      checklistTemplateId: generalInspectionTemplate?.id,
+      garageId: pulilanGarage?.id,
+      odometerReading: 145000,
+      triggerType: MaintenanceTriggerType.TIME,
+      intervalType: MaintenanceIntervalType.MONTHLY,
+      startReferenceDate: new Date('2026-08-20T00:00:00.000Z'),
+    },
   ];
 
   const assertCompletedScheduleHasProgress = (schedule: any) => {
