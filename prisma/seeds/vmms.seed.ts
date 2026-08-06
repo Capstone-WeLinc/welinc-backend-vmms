@@ -788,6 +788,7 @@ export async function seedVmms(prisma: PrismaClient) {
     }
   };
 
+  let recurringIdx = 0;
   const createNextSeedMaintenanceSchedule = async (completedSchedule: any) => {
     const triggerType = completedSchedule.triggerType;
     const isOdometerRecurring = triggerType === MaintenanceTriggerType.ODOMETER && completedSchedule.intervalKm != null && completedSchedule.intervalKm > 0;
@@ -800,11 +801,19 @@ export async function seedVmms(prisma: PrismaClient) {
       ? completedSchedule.odometerReading + completedSchedule.intervalKm
       : completedSchedule.odometerReading;
 
+    recurringIdx += 1;
+    let seedStatus: MaintenanceStatus = MaintenanceStatus.PENDING;
+    if (recurringIdx <= 2) {
+      seedStatus = MaintenanceStatus.OVERDUE;
+    } else if (recurringIdx <= 4) {
+      seedStatus = MaintenanceStatus.DUE;
+    }
+
     return prisma.maintenanceSchedule.create({
       data: {
         vehicleId: completedSchedule.vehicleId,
         title: completedSchedule.title,
-        status: MaintenanceStatus.PENDING,
+        status: seedStatus,
         assignedMechanic: completedSchedule.assignedMechanic,
         accountType: completedSchedule.accountType,
         checklistTemplateId: completedSchedule.checklistTemplateId,
