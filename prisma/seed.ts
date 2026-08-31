@@ -81,7 +81,9 @@ async function main() {
   console.log('  VRMS Admin → email: vrms.admin@welinc.com password: admin1234');
   console.log('  VMMS Admin → email: vmms.admin@welinc.com password: admin1234');
   console.log('  CS user    → email: cs.user@welinc.com    password: cs1234 (BMS)');
-  console.log('  Operations → email: ops.user@welinc.com   password: ops1234 (BMS)');
+  console.log('  Operations → email: ops.user@welinc.com   password: ops1234 (BMS & VMMS)');
+  console.log('  VMMS Chief Mechanic → email: vmms.chiefmech@welinc.com  password: chiefmech1234 (VMMS)');
+  console.log('  VMMS Chief Mechanic → email: vmms.chiefmech2@welinc.com password: chiefmech1234 (VMMS)');
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 }
 

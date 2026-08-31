@@ -18,6 +18,7 @@ enum UserRole {
   MECHANIC
   CUSTOMER_SUPPORT
   OPERATIONS
+  CHIEF_MECHANIC
 }
 
 enum SystemType {
@@ -91,6 +92,7 @@ model User {
   mechanic            Mechanic?
   passwordResetTokens PasswordResetToken[]
   refreshTokens       RefreshToken[]
+  chiefMechanicSchedules MaintenanceSchedule[] @relation("ScheduleChiefMechanic")
 
   @@index([deletedAt])
   @@map("users")
@@ -355,6 +357,8 @@ model MaintenanceSchedule {
   garageId                 String?           @map("garage_id") @db.VarChar(50)
   status                   MaintenanceStatus @default(PENDING)
   assignedMechanic         String            @map("assigned_mechanic") @db.VarChar(100)
+  chiefMechanicId          String?           @map("chief_mechanic_id") @db.Uuid
+  chiefMechanic            String?           @map("chief_mechanic") @db.VarChar(100)
   accountType              AccountType?      @map("account_type")
   checklistTemplateId      String?           @map("checklist_template_id") @db.Uuid
   odometerReading          Int?              @map("odometer_reading")
@@ -373,10 +377,12 @@ model MaintenanceSchedule {
   createdAt                DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt                DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
 
+  chiefMechanicUser  User?              @relation("ScheduleChiefMechanic", fields: [chiefMechanicId], references: [id], onDelete: SetNull)
   checklistTemplate ChecklistTemplate? @relation(fields: [checklistTemplateId], references: [id], onDelete: SetNull)
   previousSchedule   MaintenanceSchedule? @relation("MaintenanceScheduleRecurrence", fields: [previousScheduleId], references: [id], onDelete: SetNull)
   nextSchedule       MaintenanceSchedule? @relation("MaintenanceScheduleRecurrence")
 
+  @@index([chiefMechanicId])
   @@index([checklistTemplateId])
   @@index([deletedAt])
   @@map("maintenance_schedules")

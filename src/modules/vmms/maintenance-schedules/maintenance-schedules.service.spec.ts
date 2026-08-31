@@ -6,14 +6,14 @@ describe('MaintenanceSchedulesService', () => {
   let service: MaintenanceSchedulesService;
   let prisma: {
     maintenanceSchedule: {
-      findMany: jest.Mock;
+      findMany: jest.MockedFunction<any>;
     };
   };
 
   beforeEach(() => {
     prisma = {
       maintenanceSchedule: {
-        findMany: jest.fn(),
+        findMany: jest.fn() as jest.MockedFunction<any>,
       },
     };
 

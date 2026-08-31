@@ -10,18 +10,19 @@ import { DriversService } from './drivers.service';
 export class DriversController {
   constructor(private readonly driversService: DriversService) {}
 
+  @Roles(UserRole.ADMIN, UserRole.OPERATIONS, UserRole.CHIEF_MECHANIC)
   @Get()
   async list() {
     return this.driversService.findAll();
   }
 
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.OPERATIONS)
   @Post()
   async create(@Body() dto: { name: string; licenseNumber: string; isVerified?: boolean }) {
     return this.driversService.create(dto);
   }
 
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.OPERATIONS)
   @Patch(':id')
   async update(
     @Param('id', ParseUUIDPipe) id: string,
@@ -30,7 +31,7 @@ export class DriversController {
     return this.driversService.update(id, dto);
   }
 
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.OPERATIONS)
   @Delete(':id')
   async delete(@Param('id', ParseUUIDPipe) id: string) {
     return this.driversService.delete(id);

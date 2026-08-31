@@ -10,18 +10,19 @@ import { LocationsService } from './locations.service';
 export class LocationsController {
   constructor(private readonly locationsService: LocationsService) {}
 
+  @Roles(UserRole.ADMIN, UserRole.OPERATIONS, UserRole.CHIEF_MECHANIC, UserRole.MECHANIC)
   @Get('garages')
   async garages() {
     return this.locationsService.getGarages();
   }
 
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.OPERATIONS)
   @Post('garages')
   async createGarage(@Body() dto: { name: string }) {
     return this.locationsService.createGarage(dto);
   }
 
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.OPERATIONS)
   @Patch('garages/:id')
   async updateGarage(
     @Param('id', ParseUUIDPipe) id: string,
@@ -30,12 +31,13 @@ export class LocationsController {
     return this.locationsService.updateGarage(id, dto);
   }
 
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.OPERATIONS)
   @Delete('garages/:id')
   async deleteGarage(@Param('id', ParseUUIDPipe) id: string) {
     return this.locationsService.deleteGarage(id);
   }
 
+  @Roles(UserRole.ADMIN, UserRole.OPERATIONS, UserRole.CHIEF_MECHANIC, UserRole.MECHANIC)
   @Get('systems')
   async systems() {
     return this.locationsService.getSystems();

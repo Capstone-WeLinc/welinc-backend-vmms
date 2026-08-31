@@ -39,6 +39,8 @@ export class MaintenanceSchedulesService {
           date: this.formatDateOnly(schedule.createdAt),
           assignedMechanic: schedule.assignedMechanic,
           assignedDriver: schedule.assignedMechanic,
+          chiefMechanicId: schedule.chiefMechanicId ?? null,
+          chiefMechanic: schedule.chiefMechanic ?? null,
           accountType: schedule.accountType ?? null,
           checklistTemplateId: schedule.checklistTemplateId ?? null,
           garageId: schedule.garageId ?? null,
@@ -117,6 +119,8 @@ export class MaintenanceSchedulesService {
           date: this.formatDateOnly(r.created_at ?? r.scheduled_date ?? null),
           assignedMechanic: r.assigned_mechanic ?? null,
           assignedDriver: r.assigned_mechanic ?? null,
+          chiefMechanicId: (r as any).chief_mechanic_id ?? null,
+          chiefMechanic: (r as any).chief_mechanic ?? null,
           accountType: r.account_type ?? null,
           checklistTemplateId: r.checklist_template_id ?? null,
           garageId: r.garage_id ?? null,
@@ -151,6 +155,7 @@ export class MaintenanceSchedulesService {
       laborCost: data.laborCost ?? data.labor_cost,
       totalCost: data.totalCost ?? data.total_cost,
     });
+    const { chiefMechanicId, chiefMechanic } = await this.resolveChiefMechanic(data);
 
     const schedule = await this.prisma.maintenanceSchedule.create({
       data: {
@@ -158,6 +163,8 @@ export class MaintenanceSchedulesService {
         title: data.title,
         status: data.status ?? MaintenanceStatus.PENDING,
         assignedMechanic: this.getAssignedMechanic(data),
+        chiefMechanicId,
+        chiefMechanic,
         accountType: data.accountType ?? data.account_type,
         checklistTemplateId: data.checklistTemplateId,
         garageId: data.garageId,
@@ -199,6 +206,8 @@ export class MaintenanceSchedulesService {
       date: schedule.createdAt.toISOString().slice(0, 10),
       assignedMechanic: schedule.assignedMechanic,
       assignedDriver: schedule.assignedMechanic,
+      chiefMechanicId: schedule.chiefMechanicId ?? null,
+      chiefMechanic: schedule.chiefMechanic ?? null,
       accountType: schedule.accountType ?? null,
       checklistTemplateId: schedule.checklistTemplateId ?? null,
       garageId: schedule.garageId ?? null,
@@ -229,6 +238,7 @@ export class MaintenanceSchedulesService {
       laborCost: data.laborCost ?? data.labor_cost,
       totalCost: data.totalCost ?? data.total_cost,
     });
+    const { chiefMechanicId, chiefMechanic } = await this.resolveChiefMechanic(data);
 
     const schedule = await this.prisma.$transaction(async (tx) => {
       const previous = await tx.maintenanceSchedule.findUniqueOrThrow({
@@ -242,6 +252,8 @@ export class MaintenanceSchedulesService {
           title: data.title,
           status: data.status ?? MaintenanceStatus.PENDING,
           assignedMechanic: this.getAssignedMechanic(data),
+          chiefMechanicId: chiefMechanicId ?? previous.chiefMechanicId,
+          chiefMechanic: chiefMechanic ?? previous.chiefMechanic,
           accountType: data.accountType ?? data.account_type,
           checklistTemplateId: data.checklistTemplateId,
           garageId: data.garageId,
@@ -297,6 +309,8 @@ export class MaintenanceSchedulesService {
       date: this.formatDateOnly(schedule.createdAt),
       assignedMechanic: schedule.assignedMechanic,
       assignedDriver: schedule.assignedMechanic,
+      chiefMechanicId: schedule.chiefMechanicId ?? null,
+      chiefMechanic: schedule.chiefMechanic ?? null,
       accountType: schedule.accountType ?? null,
       checklistTemplateId: schedule.checklistTemplateId ?? null,
       garageId: schedule.garageId ?? null,
@@ -609,6 +623,8 @@ export class MaintenanceSchedulesService {
         garageId: schedule.garageId,
         status: MaintenanceStatus.PENDING,
         assignedMechanic: schedule.assignedMechanic,
+        chiefMechanicId: schedule.chiefMechanicId,
+        chiefMechanic: schedule.chiefMechanic,
         accountType: schedule.accountType,
         checklistTemplateId: schedule.checklistTemplateId,
         odometerReading: nextOdometer,
@@ -621,6 +637,71 @@ export class MaintenanceSchedulesService {
         previousScheduleId: schedule.id,
       },
     });
+  }
+
+  private async resolveChiefMechanic(data: CreateMaintenanceScheduleDto): Promise<{
+    chiefMechanicId: string | null;
+    chiefMechanic: string | null;
+  }> {
+    const rawId = data.chiefMechanicId ?? data.chief_mechanic_id;
+    const rawName = data.chiefMechanic ?? data.chief_mechanic;
+
+    if (rawId && rawId.trim()) {
+      const user = await this.prisma.user.findFirst({
+        where: { id: rawId, deletedAt: null },
+        include: { roles: true },
+      });
+
+      if (!user) {
+        throw new BadRequestException(`Chief Mechanic with ID ${rawId} was not found.`);
+      }
+
+      if (!user.isActive) {
+        throw new BadRequestException(`Selected Chief Mechanic (${user.name}) is inactive.`);
+      }
+
+      const hasChiefMechanicRole = user.roles.some(
+        (r) => (r.role as string) === 'CHIEF_MECHANIC',
+      );
+
+      if (!hasChiefMechanicRole) {
+        throw new BadRequestException(
+          `Selected user (${user.name}) does not have the Chief Mechanic role.`,
+        );
+      }
+
+      return {
+        chiefMechanicId: user.id,
+        chiefMechanic: user.name,
+      };
+    }
+
+    if (rawName && rawName.trim()) {
+      const user = await this.prisma.user.findFirst({
+        where: {
+          OR: [{ name: rawName.trim() }, { email: rawName.trim() }],
+          deletedAt: null,
+        },
+        include: { roles: true },
+      });
+
+      if (user && user.roles.some((r) => (r.role as string) === 'CHIEF_MECHANIC')) {
+        return {
+          chiefMechanicId: user.id,
+          chiefMechanic: user.name,
+        };
+      }
+
+      return {
+        chiefMechanicId: null,
+        chiefMechanic: rawName.trim(),
+      };
+    }
+
+    return {
+      chiefMechanicId: null,
+      chiefMechanic: null,
+    };
   }
 
   private advanceScheduleDate(

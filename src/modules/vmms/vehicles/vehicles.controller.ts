@@ -10,18 +10,24 @@ import { VehiclesService } from './vehicles.service';
 export class VehiclesController {
   constructor(private readonly vehiclesService: VehiclesService) {}
 
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.OPERATIONS,
+    UserRole.CHIEF_MECHANIC,
+    UserRole.MECHANIC,
+  )
   @Get()
   async list() {
     return this.vehiclesService.findAll();
   }
 
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.OPERATIONS)
   @Post()
   async create(@Body() dto: { plateNumber: string; model: string; capacity?: number; odometer?: number; status?: any }) {
     return this.vehiclesService.create(dto);
   }
 
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.OPERATIONS)
   @Patch(':id')
   async update(
     @Param('id', ParseUUIDPipe) id: string,
@@ -30,7 +36,7 @@ export class VehiclesController {
     return this.vehiclesService.update(id, dto);
   }
 
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.OPERATIONS)
   @Delete(':id')
   async delete(@Param('id', ParseUUIDPipe) id: string) {
     return this.vehiclesService.delete(id);

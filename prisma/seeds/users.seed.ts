@@ -96,6 +96,7 @@ export async function seedUsers(prisma: PrismaClient) {
   console.log('Creating Customer Service and Operations users...');
   const csPasswordHash = await argon2.hash('cs1234');
   const opsPasswordHash = await argon2.hash('ops1234');
+  const chiefMechanicPasswordHash = await argon2.hash('chiefmech1234');
 
   const csUser = await prisma.user.upsert({
     where: { email: 'cs.user@welinc.com' },
@@ -128,30 +129,71 @@ export async function seedUsers(prisma: PrismaClient) {
     where: { email: 'ops.user@welinc.com' },
     update: { emailVerified: true },
     create: {
-      name: 'Oscar Santos',
+      name: 'Oscar Ramos',
       email: 'ops.user@welinc.com',
       emailVerified: true,
       passwordHash: opsPasswordHash,
     },
   });
 
-  await prisma.userRoleAssignment.upsert({
-    where: {
-      userId_role_system: {
+  for (const sys of [SystemType.BMS, SystemType.VMMS]) {
+    await prisma.userRoleAssignment.upsert({
+      where: {
+        userId_role_system: {
+          userId: opsUser.id,
+          role: UserRole.OPERATIONS,
+          system: sys,
+        },
+      },
+      update: {},
+      create: {
         userId: opsUser.id,
         role: UserRole.OPERATIONS,
-        system: SystemType.BMS,
+        system: sys,
       },
-    },
-    update: {},
-    create: {
-      userId: opsUser.id,
-      role: UserRole.OPERATIONS,
-      system: SystemType.BMS,
-    },
-  });
+    });
+  }
 
-  // 5. Mechanics
+  // 5. Chief Mechanic
+  console.log('Creating Chief Mechanic user...');
+
+  const vmmsChiefMechanics = [
+    { email: 'vmms.chiefmech@welinc.com', name: 'Ramon Garcia' },
+    { email: 'vmms.chiefmech2@welinc.com', name: 'Diego Martinez' },
+  ];
+
+  for (const chief of vmmsChiefMechanics) {
+    const user = await prisma.user.upsert({
+      where: { email: chief.email },
+      update: { emailVerified: true },
+      create: {
+        name: chief.name,
+        email: chief.email,
+        emailVerified: true,
+        passwordHash: chiefMechanicPasswordHash,
+      },
+    });
+
+    await prisma.userRoleAssignment.upsert({
+      where: {
+        userId_role_system: {
+          userId: user.id,
+          role: UserRole.CHIEF_MECHANIC,
+          system: SystemType.VMMS,
+        },
+      },
+      update: {},
+      create: {
+        userId: user.id,
+        role: UserRole.CHIEF_MECHANIC,
+        system: SystemType.VMMS,
+      },
+    });
+
+    console.log(`  VMMS Chief Mechanic user created: email: ${chief.email} password: chiefmech1234`);
+  }
+
+  // 6. Mechanics
   console.log('Creating sample mechanics...');
   const mechanicPassword = await argon2.hash('mechanic1234');
   const mechEmails = [

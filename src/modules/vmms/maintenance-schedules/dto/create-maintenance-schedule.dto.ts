@@ -30,6 +30,22 @@ export class CreateMaintenanceScheduleDto {
   @IsOptional()
   assignedDriver?: string;
 
+  @IsString()
+  @IsOptional()
+  chiefMechanicId?: string;
+
+  @IsString()
+  @IsOptional()
+  chief_mechanic_id?: string;
+
+  @IsString()
+  @IsOptional()
+  chiefMechanic?: string;
+
+  @IsString()
+  @IsOptional()
+  chief_mechanic?: string;
+
   @IsEnum(MaintenanceStatus)
   @IsOptional()
   status?: MaintenanceStatus;

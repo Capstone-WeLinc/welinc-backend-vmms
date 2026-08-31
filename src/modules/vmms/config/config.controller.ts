@@ -10,25 +10,25 @@ import { VmmsConfigService } from './config.service.js';
 export class VmmsConfigController {
   constructor(private readonly configService: VmmsConfigService) {}
 
-  @Roles(UserRole.ADMIN, UserRole.OPERATIONS, UserRole.MECHANIC)
+  @Roles(UserRole.ADMIN, UserRole.OPERATIONS, UserRole.MECHANIC, UserRole.CHIEF_MECHANIC)
   @Get('garages')
   listGarages() {
     return this.configService.listGarages();
   }
 
-  @Roles(UserRole.ADMIN, UserRole.OPERATIONS, UserRole.MECHANIC)
+  @Roles(UserRole.ADMIN, UserRole.OPERATIONS, UserRole.MECHANIC, UserRole.CHIEF_MECHANIC)
   @Get('vehicles')
   listVehicles() {
     return this.configService.listVehicles();
   }
 
-  @Roles(UserRole.ADMIN, UserRole.OPERATIONS, UserRole.MECHANIC)
+  @Roles(UserRole.ADMIN, UserRole.OPERATIONS, UserRole.MECHANIC, UserRole.CHIEF_MECHANIC)
   @Get('systems')
   listSystems() {
     return this.configService.listSystems();
   }
 
-  @Roles(UserRole.ADMIN, UserRole.OPERATIONS)
+  @Roles(UserRole.ADMIN, UserRole.OPERATIONS, UserRole.CHIEF_MECHANIC)
   @Get('users')
   listUsers() {
     return this.configService.listUsers();
