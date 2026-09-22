@@ -16,6 +16,7 @@ import * as dns from 'dns';
 import { SystemType, UserRole } from '@prisma/client';
 import { PrismaService } from '../shared/prisma.service';
 import { MailService } from '../shared/mail.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { ListUsersQueryDto } from './dto/list-users.query.dto';
 import { LoginDto } from './dto/login.dto';
@@ -117,6 +118,7 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly mailService: MailService,
     private readonly config: ConfigService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   async sendPhoneVerification(userId: string, phone: string) {
@@ -819,6 +821,14 @@ This code will expire in 10 minutes.`;
       },
     });
 
+    if (dto.name != null || dto.email != null || dto.contact != null) {
+      await this.notificationsService.createForUser(userId, {
+        title: 'Profile updated',
+        message: 'Your profile details were updated successfully.',
+        type: 'success',
+      });
+    }
+
     return this.mapManagedUser(user);
   }
 
@@ -876,6 +886,12 @@ This code will expire in 10 minutes.`;
           },
         },
       },
+    });
+
+    await this.notificationsService.createForUser(userId, {
+      title: 'Security notice',
+      message: 'Your password was changed successfully.',
+      type: 'warning',
     });
 
     return this.mapManagedUser(updated);
