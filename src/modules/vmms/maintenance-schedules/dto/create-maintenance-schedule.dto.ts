@@ -28,6 +28,10 @@ export class CreateMaintenanceScheduleDto {
 
   @IsString()
   @IsOptional()
+  assignedMechanicId?: string;
+
+  @IsString()
+  @IsOptional()
   assignedDriver?: string;
 
   @IsString()

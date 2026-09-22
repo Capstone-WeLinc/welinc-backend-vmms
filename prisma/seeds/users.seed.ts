@@ -190,7 +190,9 @@ export async function seedUsers(prisma: PrismaClient) {
       },
     });
 
-    console.log(`  VMMS Chief Mechanic user created: email: ${chief.email} password: chiefmech1234`);
+    console.log(
+      `  VMMS Chief Mechanic user created: email: ${chief.email} password: chiefmech1234`,
+    );
   }
 
   // 6. Mechanics
@@ -248,19 +250,85 @@ export async function seedUsers(prisma: PrismaClient) {
   }
 
   // 6. Bulk seeding for pagination (60 users)
-  console.log('Generating 60 additional mechanics/users with realistic names...');
+  console.log(
+    'Generating 60 additional mechanics/users with realistic names...',
+  );
   const firstNames = [
-    'Danilo', 'Edgardo', 'Ramon', 'Arnel', 'Bernardo', 'Catalino', 'Dionisio', 'Juan', 'Pedro',
-    'Rommel', 'Roberto', 'Generoso', 'Jaime', 'Manuel', 'Restituto', 'Reynaldo', 'Salvador',
-    'Vicente', 'Wilfredo', 'Renato', 'Gregorio', 'Leopoldo', 'Rolando', 'Armando', 'Francisco',
-    'Ernesto', 'Fernando', 'Mario', 'Antonio', 'Joseph', 'Alberto', 'Ricardo', 'Ferdinand',
-    'Eduardo', 'Roger', 'Enrique', 'Luis', 'Carlos', 'Oscar', 'Winston', 'Benjamin'
+    'Danilo',
+    'Edgardo',
+    'Ramon',
+    'Arnel',
+    'Bernardo',
+    'Catalino',
+    'Dionisio',
+    'Juan',
+    'Pedro',
+    'Rommel',
+    'Roberto',
+    'Generoso',
+    'Jaime',
+    'Manuel',
+    'Restituto',
+    'Reynaldo',
+    'Salvador',
+    'Vicente',
+    'Wilfredo',
+    'Renato',
+    'Gregorio',
+    'Leopoldo',
+    'Rolando',
+    'Armando',
+    'Francisco',
+    'Ernesto',
+    'Fernando',
+    'Mario',
+    'Antonio',
+    'Joseph',
+    'Alberto',
+    'Ricardo',
+    'Ferdinand',
+    'Eduardo',
+    'Roger',
+    'Enrique',
+    'Luis',
+    'Carlos',
+    'Oscar',
+    'Winston',
+    'Benjamin',
   ];
   const lastNames = [
-    'Santos', 'Ramos', 'Cruz', 'Gonzales', 'Reyes', 'Castro', 'Bulaon', 'Mendoza', 'Pascual',
-    'Perez', 'Mercado', 'Dizon', 'Aquino', 'Bautista', 'Garcia', 'Torres', 'Tolentino',
-    'Villanueva', 'dela Cruz', 'Ocampo', 'Espiritu', 'Panganiban', 'Soriano', 'Gomez', 'Lopez',
-    'Castillo', 'Santiago', 'Sebastian', 'del Rosario', 'Valdez', 'Guzman', 'Corpuz'
+    'Santos',
+    'Ramos',
+    'Cruz',
+    'Gonzales',
+    'Reyes',
+    'Castro',
+    'Bulaon',
+    'Mendoza',
+    'Pascual',
+    'Perez',
+    'Mercado',
+    'Dizon',
+    'Aquino',
+    'Bautista',
+    'Garcia',
+    'Torres',
+    'Tolentino',
+    'Villanueva',
+    'dela Cruz',
+    'Ocampo',
+    'Espiritu',
+    'Panganiban',
+    'Soriano',
+    'Gomez',
+    'Lopez',
+    'Castillo',
+    'Santiago',
+    'Sebastian',
+    'del Rosario',
+    'Valdez',
+    'Guzman',
+    'Corpuz',
   ];
 
   for (let i = 1; i <= 60; i++) {

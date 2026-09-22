@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import {
   AccountType,
   MaintenanceIntervalType,
@@ -9,6 +9,8 @@ import {
   VehicleStatus,
 } from '@prisma/client';
 import { PrismaService } from '../../../shared/prisma.service';
+import { applyWorkOrderWorkflow } from './work-order-workflow';
+import { scheduleScope, ScheduleActor } from './schedule-access';
 import { CreateMaintenanceScheduleDto } from './dto/create-maintenance-schedule.dto';
 
 @Injectable()
@@ -17,10 +19,11 @@ export class MaintenanceSchedulesService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  async findAll() {
+  async findAll(actor?: ScheduleActor) {
+    const scope = actor ? scheduleScope(actor) : {};
     try {
       const schedules = await this.prisma.maintenanceSchedule.findMany({
-        where: { deletedAt: null },
+        where: { deletedAt: null, ...scope },
         orderBy: { createdAt: 'desc' },
       });
 
@@ -38,6 +41,7 @@ export class MaintenanceSchedulesService {
           status: schedule.status,
           date: this.formatDateOnly(schedule.createdAt),
           assignedMechanic: schedule.assignedMechanic,
+          assignedMechanicId: schedule.assignedMechanicId,
           assignedDriver: schedule.assignedMechanic,
           chiefMechanicId: schedule.chiefMechanicId ?? null,
           chiefMechanic: schedule.chiefMechanic ?? null,
@@ -60,6 +64,8 @@ export class MaintenanceSchedulesService {
         };
       });
     } catch (err) {
+      // Fail closed: never fall back to an unscoped mobile query.
+      if (Object.keys(scope).length) throw err;
       // If the database schema is missing columns (e.g. during development), fall
       // back to a resilient raw query selecting a minimal set of columns. This
       // prevents the entire endpoint from returning 500 due to schema drift.
@@ -147,6 +153,7 @@ export class MaintenanceSchedulesService {
   }
 
   async create(data: CreateMaintenanceScheduleDto) {
+    if (data.status === 'COMPLETED' || data.status === 'DONE' || data.status === 'IN_PROGRESS' || data.workOrderProgress != null || data.work_order_progress != null) throw new ForbiddenException('Use the assigned work order workflow to start, submit or complete work.');
     const workOrderProgress = this.normalizeWorkOrderProgress(
       data.workOrderProgress ?? data.work_order_progress,
     );
@@ -162,7 +169,7 @@ export class MaintenanceSchedulesService {
         vehicleId: data.vehicleId,
         title: data.title,
         status: data.status ?? MaintenanceStatus.PENDING,
-        assignedMechanic: this.getAssignedMechanic(data),
+        ...await this.resolveAssignedMechanic(data),
         chiefMechanicId,
         chiefMechanic,
         accountType: data.accountType ?? data.account_type,
@@ -205,6 +212,7 @@ export class MaintenanceSchedulesService {
       status: schedule.status,
       date: schedule.createdAt.toISOString().slice(0, 10),
       assignedMechanic: schedule.assignedMechanic,
+          assignedMechanicId: schedule.assignedMechanicId,
       assignedDriver: schedule.assignedMechanic,
       chiefMechanicId: schedule.chiefMechanicId ?? null,
       chiefMechanic: schedule.chiefMechanic ?? null,
@@ -230,6 +238,7 @@ export class MaintenanceSchedulesService {
   }
 
   async update(id: string, data: CreateMaintenanceScheduleDto) {
+    if (data.status === 'COMPLETED' || data.status === 'DONE') throw new ForbiddenException('Use the assigned work order workflow to submit or complete work.');
     const workOrderProgress = this.normalizeWorkOrderProgress(
       data.workOrderProgress ?? data.work_order_progress,
     );
@@ -245,13 +254,16 @@ export class MaintenanceSchedulesService {
         where: { id },
       });
 
+      if (previous.status === 'COMPLETED') throw new ForbiddenException('Completed work orders are closed.');
+      if (workOrderProgress !== undefined && JSON.stringify(workOrderProgress) !== JSON.stringify(previous.workOrderProgress)) throw new ForbiddenException('Use the assigned work order progress endpoint.');
+      if (data.status === 'IN_PROGRESS' && previous.status !== 'IN_PROGRESS') throw new ForbiddenException('Only the assigned mechanic can start work.');
       const updated = await tx.maintenanceSchedule.update({
         where: { id },
         data: {
           vehicleId: data.vehicleId,
           title: data.title,
           status: data.status ?? MaintenanceStatus.PENDING,
-          assignedMechanic: this.getAssignedMechanic(data),
+          ...await this.resolveAssignedMechanic(data),
           chiefMechanicId: chiefMechanicId ?? previous.chiefMechanicId,
           chiefMechanic: chiefMechanic ?? previous.chiefMechanic,
           accountType: data.accountType ?? data.account_type,
@@ -308,6 +320,7 @@ export class MaintenanceSchedulesService {
       status: schedule.status,
       date: this.formatDateOnly(schedule.createdAt),
       assignedMechanic: schedule.assignedMechanic,
+          assignedMechanicId: schedule.assignedMechanicId,
       assignedDriver: schedule.assignedMechanic,
       chiefMechanicId: schedule.chiefMechanicId ?? null,
       chiefMechanic: schedule.chiefMechanic ?? null,
@@ -330,8 +343,14 @@ export class MaintenanceSchedulesService {
     };
   }
 
-  async updateProgress(id: string, progress: any) {
-    const normalizedProgress = this.getUpdateProgressPayload(progress);
+  async updateProgress(id: string, progress: any, actor: ScheduleActor) {
+    const scope = scheduleScope(actor);
+    const accessible = await this.prisma.maintenanceSchedule.findFirst({ where: { id, deletedAt: null, ...scope } });
+    if (!accessible) throw new ForbiddenException('This work order is not assigned to you.');
+    const input = this.getUpdateProgressPayload(progress);
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new BadRequestException('A work order progress object is required.');
+    const workflow = applyWorkOrderWorkflow(accessible, input as Record<string, any>, progress.action, actor);
+    const normalizedProgress = workflow.progress as Prisma.InputJsonObject;
     const normalizedCosts = this.normalizeCostPayload({
       partsCost: progress.partsCost ?? progress.parts_cost,
       laborCost: progress.laborCost ?? progress.labor_cost,
@@ -339,6 +358,7 @@ export class MaintenanceSchedulesService {
     });
 
     const payload: Record<string, any> = {
+      status: workflow.status,
       partsCost: normalizedCosts.partsCost ?? undefined,
       laborCost: normalizedCosts.laborCost ?? undefined,
       totalCost: normalizedCosts.totalCost ?? undefined,
@@ -346,12 +366,39 @@ export class MaintenanceSchedulesService {
 
     if (normalizedProgress !== undefined) {
       payload.workOrderProgress = normalizedProgress;
+      // The mobile execution form assigns the inspector in its progress payload.
+      // Persist the account ID as well so inspection access survives name changes.
+      if (typeof normalizedProgress === 'object' && !Array.isArray(normalizedProgress) && 'chiefMechanic' in normalizedProgress) {
+        const chiefName = normalizedProgress.chiefMechanic;
+        if (typeof chiefName === 'string' && chiefName.trim() && chiefName !== accessible.chiefMechanic) {
+          const chiefs = await this.prisma.user.findMany({
+            where: { name: { equals: chiefName.trim(), mode: 'insensitive' }, isActive: true, deletedAt: null, roles: { some: { role: 'CHIEF_MECHANIC', system: 'VMMS' } } },
+            select: { id: true, name: true }, take: 2,
+          });
+          if (chiefs.length !== 1) throw new BadRequestException('Choose a uniquely named active chief mechanic.');
+          payload.chiefMechanicId = chiefs[0].id;
+          payload.chiefMechanic = chiefs[0].name;
+        }
+      }
     }
 
-    const schedule = await this.prisma.maintenanceSchedule.update({
-      where: { id },
-      data: payload,
+    if (progress.action === 'SUBMIT' && accessible.checklistTemplateId) {
+      const required = await this.prisma.checklistItem.findMany({ where: { checklistTemplateId: accessible.checklistTemplateId, deletedAt: null }, select: { id: true } });
+      const items = workflow.progress.executionItems as { id: string }[];
+      if (!required.length || required.length !== items.length || !required.every((item) => items.some((entry) => entry.id === item.id))) throw new BadRequestException('Submit every item in the assigned checklist.');
+    }
+    const schedule = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.maintenanceSchedule.update({
+        where: { id, deletedAt: null, updatedAt: accessible.updatedAt, AND: scope },
+        data: payload,
+      });
+      if (workflow.status === MaintenanceStatus.COMPLETED) {
+        await this.syncCompletedOdometer(tx, updated);
+        await this.createNextRecurringSchedule(tx, updated);
+      }
+      return updated;
     });
+    await this.syncVehicleStatus(schedule.vehicleId, schedule.status);
 
     const costs = this.normalizeCostPayload({
       partsCost: schedule.partsCost,
@@ -361,6 +408,7 @@ export class MaintenanceSchedulesService {
 
     return {
       id: schedule.id,
+      status: schedule.status,
       workOrderProgress: schedule.workOrderProgress ?? null,
       partsCost: costs.partsCost,
       laborCost: costs.laborCost,
@@ -431,7 +479,10 @@ export class MaintenanceSchedulesService {
 
     let newStatus: VehicleStatus | null = null;
 
-    if (scheduleStatus === MaintenanceStatus.IN_PROGRESS) {
+    if (
+      scheduleStatus === MaintenanceStatus.IN_PROGRESS ||
+      scheduleStatus === MaintenanceStatus.DONE
+    ) {
       newStatus = VehicleStatus.UNDER_MAINTENANCE;
     } else if (
       scheduleStatus === MaintenanceStatus.COMPLETED ||
@@ -566,6 +617,23 @@ export class MaintenanceSchedulesService {
     return new Set(rows.map((row) => row.column_name));
   }
 
+  private async resolveAssignedMechanic(data: CreateMaintenanceScheduleDto) {
+    const name = this.getAssignedMechanic(data).trim();
+    if ((data.accountType ?? data.account_type) === AccountType.OUTSOURCED) {
+      return { assignedMechanic: name, assignedMechanicId: null };
+    }
+    const users = await this.prisma.user.findMany({
+      where: {
+        ...(data.assignedMechanicId ? { id: data.assignedMechanicId } : { name: { equals: name, mode: 'insensitive' as const } }),
+        deletedAt: null, isActive: true,
+        roles: { some: { role: 'MECHANIC', system: 'VMMS' } },
+      },
+      select: { id: true, name: true }, take: 2,
+    });
+    if (users.length !== 1) throw new BadRequestException('Choose one active VMMS mechanic using assignedMechanicId; the name is missing or ambiguous.');
+    return { assignedMechanic: users[0].name, assignedMechanicId: users[0].id };
+  }
+
   private getAssignedMechanic(data: CreateMaintenanceScheduleDto): string {
     const assignedMechanic = data.assignedMechanic ?? data.assignedDriver;
 
@@ -598,6 +666,13 @@ export class MaintenanceSchedulesService {
     tx: Prisma.TransactionClient,
     schedule: MaintenanceSchedule,
   ): Promise<void> {
+    if (
+      schedule.status === MaintenanceStatus.COMPLETED ||
+      schedule.status === MaintenanceStatus.CANCELLED
+    ) {
+      return;
+    }
+
     const odometerRecurring =
       schedule.triggerType === MaintenanceTriggerType.ODOMETER &&
       schedule.intervalKm != null &&
@@ -623,6 +698,7 @@ export class MaintenanceSchedulesService {
         garageId: schedule.garageId,
         status: MaintenanceStatus.PENDING,
         assignedMechanic: schedule.assignedMechanic,
+          assignedMechanicId: schedule.assignedMechanicId,
         chiefMechanicId: schedule.chiefMechanicId,
         chiefMechanic: schedule.chiefMechanic,
         accountType: schedule.accountType,

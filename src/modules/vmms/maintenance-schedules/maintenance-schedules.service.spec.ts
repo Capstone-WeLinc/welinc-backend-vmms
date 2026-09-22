@@ -68,4 +68,45 @@ describe('MaintenanceSchedulesService', () => {
     expect(result[0].laborCost).toBe(45.25);
     expect(result[0].totalCost).toBe(170.75);
   });
+
+  it('does not create a new recurring schedule after a work order is already completed', async () => {
+    const tx = {
+      maintenanceSchedule: {
+        upsert: jest.fn(),
+      },
+    } as any;
+
+    await (service as any).createNextRecurringSchedule(tx, {
+      id: 'schedule-1',
+      vehicleId: 'ABC123',
+      title: 'Oil Change',
+      status: 'COMPLETED',
+      triggerType: 'ODOMETER',
+      intervalKm: 5000,
+      startReferenceDate: new Date('2026-01-01T00:00:00.000Z'),
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      assignedMechanic: 'Mechanic One',
+      assignedMechanicId: 'mechanic-1',
+      chiefMechanicId: 'chief-1',
+      chiefMechanic: 'Chief Mechanic',
+      accountType: null,
+      checklistTemplateId: null,
+      garageId: null,
+      odometerReading: 25000,
+      bufferDistanceKm: null,
+      startingReferenceReadingKm: null,
+      intervalType: null,
+      previousScheduleId: null,
+      workOrderProgress: null,
+      partsCost: null,
+      laborCost: null,
+      totalCost: null,
+      deletedAt: null,
+      updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+      created_at: new Date('2026-01-01T00:00:00.000Z'),
+      updated_at: new Date('2026-01-01T00:00:00.000Z'),
+    });
+
+    expect(tx.maintenanceSchedule.upsert).not.toHaveBeenCalled();
+  });
 });

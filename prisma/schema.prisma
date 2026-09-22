@@ -50,6 +50,7 @@ enum MaintenanceStatus {
   PENDING
   DUE
   IN_PROGRESS
+  DONE
   COMPLETED
   OVERDUE
   CANCELLED
@@ -94,6 +95,8 @@ model User {
   passwordResetTokens PasswordResetToken[]
   refreshTokens       RefreshToken[]
   chiefMechanicSchedules MaintenanceSchedule[] @relation("ScheduleChiefMechanic")
+  assignedSchedules MaintenanceSchedule[] @relation("ScheduleMechanic")
+  notifications MaintenanceNotification[]
 
   @@index([deletedAt])
   @@map("users")
@@ -374,6 +377,7 @@ model MaintenanceSchedule {
   garageId                 String?           @map("garage_id") @db.VarChar(50)
   status                   MaintenanceStatus @default(PENDING)
   assignedMechanic         String            @map("assigned_mechanic") @db.VarChar(100)
+  assignedMechanicId       String?           @map("assigned_mechanic_id") @db.Uuid
   chiefMechanicId          String?           @map("chief_mechanic_id") @db.Uuid
   chiefMechanic            String?           @map("chief_mechanic") @db.VarChar(100)
   accountType              AccountType?      @map("account_type")
@@ -395,11 +399,14 @@ model MaintenanceSchedule {
   updatedAt                DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   chiefMechanicUser  User?              @relation("ScheduleChiefMechanic", fields: [chiefMechanicId], references: [id], onDelete: SetNull)
+  assignedMechanicUser User? @relation("ScheduleMechanic", fields: [assignedMechanicId], references: [id], onDelete: SetNull)
+  notifications MaintenanceNotification[]
   checklistTemplate ChecklistTemplate? @relation(fields: [checklistTemplateId], references: [id], onDelete: SetNull)
   previousSchedule   MaintenanceSchedule? @relation("MaintenanceScheduleRecurrence", fields: [previousScheduleId], references: [id], onDelete: SetNull)
   nextSchedule       MaintenanceSchedule? @relation("MaintenanceScheduleRecurrence")
 
   @@index([chiefMechanicId])
+  @@index([assignedMechanicId])
   @@index([checklistTemplateId])
   @@index([deletedAt])
   @@map("maintenance_schedules")
@@ -408,6 +415,23 @@ model MaintenanceSchedule {
 // ==========================================
 // AUTH TOKENS
 // ==========================================
+
+model MaintenanceNotification {
+  id String @id @default(uuid()) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  scheduleId String @map("schedule_id") @db.Uuid
+  kind String @db.VarChar(20)
+  message String @db.Text
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  readAt DateTime? @map("read_at") @db.Timestamptz(6)
+  smsStatus String @default("PENDING") @map("sms_status") @db.VarChar(20)
+  smsProviderId String? @map("sms_provider_id") @db.VarChar(100)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  schedule MaintenanceSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  @@unique([userId, scheduleId, kind])
+  @@index([userId, createdAt])
+  @@map("maintenance_notifications")
+}
 
 model PasswordResetToken {
   id        String    @id @default(cuid())
