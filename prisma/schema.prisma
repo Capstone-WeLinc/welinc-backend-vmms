@@ -92,11 +92,11 @@ model User {
   roles               UserRoleAssignment[]
   mechanic            Mechanic?
   notifications      Notification[]
+  maintenanceNotifications MaintenanceNotification[]
   passwordResetTokens PasswordResetToken[]
   refreshTokens       RefreshToken[]
   chiefMechanicSchedules MaintenanceSchedule[] @relation("ScheduleChiefMechanic")
   assignedSchedules MaintenanceSchedule[] @relation("ScheduleMechanic")
-  notifications MaintenanceNotification[]
 
   @@index([deletedAt])
   @@map("users")
