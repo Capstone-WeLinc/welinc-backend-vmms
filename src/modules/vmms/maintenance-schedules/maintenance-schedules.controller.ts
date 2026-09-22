@@ -9,10 +9,12 @@ import {
   Param,
   Delete,
   Query,
+  Req,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../../auth/guards/roles.guard';
 import { Roles } from '../../../auth/decorators/roles.decorator';
+import type { ScheduleActor } from './schedule-access';
 import { UserRole } from '@prisma/client';
 import { MaintenanceSchedulesService } from './maintenance-schedules.service';
 import { CreateMaintenanceScheduleDto } from './dto/create-maintenance-schedule.dto';
@@ -26,14 +28,14 @@ export class MaintenanceSchedulesController {
 
   @Roles(UserRole.ADMIN, UserRole.OPERATIONS, UserRole.CHIEF_MECHANIC, UserRole.MECHANIC)
   @Get()
-  async list() {
-    return this.maintenanceSchedulesService.findAll();
+  async list(@Req() req: { user: ScheduleActor }) {
+    return this.maintenanceSchedulesService.findAll(req.user);
   }
 
   @Roles(UserRole.ADMIN, UserRole.OPERATIONS, UserRole.CHIEF_MECHANIC, UserRole.MECHANIC)
   @Get('search')
-  async search(@Query('q') q: string) {
-    return this.maintenanceSchedulesService.findAll();
+  async search(@Query('q') q: string, @Req() req: { user: ScheduleActor }) {
+    return this.maintenanceSchedulesService.findAll(req.user);
   }
 
   @Roles(UserRole.ADMIN, UserRole.OPERATIONS, UserRole.CHIEF_MECHANIC)
@@ -53,8 +55,8 @@ export class MaintenanceSchedulesController {
 
   @Roles(UserRole.ADMIN, UserRole.OPERATIONS, UserRole.CHIEF_MECHANIC, UserRole.MECHANIC)
   @Patch(':id/progress')
-  async updateProgress(@Param('id') id: string, @Body() body: unknown) {
-    return this.maintenanceSchedulesService.updateProgress(id, body);
+  async updateProgress(@Param('id') id: string, @Body() body: unknown, @Req() req: { user: ScheduleActor }) {
+    return this.maintenanceSchedulesService.updateProgress(id, body, req.user);
   }
 
   @Roles(UserRole.ADMIN, UserRole.OPERATIONS, UserRole.CHIEF_MECHANIC)
