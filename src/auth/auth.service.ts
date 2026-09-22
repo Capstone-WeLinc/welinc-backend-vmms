@@ -6,6 +6,7 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
 import * as crypto from 'crypto';
@@ -24,6 +25,12 @@ import { UpdateUserDto } from './dto/update-user.dto';
 import { RoleAssignmentDto } from './dto/role-assignment.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
+
+type PendingPhoneVerification = {
+  phone: string;
+  codeHash: string;
+  expiresAt: number;
+};
 
 export async function validateEmailDomain(email: string): Promise<void> {
   const domain = email.split('@')[1];
@@ -100,11 +107,84 @@ export type ManagedUserResponse = {
 
 @Injectable()
 export class AuthService {
+  private readonly pendingPhoneVerifications = new Map<
+    string,
+    PendingPhoneVerification
+  >();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
     private readonly mailService: MailService,
+    private readonly config: ConfigService,
   ) {}
+
+  async sendPhoneVerification(userId: string, phone: string) {
+    await this.ensureUserExists(userId);
+
+    const code = crypto.randomInt(100000, 1000000).toString();
+    this.pendingPhoneVerifications.set(userId, {
+      phone,
+      codeHash: crypto.createHash('sha256').update(code).digest('hex'),
+      expiresAt: Date.now() + 10 * 60 * 1000,
+    });
+
+    const isDryRun = this.config.get<string>('SEMAPHORE_DRY_RUN') === 'true';
+    const apiKey = this.config.get<string>('SEMAPHORE_API_KEY');
+    if (isDryRun) {
+      console.log(`[PhoneVerification] OTP for ${userId}: ${code}`);
+    } else {
+      if (!apiKey || apiKey === 'your_semaphore_api_key_here') {
+        throw new BadRequestException('Semaphore SMS is not configured.');
+      }
+
+      let response: Response;
+      try {
+        response = await fetch('https://api.semaphore.co/api/v4/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            apikey: apiKey,
+            number: phone.replace('+', ''),
+            message: `Your WELINC verification code is ${code}. It expires in 10 minutes.`,
+            sendername: this.config.get<string>('SEMAPHORE_SENDER_NAME') ?? 'WELINC',
+          }),
+        });
+      } catch {
+        this.pendingPhoneVerifications.delete(userId);
+        throw new BadRequestException('Unable to connect to Semaphore SMS service.');
+      }
+
+      const responseText = await response.text();
+      if (!response.ok) {
+        this.pendingPhoneVerifications.delete(userId);
+        throw new BadRequestException(
+          `Semaphore rejected the SMS request: ${responseText.slice(0, 200)}`,
+        );
+      }
+    }
+
+    return {
+      message: 'A verification code has been sent to your phone.',
+      ...(isDryRun ? { developmentCode: code } : {}),
+    };
+  }
+
+  async verifyPhone(userId: string, phone: string, code: string) {
+    const pending = this.pendingPhoneVerifications.get(userId);
+    const codeHash = crypto.createHash('sha256').update(code).digest('hex');
+    if (
+      !pending ||
+      pending.phone !== phone ||
+      pending.expiresAt < Date.now() ||
+      pending.codeHash !== codeHash
+    ) {
+      throw new BadRequestException('Invalid or expired phone verification code.');
+    }
+
+    this.pendingPhoneVerifications.delete(userId);
+    return this.updateOwnProfile(userId, { contact: phone });
+  }
 
   async login(
     dto: LoginDto,

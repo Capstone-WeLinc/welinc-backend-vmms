@@ -29,6 +29,10 @@ import { OtpResetPasswordDto } from './dto/otp-reset-password.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
+import {
+  SendPhoneVerificationDto,
+  VerifyPhoneDto,
+} from './dto/phone-verification.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { Roles } from './decorators/roles.decorator';
@@ -138,6 +142,24 @@ export class AuthController {
     @Body() dto: UpdateProfileDto,
   ) {
     return this.authService.updateOwnProfile(req.user.sub, dto);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('profile/phone/send-verification')
+  sendPhoneVerification(
+    @Req() req: { user: { sub: string } },
+    @Body() dto: SendPhoneVerificationDto,
+  ) {
+    return this.authService.sendPhoneVerification(req.user.sub, dto.phone);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('profile/phone/verify')
+  verifyPhone(
+    @Req() req: { user: { sub: string } },
+    @Body() dto: VerifyPhoneDto,
+  ) {
+    return this.authService.verifyPhone(req.user.sub, dto.phone, dto.code);
   }
 
   @UseGuards(JwtAuthGuard)
