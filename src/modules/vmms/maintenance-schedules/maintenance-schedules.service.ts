@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import {
   AccountType,
   MaintenanceIntervalType,
@@ -19,12 +19,50 @@ export class MaintenanceSchedulesService {
 
   constructor(private readonly prisma: PrismaService) {}
 
+  // title is the maintenance type selected from checklist templates in the UI.
+  // Keep this comparison identical to the partial unique index in the migration.
+  private async assertNoPendingDuplicate(
+    db: Pick<Prisma.TransactionClient, '$queryRaw'>,
+    data: Pick<CreateMaintenanceScheduleDto, 'vehicleId' | 'title' | 'status'>,
+    excludeId?: string,
+  ) {
+    if ((data.status ?? MaintenanceStatus.PENDING) !== MaintenanceStatus.PENDING) return;
+    const duplicates = await db.$queryRaw<{ id: string }[]>(Prisma.sql`
+      SELECT id FROM maintenance_schedules
+      WHERE status = 'PENDING' AND deleted_at IS NULL
+        AND LOWER(BTRIM("vehicleId")) = LOWER(BTRIM(${data.vehicleId}))
+        AND LOWER(BTRIM(title)) = LOWER(BTRIM(${data.title}))
+        ${excludeId ? Prisma.sql`AND id <> ${excludeId}::uuid` : Prisma.empty}
+      LIMIT 1
+    `);
+    if (duplicates.length) {
+      throw new ConflictException('A pending schedule of this type already exists for this truck');
+    }
+  }
+
+  private async handleScheduleWriteConflict(
+    error: unknown,
+    data: CreateMaintenanceScheduleDto,
+    excludeId?: string,
+  ): Promise<never> {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+      throw new ConflictException('The schedule changed. Refresh before updating.');
+    }
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      // Recheck outside the failed transaction, including a competing insert
+      // committed after our precheck. Unrelated unique errors retain their cause.
+      await this.assertNoPendingDuplicate(this.prisma, data, excludeId);
+    }
+    throw error;
+  }
+
   async findAll(actor?: ScheduleActor) {
     const scope = actor ? scheduleScope(actor) : {};
     try {
       const schedules = await this.prisma.maintenanceSchedule.findMany({
         where: { deletedAt: null, ...scope },
         orderBy: { createdAt: 'desc' },
+        include: { cancellations: { orderBy: { createdAt: 'desc' } } },
       });
 
       return schedules.map((schedule) => {
@@ -39,6 +77,7 @@ export class MaintenanceSchedulesService {
           vehicleId: schedule.vehicleId,
           title: schedule.title,
           status: schedule.status,
+          cancellations: schedule.cancellations ?? [],
           date: this.formatDateOnly(schedule.createdAt),
           assignedMechanic: schedule.assignedMechanic,
           assignedMechanicId: schedule.assignedMechanicId,
@@ -153,7 +192,9 @@ export class MaintenanceSchedulesService {
   }
 
   async create(data: CreateMaintenanceScheduleDto) {
+    if (data.status === 'CANCELLED') throw new BadRequestException('Create a pending schedule before cancelling it with a reason.');
     if (data.status === 'COMPLETED' || data.status === 'DONE' || data.status === 'IN_PROGRESS' || data.workOrderProgress != null || data.work_order_progress != null) throw new ForbiddenException('Use the assigned work order workflow to start, submit or complete work.');
+    await this.assertNoPendingDuplicate(this.prisma, data);
     const workOrderProgress = this.normalizeWorkOrderProgress(
       data.workOrderProgress ?? data.work_order_progress,
     );
@@ -197,7 +238,7 @@ export class MaintenanceSchedulesService {
         laborCost: normalizedCosts.laborCost ?? undefined,
         totalCost: normalizedCosts.totalCost ?? undefined,
       },
-    });
+    }).catch((error: unknown) => this.handleScheduleWriteConflict(error, data));
 
     const costs = this.normalizeCostPayload({
       partsCost: schedule.partsCost,
@@ -238,6 +279,7 @@ export class MaintenanceSchedulesService {
   }
 
   async update(id: string, data: CreateMaintenanceScheduleDto) {
+    if (data.status === 'CANCELLED') throw new BadRequestException('Use the cancellation endpoint and provide a reason.');
     if (data.status === 'COMPLETED' || data.status === 'DONE') throw new ForbiddenException('Use the assigned work order workflow to submit or complete work.');
     const workOrderProgress = this.normalizeWorkOrderProgress(
       data.workOrderProgress ?? data.work_order_progress,
@@ -255,10 +297,14 @@ export class MaintenanceSchedulesService {
       });
 
       if (previous.status === 'COMPLETED') throw new ForbiddenException('Completed work orders are closed.');
+      if (['IN_PROGRESS', 'DONE'].includes(previous.status) && data.status !== previous.status) {
+        throw new BadRequestException('Started work cannot return to pending scheduling. Use the assigned work order workflow.');
+      }
       if (workOrderProgress !== undefined && JSON.stringify(workOrderProgress) !== JSON.stringify(previous.workOrderProgress)) throw new ForbiddenException('Use the assigned work order progress endpoint.');
       if (data.status === 'IN_PROGRESS' && previous.status !== 'IN_PROGRESS') throw new ForbiddenException('Only the assigned mechanic can start work.');
+      await this.assertNoPendingDuplicate(tx, data, id);
       const updated = await tx.maintenanceSchedule.update({
-        where: { id },
+        where: { id, status: previous.status, updatedAt: previous.updatedAt },
         data: {
           vehicleId: data.vehicleId,
           title: data.title,
@@ -300,7 +346,7 @@ export class MaintenanceSchedulesService {
       }
 
       return updated;
-    });
+    }).catch((error: unknown) => this.handleScheduleWriteConflict(error, data, id));
 
     // Sync vehicle status based on the new schedule status
     if (data.vehicleId && data.status) {
@@ -343,12 +389,70 @@ export class MaintenanceSchedulesService {
     };
   }
 
+  async cancel(id: string, reason: unknown, actor: ScheduleActor) {
+    if (!actor?.sub || !actor.roles?.some((role) => role.system === 'VMMS' && role.role === 'OPERATIONS')) {
+      throw new ForbiddenException('Only Operations can cancel a maintenance schedule.');
+    }
+    if (typeof reason !== 'string' || !reason.trim() || reason.trim().length > 2000) {
+      throw new BadRequestException('A cancellation reason of 1 to 2000 characters is required.');
+    }
+    return this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.findFirst({
+        where: { id: actor.sub, isActive: true, deletedAt: null, roles: { some: { role: 'OPERATIONS', system: 'VMMS' } } },
+        select: { id: true, name: true, email: true },
+      });
+      if (!user) throw new ForbiddenException('An active VMMS Operations account is required.');
+      const schedule = await tx.maintenanceSchedule.findFirst({ where: { id, deletedAt: null } });
+      if (!schedule) throw new NotFoundException('Maintenance schedule not found.');
+      if (['IN_PROGRESS', 'DONE', 'COMPLETED'].includes(schedule.status)) {
+        throw new BadRequestException('Schedule cannot be cancelled once work has started. Use ‘Extension’ instead.');
+      }
+      if (!['PENDING', 'DUE', 'OVERDUE'].includes(schedule.status)) {
+        throw new BadRequestException('This schedule has already been cancelled.');
+      }
+      const changed = await tx.maintenanceSchedule.updateMany({
+        where: { id, status: schedule.status, updatedAt: schedule.updatedAt, deletedAt: null },
+        data: { status: MaintenanceStatus.CANCELLED },
+      });
+      if (changed.count !== 1) throw new ConflictException('The schedule changed. Refresh before cancelling.');
+      await tx.maintenanceScheduleCancellation.create({ data: {
+        scheduleId: id, actorId: user.id, actorName: user.name, actorEmail: user.email,
+        reason: reason.trim(), previousStatus: schedule.status,
+      } });
+      return {
+        id, status: MaintenanceStatus.CANCELLED,
+        cancellations: await tx.maintenanceScheduleCancellation.findMany({ where: { scheduleId: id }, orderBy: { createdAt: 'desc' } }),
+      };
+    });
+  }
+
   async updateProgress(id: string, progress: any, actor: ScheduleActor) {
     const scope = scheduleScope(actor);
     const accessible = await this.prisma.maintenanceSchedule.findFirst({ where: { id, deletedAt: null, ...scope } });
     if (!accessible) throw new ForbiddenException('This work order is not assigned to you.');
     const input = this.getUpdateProgressPayload(progress);
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw new BadRequestException('A work order progress object is required.');
+    const assignments: Record<string, unknown> = {
+      assignedMechanicId: accessible.assignedMechanicId,
+      assignedMechanic: accessible.assignedMechanic,
+      assignedDriver: accessible.assignedMechanic,
+      chiefMechanicId: accessible.chiefMechanicId,
+      chief_mechanic_id: accessible.chiefMechanicId,
+      chiefMechanic: accessible.chiefMechanic,
+      chief_mechanic: accessible.chiefMechanic,
+    };
+    for (const source of [progress, input]) {
+      if (!source || typeof source !== 'object' || Array.isArray(source)) continue;
+      for (const [field, current] of Object.entries(assignments)) {
+        if (!(field in source)) continue;
+        // Older mobile clients send an empty inspector display name. Ignore it;
+        // it must never clear the assignment saved by Operations.
+        if (field === 'chiefMechanic' && source[field] === '') continue;
+        if (source[field] !== current) {
+          throw new ForbiddenException('Only Operations can change mechanic assignments through schedule editing.');
+        }
+      }
+    }
     let assignedItems: AssignedChecklistItem[] | undefined;
     if (progress.action === 'SUBMIT') {
       if (!accessible.checklistTemplateId) {
@@ -376,21 +480,10 @@ export class MaintenanceSchedulesService {
     };
 
     if (normalizedProgress !== undefined) {
-      payload.workOrderProgress = normalizedProgress;
-      // The mobile execution form assigns the inspector in its progress payload.
-      // Persist the account ID as well so inspection access survives name changes.
-      if (typeof normalizedProgress === 'object' && !Array.isArray(normalizedProgress) && 'chiefMechanic' in normalizedProgress) {
-        const chiefName = normalizedProgress.chiefMechanic;
-        if (typeof chiefName === 'string' && chiefName.trim() && chiefName !== accessible.chiefMechanic) {
-          const chiefs = await this.prisma.user.findMany({
-            where: { name: { equals: chiefName.trim(), mode: 'insensitive' }, isActive: true, deletedAt: null, roles: { some: { role: 'CHIEF_MECHANIC', system: 'VMMS' } } },
-            select: { id: true, name: true }, take: 2,
-          });
-          if (chiefs.length !== 1) throw new BadRequestException('Choose a uniquely named active chief mechanic.');
-          payload.chiefMechanicId = chiefs[0].id;
-          payload.chiefMechanic = chiefs[0].name;
-        }
-      }
+      payload.workOrderProgress = {
+        ...normalizedProgress,
+        chiefMechanic: accessible.chiefMechanic ?? '',
+      };
     }
 
     const schedule = await this.prisma.$transaction(async (tx) => {

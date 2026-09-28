@@ -10,17 +10,20 @@ import {
   Delete,
   Query,
   Req,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../../auth/guards/roles.guard';
-import { Roles } from '../../../auth/decorators/roles.decorator';
+import { Roles, RoleSystem } from '../../../auth/decorators/roles.decorator';
 import type { ScheduleActor } from './schedule-access';
-import { UserRole } from '@prisma/client';
+import { SystemType, UserRole } from '@prisma/client';
 import { MaintenanceSchedulesService } from './maintenance-schedules.service';
 import { CreateMaintenanceScheduleDto } from './dto/create-maintenance-schedule.dto';
+import { CancelMaintenanceScheduleDto } from './dto/cancel-maintenance-schedule.dto';
 
 @Controller('maintenance-schedules')
 @UseGuards(JwtAuthGuard, RolesGuard)
+@RoleSystem(SystemType.VMMS)
 export class MaintenanceSchedulesController {
   constructor(
     private readonly maintenanceSchedulesService: MaintenanceSchedulesService,
@@ -38,19 +41,25 @@ export class MaintenanceSchedulesController {
     return this.maintenanceSchedulesService.findAll(req.user);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.OPERATIONS, UserRole.CHIEF_MECHANIC)
+  @Roles(UserRole.OPERATIONS)
   @Post()
   async create(@Body() body: CreateMaintenanceScheduleDto) {
     return this.maintenanceSchedulesService.create(body);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.OPERATIONS, UserRole.CHIEF_MECHANIC)
+  @Roles(UserRole.OPERATIONS)
   @Put(':id')
   async update(
     @Param('id') id: string,
     @Body() body: CreateMaintenanceScheduleDto,
   ) {
     return this.maintenanceSchedulesService.update(id, body);
+  }
+
+  @Roles(UserRole.OPERATIONS)
+  @Post(':id/cancel')
+  async cancel(@Param('id', ParseUUIDPipe) id: string, @Body() body: CancelMaintenanceScheduleDto, @Req() req: { user: ScheduleActor }) {
+    return this.maintenanceSchedulesService.cancel(id, body.reason, req.user);
   }
 
   @Roles(UserRole.ADMIN, UserRole.OPERATIONS, UserRole.CHIEF_MECHANIC, UserRole.MECHANIC)

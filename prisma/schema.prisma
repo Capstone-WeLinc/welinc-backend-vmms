@@ -400,7 +400,8 @@ model MaintenanceSchedule {
 
   chiefMechanicUser  User?              @relation("ScheduleChiefMechanic", fields: [chiefMechanicId], references: [id], onDelete: SetNull)
   assignedMechanicUser User? @relation("ScheduleMechanic", fields: [assignedMechanicId], references: [id], onDelete: SetNull)
-  notifications MaintenanceNotification[]
+    notifications MaintenanceNotification[]
+    cancellations MaintenanceScheduleCancellation[]
   checklistTemplate ChecklistTemplate? @relation(fields: [checklistTemplateId], references: [id], onDelete: SetNull)
   previousSchedule   MaintenanceSchedule? @relation("MaintenanceScheduleRecurrence", fields: [previousScheduleId], references: [id], onDelete: SetNull)
   nextSchedule       MaintenanceSchedule? @relation("MaintenanceScheduleRecurrence")
@@ -415,6 +416,21 @@ model MaintenanceSchedule {
 // ==========================================
 // AUTH TOKENS
 // ==========================================
+
+model MaintenanceScheduleCancellation {
+  id String @id @default(uuid()) @db.Uuid
+  scheduleId String @map("schedule_id") @db.Uuid
+  actorId String @map("actor_id") @db.Uuid
+  actorName String @map("actor_name") @db.VarChar(100)
+  actorEmail String @map("actor_email") @db.VarChar(255)
+  reason String @db.Text
+  previousStatus MaintenanceStatus @map("previous_status")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  schedule MaintenanceSchedule @relation(fields: [scheduleId], references: [id], onDelete: Restrict)
+
+  @@index([scheduleId, createdAt])
+  @@map("maintenance_schedule_cancellations")
+}
 
 model MaintenanceNotification {
   id String @id @default(uuid()) @db.Uuid
