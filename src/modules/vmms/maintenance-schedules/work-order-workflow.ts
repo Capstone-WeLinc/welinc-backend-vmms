@@ -2,7 +2,37 @@ import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { MaintenanceSchedule, MaintenanceStatus } from '@prisma/client';
 import { ScheduleActor } from './schedule-access';
 
-export function applyWorkOrderWorkflow(schedule: MaintenanceSchedule, incoming: Record<string, any>, action: unknown, actor: ScheduleActor) {
+export type AssignedChecklistItem = { id: string; text: string };
+
+function validateChecklistSubmission(items: unknown, assignedItems?: AssignedChecklistItem[]) {
+  const entries = Array.isArray(items) ? items : [];
+  const required = assignedItems ?? entries.map((item, index) => ({
+    id: item?.id, text: item?.label || `Checklist item ${index + 1}`,
+  }));
+  if (!required.length) {
+    throw new BadRequestException('No checklist items are assigned. Ask Operations to assign a checklist before submitting.');
+  }
+  const incompleteItems = required.filter((requiredItem) => {
+    const matches = entries.filter((item) => item?.id === requiredItem.id);
+    return matches.length !== 1 || !['checked', 'changed'].includes(matches[0]?.status);
+  }).map((item) => ({ id: item.id, label: item.text }));
+  if (incompleteItems.length) {
+    throw new BadRequestException({
+      statusCode: 400,
+      error: 'Bad Request',
+      code: 'INCOMPLETE_CHECKLIST',
+      message: `Complete every assigned checklist item before submitting:\n${incompleteItems.map((item) => `- ${item.label}`).join('\n')}`,
+      incompleteItems,
+    });
+  }
+  if (!Array.isArray(items) || entries.length !== required.length ||
+      entries.some((item) => typeof item?.id !== 'string' || !item.id.trim() || !required.some((requiredItem) => requiredItem.id === item.id)) ||
+      new Set(entries.map((item) => item.id)).size !== entries.length) {
+    throw new BadRequestException('Checklist items do not match the assigned checklist. Refresh the work order and try again.');
+  }
+}
+
+export function applyWorkOrderWorkflow(schedule: MaintenanceSchedule, incoming: Record<string, any>, action: unknown, actor: ScheduleActor, assignedItems?: AssignedChecklistItem[]) {
   const prior = (schedule.workOrderProgress && typeof schedule.workOrderProgress === 'object' && !Array.isArray(schedule.workOrderProgress) ? schedule.workOrderProgress : {}) as Record<string, any>;
   const chief = actor.roles.some((r) => r.system === 'VMMS' && r.role === 'CHIEF_MECHANIC') && schedule.chiefMechanicId === actor.sub;
   const mechanic = actor.roles.some((r) => r.system === 'VMMS' && r.role === 'MECHANIC') && schedule.assignedMechanicId === actor.sub;
@@ -46,7 +76,7 @@ export function applyWorkOrderWorkflow(schedule: MaintenanceSchedule, incoming: 
       for (const key of ['executionItems', 'partDetails', 'chiefMechanic']) if (incoming[key] !== undefined) progress[key] = incoming[key];
       if (intent === 'SUBMIT') {
         const items = progress.executionItems;
-        if (!Array.isArray(items) || !items.length || !items.every((item) => item?.id && ['checked', 'changed', 'notChecked'].includes(item.status)) || new Set(items.map((item) => item.id)).size !== items.length) throw new BadRequestException('Complete every execution checklist item before submitting.');
+        validateChecklistSubmission(items, assignedItems);
         for (const item of items.filter((item) => item.status === 'changed')) {
           const part = progress.partDetails?.[item.id];
           if (!part?.partsUsed?.trim() || !Number.isFinite(Number(part.quantity)) || Number(part.quantity) <= 0 || String(part.materialCost ?? '').trim() === '' || !Number.isFinite(Number(part.materialCost)) || Number(part.materialCost) < 0 || !Array.isArray(part.attachments) || !part.attachments.length) throw new BadRequestException('Provide parts, quantity, cost and photos for each changed item.');

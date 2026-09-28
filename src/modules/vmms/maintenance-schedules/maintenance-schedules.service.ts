@@ -9,7 +9,7 @@ import {
   VehicleStatus,
 } from '@prisma/client';
 import { PrismaService } from '../../../shared/prisma.service';
-import { applyWorkOrderWorkflow } from './work-order-workflow';
+import { applyWorkOrderWorkflow, AssignedChecklistItem } from './work-order-workflow';
 import { scheduleScope, ScheduleActor } from './schedule-access';
 import { CreateMaintenanceScheduleDto } from './dto/create-maintenance-schedule.dto';
 
@@ -349,7 +349,18 @@ export class MaintenanceSchedulesService {
     if (!accessible) throw new ForbiddenException('This work order is not assigned to you.');
     const input = this.getUpdateProgressPayload(progress);
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw new BadRequestException('A work order progress object is required.');
-    const workflow = applyWorkOrderWorkflow(accessible, input as Record<string, any>, progress.action, actor);
+    let assignedItems: AssignedChecklistItem[] | undefined;
+    if (progress.action === 'SUBMIT') {
+      if (!accessible.checklistTemplateId) {
+        throw new BadRequestException('No checklist is assigned. Ask Operations to assign a checklist before submitting.');
+      }
+      assignedItems = await this.prisma.checklistItem.findMany({
+        where: { checklistTemplateId: accessible.checklistTemplateId, deletedAt: null },
+        select: { id: true, text: true },
+        orderBy: { order: 'asc' },
+      });
+    }
+    const workflow = applyWorkOrderWorkflow(accessible, input as Record<string, any>, progress.action, actor, assignedItems);
     const normalizedProgress = workflow.progress as Prisma.InputJsonObject;
     const normalizedCosts = this.normalizeCostPayload({
       partsCost: progress.partsCost ?? progress.parts_cost,
@@ -382,11 +393,6 @@ export class MaintenanceSchedulesService {
       }
     }
 
-    if (progress.action === 'SUBMIT' && accessible.checklistTemplateId) {
-      const required = await this.prisma.checklistItem.findMany({ where: { checklistTemplateId: accessible.checklistTemplateId, deletedAt: null }, select: { id: true } });
-      const items = workflow.progress.executionItems as { id: string }[];
-      if (!required.length || required.length !== items.length || !required.every((item) => items.some((entry) => entry.id === item.id))) throw new BadRequestException('Submit every item in the assigned checklist.');
-    }
     const schedule = await this.prisma.$transaction(async (tx) => {
       const updated = await tx.maintenanceSchedule.update({
         where: { id, deletedAt: null, updatedAt: accessible.updatedAt, AND: scope },
@@ -492,10 +498,17 @@ export class MaintenanceSchedulesService {
     }
 
     if (newStatus && vehicle.status !== newStatus) {
-      await this.prisma.vehicle.update({
-        where: { id: vehicle.id },
+      // Enforce repair precedence in the write, even if VRMS changes status
+      // after the initial read. Do not update a concurrently archived vehicle.
+      const result = await this.prisma.vehicle.updateMany({
+        where: {
+          id: vehicle.id,
+          deletedAt: null,
+          status: { not: VehicleStatus.UNDER_REPAIR },
+        },
         data: { status: newStatus },
       });
+      if (result.count === 0) return;
       this.logger.log(
         `Vehicle ${plateNumber} status synced: ${vehicle.status} → ${newStatus} (schedule ${scheduleStatus})`,
       );

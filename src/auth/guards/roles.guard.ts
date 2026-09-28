@@ -2,7 +2,7 @@ import { Injectable, CanActivate, ExecutionContext } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
 import { UserRole } from '@prisma/client';
-import { ROLES_KEY } from '../decorators/roles.decorator';
+import { ROLES_KEY, ROLE_SYSTEM_KEY } from '../decorators/roles.decorator';
 
 @Injectable()
 export class RolesGuard implements CanActivate {
@@ -31,7 +31,11 @@ export class RolesGuard implements CanActivate {
     }
 
     // Infer system context if missing
-    let targetSystem = user.system;
+    // A subsystem-owned controller must not accept another subsystem's role
+    // because of token context, Origin/Referer, or client-supplied parameters.
+    let targetSystem = this.reflector.getAllAndOverride<string>(ROLE_SYSTEM_KEY, [
+      context.getHandler(), context.getClass(),
+    ]) ?? user.system;
     if (!targetSystem) {
       // 1. Check referer/origin headers
       const referer = request.headers.referer || '';

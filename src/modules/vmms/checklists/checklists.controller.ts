@@ -12,9 +12,13 @@ import { JwtAuthGuard } from '../../../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../../auth/guards/roles.guard';
 import { ChecklistsService } from './checklists.service';
 import { CreateChecklistDto, UpdateChecklistDto } from './dto';
+import { SystemType, UserRole } from '@prisma/client';
+import { Roles, RoleSystem } from '../../../auth/decorators/roles.decorator';
 
 @Controller('checklists')
 @UseGuards(JwtAuthGuard, RolesGuard)
+@RoleSystem(SystemType.VMMS)
+@Roles(UserRole.ADMIN)
 export class ChecklistsController {
   constructor(private readonly checklistsService: ChecklistsService) {}
 
@@ -24,16 +28,19 @@ export class ChecklistsController {
   }
 
   @Get()
+  @Roles(UserRole.ADMIN, UserRole.OPERATIONS, UserRole.CHIEF_MECHANIC, UserRole.MECHANIC)
   findAll() {
     return this.checklistsService.findAll();
   }
 
   @Get(':id')
+  @Roles(UserRole.ADMIN, UserRole.OPERATIONS, UserRole.CHIEF_MECHANIC, UserRole.MECHANIC)
   findOne(@Param('id') id: string) {
     return this.checklistsService.findOne(id);
   }
 
   @Get('type/:type')
+  @Roles(UserRole.ADMIN, UserRole.OPERATIONS, UserRole.CHIEF_MECHANIC, UserRole.MECHANIC)
   findByType(@Param('type') type: string) {
     return this.checklistsService.findByType(type);
   }
