@@ -10,10 +10,16 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  IsUUID,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class CreateMaintenanceScheduleDto {
+  // Create requires this in the service; edits may retain the stored date.
+  @IsString()
+  @IsOptional()
+  startDate?: string;
+
   @IsString()
   @IsNotEmpty()
   vehicleId!: string;
@@ -124,7 +130,7 @@ export class CreateMaintenanceScheduleDto {
   @IsOptional()
   startReferenceDate?: string;
 
-  @IsString()
+  @IsUUID()
   @IsOptional()
   checklistTemplateId?: string;
 

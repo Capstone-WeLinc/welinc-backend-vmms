@@ -1,4 +1,5 @@
 import type { MaintenanceSchedule } from '@prisma/client';
+import { advanceScheduleDate } from './schedule-due';
 
 export type ScheduleEvent = 'CREATED' | 'DUE' | 'OVERDUE' | 'ODOMETER_BUFFER';
 
@@ -17,17 +18,7 @@ export function scheduleEvents(schedule: MaintenanceSchedule, odometer: number |
     else if (odometer >= target - Math.max(0, schedule.bufferDistanceKm ?? 0)) events.push('ODOMETER_BUFFER');
   }
   if (schedule.triggerType === 'TIME' && schedule.startReferenceDate && schedule.intervalType) {
-    const due = new Date(schedule.startReferenceDate);
-    const months = { MONTHLY: 1, QUARTERLY: 3, SEMI_ANNUALLY: 6, ANNUALLY: 12 };
-    if (schedule.intervalType === 'DAILY' || schedule.intervalType === 'WEEKLY') {
-      due.setUTCDate(due.getUTCDate() + (schedule.intervalType === 'DAILY' ? 1 : 7));
-    } else {
-      const day = due.getUTCDate();
-      due.setUTCDate(1);
-      due.setUTCMonth(due.getUTCMonth() + months[schedule.intervalType]);
-      const lastDay = new Date(Date.UTC(due.getUTCFullYear(), due.getUTCMonth() + 1, 0)).getUTCDate();
-      due.setUTCDate(Math.min(day, lastDay));
-    }
+    const due = advanceScheduleDate(schedule.startReferenceDate, schedule.intervalType);
     // Calendar due dates follow Philippine business days, independent of server TZ.
     const today = new Date(now.getTime() + 8 * 3600_000).toISOString().slice(0, 10);
     const dueDay = due.toISOString().slice(0, 10);

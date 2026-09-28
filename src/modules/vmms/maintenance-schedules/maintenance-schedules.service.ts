@@ -12,12 +12,41 @@ import { PrismaService } from '../../../shared/prisma.service';
 import { applyWorkOrderWorkflow, AssignedChecklistItem } from './work-order-workflow';
 import { scheduleScope, ScheduleActor } from './schedule-access';
 import { CreateMaintenanceScheduleDto } from './dto/create-maintenance-schedule.dto';
+import { scheduleDue } from './schedule-due';
+import { validateStartDate } from './schedule-start-date';
 
 @Injectable()
 export class MaintenanceSchedulesService {
   private readonly logger = new Logger(MaintenanceSchedulesService.name);
 
   constructor(private readonly prisma: PrismaService) {}
+
+  private async resolveChecklistTemplate(
+    db: Pick<Prisma.TransactionClient, 'checklistTemplate'>,
+    data: CreateMaintenanceScheduleDto,
+    previous?: MaintenanceSchedule,
+  ) {
+    const title = data.title.trim();
+    const requestedId = data.checklistTemplateId ??
+      (previous?.title.trim().toLowerCase() === title.toLowerCase() ? previous.checklistTemplateId : undefined);
+    const templates = await db.checklistTemplate.findMany({
+      where: {
+        ...(requestedId ? { id: requestedId } : { type: { equals: title, mode: 'insensitive' as const } }),
+        deletedAt: null,
+      },
+      select: { id: true, type: true, items: { where: { deletedAt: null }, select: { id: true }, take: 1 } },
+      take: 2,
+    });
+    if (templates.length !== 1 || templates[0].type.trim().toLowerCase() !== title.toLowerCase()) {
+      throw new BadRequestException('Select one active checklist template matching the maintenance type. Refresh the templates and try again.');
+    }
+    const template = templates[0];
+    if (!template.items.length) throw new BadRequestException('The selected checklist template has no active items.');
+    if (previous && ['IN_PROGRESS', 'DONE'].includes(previous.status) && template.id !== previous.checklistTemplateId) {
+      throw new BadRequestException('The assigned checklist cannot be changed after work has started.');
+    }
+    return { checklistTemplateId: template.id, title: template.type };
+  }
 
   // title is the maintenance type selected from checklist templates in the UI.
   // Keep this comparison identical to the partial unique index in the migration.
@@ -78,7 +107,9 @@ export class MaintenanceSchedulesService {
           title: schedule.title,
           status: schedule.status,
           cancellations: schedule.cancellations ?? [],
+          ...scheduleDue(schedule),
           date: this.formatDateOnly(schedule.createdAt),
+          startDate: this.formatDateOnly(schedule.startDate),
           assignedMechanic: schedule.assignedMechanic,
           assignedMechanicId: schedule.assignedMechanicId,
           assignedDriver: schedule.assignedMechanic,
@@ -162,6 +193,7 @@ export class MaintenanceSchedulesService {
           title: r.title ?? '',
           status: r.status ?? MaintenanceStatus.PENDING,
           date: this.formatDateOnly(r.created_at ?? r.scheduled_date ?? null),
+          startDate: null,
           assignedMechanic: r.assigned_mechanic ?? null,
           assignedDriver: r.assigned_mechanic ?? null,
           chiefMechanicId: (r as any).chief_mechanic_id ?? null,
@@ -194,7 +226,9 @@ export class MaintenanceSchedulesService {
   async create(data: CreateMaintenanceScheduleDto) {
     if (data.status === 'CANCELLED') throw new BadRequestException('Create a pending schedule before cancelling it with a reason.');
     if (data.status === 'COMPLETED' || data.status === 'DONE' || data.status === 'IN_PROGRESS' || data.workOrderProgress != null || data.work_order_progress != null) throw new ForbiddenException('Use the assigned work order workflow to start, submit or complete work.');
+    const startDate = validateStartDate(data.startDate);
     await this.assertNoPendingDuplicate(this.prisma, data);
+    const checklist = await this.resolveChecklistTemplate(this.prisma, data);
     const workOrderProgress = this.normalizeWorkOrderProgress(
       data.workOrderProgress ?? data.work_order_progress,
     );
@@ -208,13 +242,13 @@ export class MaintenanceSchedulesService {
     const schedule = await this.prisma.maintenanceSchedule.create({
       data: {
         vehicleId: data.vehicleId,
-        title: data.title,
+        startDate,
         status: data.status ?? MaintenanceStatus.PENDING,
         ...await this.resolveAssignedMechanic(data),
         chiefMechanicId,
         chiefMechanic,
         accountType: data.accountType ?? data.account_type,
-        checklistTemplateId: data.checklistTemplateId,
+        ...checklist,
         garageId: data.garageId,
         odometerReading: data.odometerReading
           ? parseInt(data.odometerReading, 10)
@@ -252,6 +286,7 @@ export class MaintenanceSchedulesService {
       title: schedule.title,
       status: schedule.status,
       date: schedule.createdAt.toISOString().slice(0, 10),
+      startDate: this.formatDateOnly(schedule.startDate),
       assignedMechanic: schedule.assignedMechanic,
           assignedMechanicId: schedule.assignedMechanicId,
       assignedDriver: schedule.assignedMechanic,
@@ -302,18 +337,23 @@ export class MaintenanceSchedulesService {
       }
       if (workOrderProgress !== undefined && JSON.stringify(workOrderProgress) !== JSON.stringify(previous.workOrderProgress)) throw new ForbiddenException('Use the assigned work order progress endpoint.');
       if (data.status === 'IN_PROGRESS' && previous.status !== 'IN_PROGRESS') throw new ForbiddenException('Only the assigned mechanic can start work.');
+      const startDate = validateStartDate(data.startDate, previous.startDate);
+      if (['IN_PROGRESS', 'DONE'].includes(previous.status) && startDate.getTime() !== previous.startDate?.getTime()) {
+        throw new BadRequestException('The schedule start date cannot change after work has started.');
+      }
       await this.assertNoPendingDuplicate(tx, data, id);
+      const checklist = await this.resolveChecklistTemplate(tx, data, previous);
       const updated = await tx.maintenanceSchedule.update({
         where: { id, status: previous.status, updatedAt: previous.updatedAt },
         data: {
           vehicleId: data.vehicleId,
-          title: data.title,
+          startDate,
           status: data.status ?? MaintenanceStatus.PENDING,
           ...await this.resolveAssignedMechanic(data),
           chiefMechanicId: chiefMechanicId ?? previous.chiefMechanicId,
           chiefMechanic: chiefMechanic ?? previous.chiefMechanic,
           accountType: data.accountType ?? data.account_type,
-          checklistTemplateId: data.checklistTemplateId,
+          ...checklist,
           garageId: data.garageId,
           odometerReading: data.odometerReading
             ? parseInt(data.odometerReading, 10)
@@ -365,6 +405,7 @@ export class MaintenanceSchedulesService {
       title: schedule.title,
       status: schedule.status,
       date: this.formatDateOnly(schedule.createdAt),
+      startDate: this.formatDateOnly(schedule.startDate),
       assignedMechanic: schedule.assignedMechanic,
           assignedMechanicId: schedule.assignedMechanicId,
       assignedDriver: schedule.assignedMechanic,
@@ -486,17 +527,20 @@ export class MaintenanceSchedulesService {
       };
     }
 
-    const schedule = await this.prisma.$transaction(async (tx) => {
+    const { schedule, nextSchedule } = await this.prisma.$transaction(async (tx) => {
       const updated = await tx.maintenanceSchedule.update({
         where: { id, deletedAt: null, updatedAt: accessible.updatedAt, AND: scope },
         data: payload,
       });
+      let nextSchedule: MaintenanceSchedule | null = null;
       if (workflow.status === MaintenanceStatus.COMPLETED) {
         await this.syncCompletedOdometer(tx, updated);
-        await this.createNextRecurringSchedule(tx, updated);
+        nextSchedule = await this.createNextRecurringSchedule(tx, updated);
       }
-      return updated;
-    });
+      return { schedule: updated, nextSchedule };
+    }).catch((error: unknown) => this.handleScheduleWriteConflict(error, {
+      vehicleId: accessible.vehicleId, title: accessible.title, status: MaintenanceStatus.PENDING,
+    }, id));
     await this.syncVehicleStatus(schedule.vehicleId, schedule.status);
 
     const costs = this.normalizeCostPayload({
@@ -508,6 +552,7 @@ export class MaintenanceSchedulesService {
     return {
       id: schedule.id,
       status: schedule.status,
+      nextSchedule: nextSchedule ? { id: nextSchedule.id, ...scheduleDue(nextSchedule) } : null,
       workOrderProgress: schedule.workOrderProgress ?? null,
       partsCost: costs.partsCost,
       laborCost: costs.laborCost,
@@ -771,31 +816,39 @@ export class MaintenanceSchedulesService {
   private async createNextRecurringSchedule(
     tx: Prisma.TransactionClient,
     schedule: MaintenanceSchedule,
-  ): Promise<void> {
-    if (
-      schedule.status === MaintenanceStatus.COMPLETED ||
-      schedule.status === MaintenanceStatus.CANCELLED
-    ) {
-      return;
-    }
+  ): Promise<MaintenanceSchedule | null> {
+    if (schedule.status !== MaintenanceStatus.COMPLETED || schedule.deletedAt) return null;
 
     const odometerRecurring =
-      schedule.triggerType === MaintenanceTriggerType.ODOMETER &&
-      schedule.intervalKm != null &&
-      schedule.intervalKm > 0;
+      schedule.triggerType === MaintenanceTriggerType.ODOMETER;
     const timeRecurring =
-      schedule.triggerType === MaintenanceTriggerType.TIME &&
-      Boolean(schedule.intervalType);
+      schedule.triggerType === MaintenanceTriggerType.TIME;
 
-    if (!odometerRecurring && !timeRecurring) return;
+    if (!odometerRecurring && !timeRecurring) return null;
 
-    const nextOdometer = schedule.odometerReading;
-    const nextDate = this.advanceScheduleDate(
-      schedule.startReferenceDate ?? schedule.createdAt,
-      schedule.intervalType,
-    );
+    const existing = await tx.maintenanceSchedule.findUnique({ where: { previousScheduleId: schedule.id } });
+    if (existing) return existing;
+    await this.assertNoPendingDuplicate(tx, { vehicleId: schedule.vehicleId, title: schedule.title });
 
-    await tx.maintenanceSchedule.upsert({
+    if (odometerRecurring && (!Number.isInteger(schedule.intervalKm) || schedule.intervalKm! <= 0)) {
+      throw new BadRequestException('Configure a positive odometer interval before approving recurring maintenance.');
+    }
+    const vehicle = odometerRecurring ? await tx.vehicle.findFirst({
+      where: { plateNumber: schedule.vehicleId, deletedAt: null }, select: { odometer: true },
+    }) : null;
+    const readings = [schedule.odometerReading, vehicle?.odometer]
+      .filter((reading): reading is number => typeof reading === 'number' && Number.isInteger(reading) && reading >= 0);
+    const nextOdometer = readings.length ? Math.max(...readings) : null;
+    if (odometerRecurring && nextOdometer === null) {
+      throw new BadRequestException('Record a current odometer reading before approving recurring maintenance.');
+    }
+
+    // Date-only references use Philippine business days, like schedule events.
+    // Store the cycle reference, not its due date: consumers add one interval.
+    const completionDay = new Date(schedule.updatedAt.getTime() + 8 * 3600_000).toISOString().slice(0, 10);
+    const referenceDate = new Date(`${completionDay}T00:00:00.000Z`);
+
+    return tx.maintenanceSchedule.upsert({
       where: { previousScheduleId: schedule.id },
       update: {},
       create: {
@@ -812,11 +865,12 @@ export class MaintenanceSchedulesService {
         odometerReading: nextOdometer,
         triggerType: schedule.triggerType,
         intervalKm: schedule.intervalKm,
-        bufferDistanceKm: schedule.bufferDistanceKm,
-        startingReferenceReadingKm: schedule.odometerReading,
-        intervalType: schedule.intervalType,
-        startReferenceDate: timeRecurring ? nextDate : null,
+        bufferDistanceKm: odometerRecurring ? (schedule.bufferDistanceKm ?? 0) : schedule.bufferDistanceKm,
+        startingReferenceReadingKm: odometerRecurring ? nextOdometer : null,
+        intervalType: timeRecurring ? (schedule.intervalType ?? MaintenanceIntervalType.QUARTERLY) : schedule.intervalType,
+        startReferenceDate: timeRecurring ? referenceDate : null,
         previousScheduleId: schedule.id,
+        startDate: referenceDate,
       },
     });
   }
@@ -886,33 +940,4 @@ export class MaintenanceSchedulesService {
     };
   }
 
-  private advanceScheduleDate(
-    date: Date,
-    intervalType: MaintenanceIntervalType | null,
-  ): Date {
-    const next = new Date(date);
-
-    switch (intervalType) {
-      case MaintenanceIntervalType.DAILY:
-        next.setUTCDate(next.getUTCDate() + 1);
-        break;
-      case MaintenanceIntervalType.WEEKLY:
-        next.setUTCDate(next.getUTCDate() + 7);
-        break;
-      case MaintenanceIntervalType.QUARTERLY:
-        next.setUTCMonth(next.getUTCMonth() + 3);
-        break;
-      case MaintenanceIntervalType.SEMI_ANNUALLY:
-        next.setUTCMonth(next.getUTCMonth() + 6);
-        break;
-      case MaintenanceIntervalType.ANNUALLY:
-        next.setUTCFullYear(next.getUTCFullYear() + 1);
-        break;
-      case MaintenanceIntervalType.MONTHLY:
-        next.setUTCMonth(next.getUTCMonth() + 1);
-        break;
-    }
-
-    return next;
-  }
 }

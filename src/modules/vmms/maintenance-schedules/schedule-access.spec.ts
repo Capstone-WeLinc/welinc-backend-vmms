@@ -24,12 +24,15 @@ describe('work order ownership', () => {
     expect(prisma.maintenanceSchedule.update).not.toHaveBeenCalled();
   });
   it('retains ownership in the write predicate to handle concurrent reassignment', async () => {
+    const updatedAt = new Date('2026-01-01T00:00:00Z');
     const prisma = { maintenanceSchedule: {
-      findFirst: jest.fn().mockResolvedValue({ id: 'own-order' }),
-      update: jest.fn().mockResolvedValue({ id: 'own-order', workOrderProgress: {} }),
-    } };
+      findFirst: jest.fn().mockResolvedValue({ id: 'own-order', assignedMechanicId: 'mechanic-a', status: 'IN_PROGRESS', updatedAt }),
+      update: jest.fn().mockResolvedValue({ id: 'own-order', status: 'IN_PROGRESS', workOrderProgress: {} }),
+    }, $transaction: jest.fn() };
+    prisma.$transaction.mockImplementation((callback) => callback(prisma));
     const service = new MaintenanceSchedulesService(prisma as unknown as PrismaService);
+    jest.spyOn(service as any, 'syncVehicleStatus').mockResolvedValue(undefined);
     await service.updateProgress('own-order', { notes: 'Checked' }, actor());
-    expect(prisma.maintenanceSchedule.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'own-order', deletedAt: null, AND: { assignedMechanicId: 'mechanic-a' } } }));
+    expect(prisma.maintenanceSchedule.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'own-order', deletedAt: null, updatedAt, AND: { assignedMechanicId: 'mechanic-a' } } }));
   });
 });

@@ -69,7 +69,7 @@ describe('MaintenanceSchedulesService', () => {
     expect(result[0].totalCost).toBe(170.75);
   });
 
-  it('does not create a new recurring schedule after a work order is already completed', async () => {
+  it('does not create a recurring schedule before Chief Mechanic approval', async () => {
     const tx = {
       maintenanceSchedule: {
         upsert: jest.fn(),
@@ -80,7 +80,7 @@ describe('MaintenanceSchedulesService', () => {
       id: 'schedule-1',
       vehicleId: 'ABC123',
       title: 'Oil Change',
-      status: 'COMPLETED',
+      status: 'DONE',
       triggerType: 'ODOMETER',
       intervalKm: 5000,
       startReferenceDate: new Date('2026-01-01T00:00:00.000Z'),
