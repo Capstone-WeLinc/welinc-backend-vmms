@@ -26,7 +26,7 @@ describe('scheduling HTTP permissions', () => {
   const setUser = (roles: Role[]) => prisma.user.findFirst.mockResolvedValue({
     id: 'user-1', email: 'test@example.invalid', isActive: true, lockedAt: null, roles,
   });
-  const token = (roles: Role[], system = SystemType.VMMS) => jwt.sign({ sub: 'user-1', roles, system });
+  const token = (roles: Role[], system: SystemType = SystemType.VMMS) => jwt.sign({ sub: 'user-1', roles, system });
   beforeAll(async () => {
     const module = await Test.createTestingModule({
       controllers: [MaintenanceSchedulesController],

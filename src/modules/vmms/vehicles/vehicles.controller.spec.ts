@@ -24,7 +24,7 @@ describe('vehicle HTTP permissions', () => {
     ['patch', `/vehicles/${vehicleId}`, 'update'],
     ['delete', `/vehicles/${vehicleId}`, 'delete'],
   ];
-  const token = (roles: Role[], system = SystemType.VMMS) => jwt.sign({ sub: 'user-id', roles, system });
+  const token = (roles: Role[], system: SystemType = SystemType.VMMS) => jwt.sign({ sub: 'user-id', roles, system });
   const setUser = (roles: Role[]) => prisma.user.findFirst.mockResolvedValue({
     id: 'user-id', email: 'test@example.invalid', isActive: true, lockedAt: null, roles,
   });
