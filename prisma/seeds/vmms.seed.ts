@@ -115,6 +115,28 @@ export async function seedVmms(prisma: PrismaClient) {
   const marikinaGarage = garages.find(g => g.name === 'Marikina');
   const pulilanGarage = garages.find(g => g.name === 'Pulilan') ?? garages[2];
 
+  const resolveSeedMechanicId = (
+    assignedMechanic: string,
+    accountType: AccountType,
+  ): string | null => {
+    if (accountType === AccountType.OUTSOURCED) return null;
+
+    const normalizedName = assignedMechanic.trim().toLowerCase();
+    const matches = mechanics.filter(
+      (mechanic) =>
+        mechanic.name.trim().toLowerCase() === normalizedName &&
+        !mechanic.isOutsourced &&
+        mechanic.userId,
+    );
+    const userId = matches.length === 1 ? matches[0].userId : null;
+    if (!userId) {
+      throw new Error(
+        `Seeded work order mechanic "${assignedMechanic}" must match exactly one in-house mechanic user.`,
+      );
+    }
+    return userId;
+  };
+
   const maintenanceSchedulesData = [
     {
       vehicleId: vehicles[0].plateNumber, // ABC-1234
@@ -1107,7 +1129,13 @@ export async function seedVmms(prisma: PrismaClient) {
       intervalType: MaintenanceIntervalType.MONTHLY,
       startReferenceDate: new Date('2026-08-20T00:00:00.000Z'),
     },
-  ];
+  ].map((schedule) => ({
+    ...schedule,
+    assignedMechanicId: resolveSeedMechanicId(
+      schedule.assignedMechanic,
+      schedule.accountType,
+    ),
+  }));
 
   const assertCompletedScheduleHasProgress = (schedule: any) => {
     if (schedule.status === MaintenanceStatus.COMPLETED && schedule.workOrderProgress == null) {
@@ -1185,6 +1213,7 @@ export async function seedVmms(prisma: PrismaClient) {
         title: completedSchedule.title,
         status: seedStatus,
         assignedMechanic: completedSchedule.assignedMechanic,
+        assignedMechanicId: completedSchedule.assignedMechanicId,
         accountType: completedSchedule.accountType,
         checklistTemplateId: completedSchedule.checklistTemplateId,
         garageId: completedSchedule.garageId,

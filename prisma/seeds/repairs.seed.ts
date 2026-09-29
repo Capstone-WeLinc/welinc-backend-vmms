@@ -25,7 +25,8 @@ export async function seedRepairs(prisma: PrismaClient) {
           }
         }
       }
-    }
+    },
+    include: { user: { select: { email: true } } },
   });
 
   const adminUser = { id: vrmsAdminUser.id, email: vrmsAdminUser.email };
