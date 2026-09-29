@@ -1131,6 +1131,7 @@ export async function seedVmms(prisma: PrismaClient) {
     },
   ].map((schedule) => ({
     ...schedule,
+    startDate: schedule.createdAt,
     assignedMechanicId: resolveSeedMechanicId(
       schedule.assignedMechanic,
       schedule.accountType,
@@ -1210,6 +1211,7 @@ export async function seedVmms(prisma: PrismaClient) {
     const nextSchedule = await prisma.maintenanceSchedule.create({
       data: {
         vehicleId: completedSchedule.vehicleId,
+        startDate: nextDate,
         title: completedSchedule.title,
         status: seedStatus,
         assignedMechanic: completedSchedule.assignedMechanic,
