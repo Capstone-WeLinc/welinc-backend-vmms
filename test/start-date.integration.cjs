@@ -20,7 +20,11 @@ const { MaintenanceSchedulesService } = require('../dist/src/modules/vmms/mainte
       service.syncVehicleStatus = async () => {};
       const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
       for (const triggerType of ['MANUAL', 'TIME', 'ODOMETER']) {
-        const input = { vehicleId: `TEST-${triggerType}-${fixtureId.slice(0, 8)}`, title: template.type, checklistTemplateId: template.id, assignedDriver: mechanic.name, assignedMechanicId: mechanic.id, triggerType };
+        const input = { vehicleId: `SD-${triggerType.slice(0, 3)}-${fixtureId.slice(0, 8)}`, title: template.type, checklistTemplateId: template.id, assignedDriver: mechanic.name, assignedMechanicId: mechanic.id, triggerType,
+          ...(triggerType === 'ODOMETER' ? { odometerReading: '1000', startingReferenceReadingKm: '1000', intervalKm: '5000' } : {}),
+          ...(triggerType === 'TIME' ? { startReferenceDate: today } : {}),
+        };
+        if (triggerType === 'ODOMETER') await tx.vehicle.create({ data: { plateNumber: input.vehicleId, model: 'Test only', odometer: 1000 } });
         await assert.rejects(() => service.create(input), /Schedule start date is required/);
         await assert.rejects(() => service.create({ ...input, startDate: '2020-01-01' }), /Schedule date cannot be in the past/);
         const created = await service.create({ ...input, startDate: today });

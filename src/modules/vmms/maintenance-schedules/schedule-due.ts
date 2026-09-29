@@ -1,25 +1,16 @@
 import type { MaintenanceIntervalType, MaintenanceSchedule } from '@prisma/client';
+import { addTimeInterval, getTimeInterval } from './time-interval';
 
 export function advanceScheduleDate(date: Date, interval: MaintenanceIntervalType): Date {
-  const next = new Date(date);
-  if (interval === 'DAILY' || interval === 'WEEKLY') {
-    next.setUTCDate(next.getUTCDate() + (interval === 'DAILY' ? 1 : 7));
-  } else {
-    const months = { MONTHLY: 1, QUARTERLY: 3, SEMI_ANNUALLY: 6, ANNUALLY: 12 };
-    const day = next.getUTCDate();
-    next.setUTCDate(1);
-    next.setUTCMonth(next.getUTCMonth() + months[interval]);
-    const lastDay = new Date(Date.UTC(next.getUTCFullYear(), next.getUTCMonth() + 1, 0)).getUTCDate();
-    next.setUTCDate(Math.min(day, lastDay));
-  }
-  return next;
+  return addTimeInterval(date, getTimeInterval({ intervalType: interval })!);
 }
 
-export function scheduleDue(schedule: Pick<MaintenanceSchedule, 'triggerType' | 'intervalType' | 'startReferenceDate' | 'startingReferenceReadingKm' | 'odometerReading' | 'intervalKm'>) {
+export function scheduleDue(schedule: Pick<MaintenanceSchedule, 'triggerType' | 'intervalType' | 'startReferenceDate' | 'startingReferenceReadingKm' | 'odometerReading' | 'intervalKm'> & { timeIntervalValue?: number | null; timeIntervalUnit?: string | null }) {
   const reference = schedule.startingReferenceReadingKm ?? schedule.odometerReading;
+  const interval = getTimeInterval(schedule);
   return {
-    dueDate: schedule.triggerType === 'TIME' && schedule.startReferenceDate && schedule.intervalType
-      ? advanceScheduleDate(schedule.startReferenceDate, schedule.intervalType).toISOString().slice(0, 10) : null,
+    dueDate: schedule.triggerType === 'TIME' && schedule.startReferenceDate && interval
+      ? addTimeInterval(schedule.startReferenceDate, interval).toISOString().slice(0, 10) : null,
     dueOdometer: schedule.triggerType === 'ODOMETER' && reference != null && schedule.intervalKm != null && schedule.intervalKm > 0
       ? reference + schedule.intervalKm : null,
   };

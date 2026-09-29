@@ -1,7 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import {
   AccountType,
-  MaintenanceIntervalType,
   MaintenanceSchedule,
   MaintenanceStatus,
   MaintenanceTriggerType,
@@ -14,12 +13,21 @@ import { scheduleScope, ScheduleActor } from './schedule-access';
 import { CreateMaintenanceScheduleDto } from './dto/create-maintenance-schedule.dto';
 import { scheduleDue } from './schedule-due';
 import { validateStartDate } from './schedule-start-date';
+import { validateScheduleMileage } from './schedule-mileage';
+import { validateTimeSchedule, getTimeInterval } from './time-interval';
 
 @Injectable()
 export class MaintenanceSchedulesService {
   private readonly logger = new Logger(MaintenanceSchedulesService.name);
 
   constructor(private readonly prisma: PrismaService) {}
+
+  private async resolveMileage(db: Pick<Prisma.TransactionClient, 'vehicle'>, data: CreateMaintenanceScheduleDto, previous?: MaintenanceSchedule) {
+    const vehicle = (data.triggerType ?? previous?.triggerType) === MaintenanceTriggerType.ODOMETER
+      ? await db.vehicle.findFirst({ where: { plateNumber: { equals: data.vehicleId.trim(), mode: 'insensitive' }, deletedAt: null, isActive: true }, select: { odometer: true } })
+      : null;
+    return validateScheduleMileage(data, previous, vehicle?.odometer);
+  }
 
   private async resolveChecklistTemplate(
     db: Pick<Prisma.TransactionClient, 'checklistTemplate'>,
@@ -125,6 +133,8 @@ export class MaintenanceSchedulesService {
           startingReferenceReadingKm:
             schedule.startingReferenceReadingKm?.toString() ?? null,
           intervalType: schedule.intervalType ?? null,
+          timeIntervalValue: schedule.timeIntervalValue ?? null,
+          timeIntervalUnit: schedule.timeIntervalUnit ?? null,
           startReferenceDate: this.formatDateOnly(schedule.startReferenceDate),
           previousScheduleId: schedule.previousScheduleId ?? null,
           workOrderProgress: schedule.workOrderProgress ?? null,
@@ -227,6 +237,7 @@ export class MaintenanceSchedulesService {
     if (data.status === 'CANCELLED') throw new BadRequestException('Create a pending schedule before cancelling it with a reason.');
     if (data.status === 'COMPLETED' || data.status === 'DONE' || data.status === 'IN_PROGRESS' || data.workOrderProgress != null || data.work_order_progress != null) throw new ForbiddenException('Use the assigned work order workflow to start, submit or complete work.');
     const startDate = validateStartDate(data.startDate);
+    const time = validateTimeSchedule(data);
     await this.assertNoPendingDuplicate(this.prisma, data);
     const checklist = await this.resolveChecklistTemplate(this.prisma, data);
     const workOrderProgress = this.normalizeWorkOrderProgress(
@@ -239,7 +250,9 @@ export class MaintenanceSchedulesService {
     });
     const { chiefMechanicId, chiefMechanic } = await this.resolveChiefMechanic(data);
 
-    const schedule = await this.prisma.maintenanceSchedule.create({
+    const schedule = await this.prisma.$transaction(async (tx) => {
+      const mileage = await this.resolveMileage(tx, data);
+      return tx.maintenanceSchedule.create({
       data: {
         vehicleId: data.vehicleId,
         startDate,
@@ -250,21 +263,13 @@ export class MaintenanceSchedulesService {
         accountType: data.accountType ?? data.account_type,
         ...checklist,
         garageId: data.garageId,
-        odometerReading: data.odometerReading
-          ? parseInt(data.odometerReading, 10)
-          : undefined,
+        ...mileage,
         triggerType: data.triggerType,
-        intervalKm: data.intervalKm ? parseInt(data.intervalKm, 10) : undefined,
-        bufferDistanceKm: data.bufferDistanceKm
-          ? parseInt(data.bufferDistanceKm, 10)
-          : undefined,
-        startingReferenceReadingKm: data.startingReferenceReadingKm
-          ? parseInt(data.startingReferenceReadingKm, 10)
-          : undefined,
         intervalType: data.intervalType,
         startReferenceDate: data.startReferenceDate
           ? new Date(`${data.startReferenceDate}T00:00:00.000Z`)
           : undefined,
+        ...time,
         ...(workOrderProgress !== undefined
           ? { workOrderProgress }
           : {}),
@@ -272,6 +277,7 @@ export class MaintenanceSchedulesService {
         laborCost: normalizedCosts.laborCost ?? undefined,
         totalCost: normalizedCosts.totalCost ?? undefined,
       },
+      });
     }).catch((error: unknown) => this.handleScheduleWriteConflict(error, data));
 
     const costs = this.normalizeCostPayload({
@@ -302,6 +308,8 @@ export class MaintenanceSchedulesService {
       startingReferenceReadingKm:
         schedule.startingReferenceReadingKm?.toString() ?? null,
       intervalType: schedule.intervalType ?? null,
+      timeIntervalValue: schedule.timeIntervalValue ?? null,
+      timeIntervalUnit: schedule.timeIntervalUnit ?? null,
       startReferenceDate: schedule.startReferenceDate
         ? schedule.startReferenceDate.toISOString().slice(0, 10)
         : null,
@@ -343,6 +351,8 @@ export class MaintenanceSchedulesService {
       }
       await this.assertNoPendingDuplicate(tx, data, id);
       const checklist = await this.resolveChecklistTemplate(tx, data, previous);
+      const mileage = await this.resolveMileage(tx, data, previous);
+      const time = validateTimeSchedule(data, previous);
       const updated = await tx.maintenanceSchedule.update({
         where: { id, status: previous.status, updatedAt: previous.updatedAt },
         data: {
@@ -355,21 +365,13 @@ export class MaintenanceSchedulesService {
           accountType: data.accountType ?? data.account_type,
           ...checklist,
           garageId: data.garageId,
-          odometerReading: data.odometerReading
-            ? parseInt(data.odometerReading, 10)
-            : undefined,
+          ...mileage,
           triggerType: data.triggerType,
-          intervalKm: data.intervalKm ? parseInt(data.intervalKm, 10) : undefined,
-          bufferDistanceKm: data.bufferDistanceKm
-            ? parseInt(data.bufferDistanceKm, 10)
-            : undefined,
-          startingReferenceReadingKm: data.startingReferenceReadingKm
-            ? parseInt(data.startingReferenceReadingKm, 10)
-            : undefined,
           intervalType: data.intervalType,
           startReferenceDate: data.startReferenceDate
             ? new Date(`${data.startReferenceDate}T00:00:00.000Z`)
             : undefined,
+          ...time,
           ...(workOrderProgress !== undefined ? { workOrderProgress } : {}),
           partsCost: normalizedCosts.partsCost ?? undefined,
           laborCost: normalizedCosts.laborCost ?? undefined,
@@ -421,6 +423,8 @@ export class MaintenanceSchedulesService {
       startingReferenceReadingKm:
         schedule.startingReferenceReadingKm?.toString() ?? null,
       intervalType: schedule.intervalType ?? null,
+      timeIntervalValue: schedule.timeIntervalValue ?? null,
+      timeIntervalUnit: schedule.timeIntervalUnit ?? null,
       startReferenceDate: this.formatDateOnly(schedule.startReferenceDate),
       previousScheduleId: schedule.previousScheduleId ?? null,
       workOrderProgress: schedule.workOrderProgress ?? null,
@@ -842,11 +846,20 @@ export class MaintenanceSchedulesService {
     if (odometerRecurring && nextOdometer === null) {
       throw new BadRequestException('Record a current odometer reading before approving recurring maintenance.');
     }
+    if (odometerRecurring) validateScheduleMileage({
+      vehicleId: schedule.vehicleId, title: schedule.title, triggerType: MaintenanceTriggerType.ODOMETER,
+      odometerReading: String(nextOdometer), startingReferenceReadingKm: String(nextOdometer), intervalKm: String(schedule.intervalKm),
+    }, undefined, nextOdometer);
 
     // Date-only references use Philippine business days, like schedule events.
     // Store the cycle reference, not its due date: consumers add one interval.
     const completionDay = new Date(schedule.updatedAt.getTime() + 8 * 3600_000).toISOString().slice(0, 10);
     const referenceDate = new Date(`${completionDay}T00:00:00.000Z`);
+    const timeInterval = getTimeInterval(schedule) ?? { value: 3, unit: 'MONTHS' as const };
+    const timeFields = timeRecurring ? validateTimeSchedule({
+      vehicleId: schedule.vehicleId, title: schedule.title, triggerType: MaintenanceTriggerType.TIME,
+      timeIntervalValue: timeInterval.value, timeIntervalUnit: timeInterval.unit, startReferenceDate: completionDay,
+    }) : {};
 
     return tx.maintenanceSchedule.upsert({
       where: { previousScheduleId: schedule.id },
@@ -867,10 +880,11 @@ export class MaintenanceSchedulesService {
         intervalKm: schedule.intervalKm,
         bufferDistanceKm: odometerRecurring ? (schedule.bufferDistanceKm ?? 0) : schedule.bufferDistanceKm,
         startingReferenceReadingKm: odometerRecurring ? nextOdometer : null,
-        intervalType: timeRecurring ? (schedule.intervalType ?? MaintenanceIntervalType.QUARTERLY) : schedule.intervalType,
+        intervalType: schedule.intervalType,
         startReferenceDate: timeRecurring ? referenceDate : null,
         previousScheduleId: schedule.id,
         startDate: referenceDate,
+        ...timeFields,
       },
     });
   }

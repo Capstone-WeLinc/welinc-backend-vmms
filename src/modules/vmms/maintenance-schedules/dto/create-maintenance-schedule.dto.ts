@@ -11,10 +11,24 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  IsInt,
+  Min,
+  Max,
+  IsIn,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class CreateMaintenanceScheduleDto {
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(2147483647)
+  timeIntervalValue?: number;
+
+  @IsOptional()
+  @IsIn(['DAYS', 'MONTHS'])
+  timeIntervalUnit?: 'DAYS' | 'MONTHS';
+
   // Create requires this in the service; edits may retain the stored date.
   @IsString()
   @IsOptional()

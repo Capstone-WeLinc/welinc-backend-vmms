@@ -1143,6 +1143,16 @@ export async function seedVmms(prisma: PrismaClient) {
     }
   };
 
+  // Match the partial index's LOWER(BTRIM(...)) identity. Reserve explicit
+  // Pending fixtures up front so generated cycles cannot collide with later rows.
+  const pendingScheduleKey = (schedule: { vehicleId: string; title: string }) =>
+    JSON.stringify([schedule.vehicleId, schedule.title].map(value => value.replace(/^ +| +$/g, '').toLowerCase()));
+  const pendingScheduleKeys = new Set(
+    maintenanceSchedulesData
+      .filter(schedule => schedule.status === MaintenanceStatus.PENDING)
+      .map(pendingScheduleKey),
+  );
+
   let recurringIdx = 0;
   const createNextSeedMaintenanceSchedule = async (completedSchedule: any) => {
     const triggerType = completedSchedule.triggerType;
@@ -1164,7 +1174,12 @@ export async function seedVmms(prisma: PrismaClient) {
       seedStatus = MaintenanceStatus.DUE;
     }
 
-    return prisma.maintenanceSchedule.create({
+    const pendingKey = pendingScheduleKey(completedSchedule);
+    if (seedStatus === MaintenanceStatus.PENDING && pendingScheduleKeys.has(pendingKey)) {
+      return null;
+    }
+
+    const nextSchedule = await prisma.maintenanceSchedule.create({
       data: {
         vehicleId: completedSchedule.vehicleId,
         title: completedSchedule.title,
@@ -1183,6 +1198,8 @@ export async function seedVmms(prisma: PrismaClient) {
         previousScheduleId: completedSchedule.id,
       },
     });
+    if (seedStatus === MaintenanceStatus.PENDING) pendingScheduleKeys.add(pendingKey);
+    return nextSchedule;
   };
 
   let createdMaintenanceSchedulesCount = 0;

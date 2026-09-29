@@ -388,6 +388,8 @@ model MaintenanceSchedule {
   bufferDistanceKm         Int?              @map("buffer_distance_km")
   startingReferenceReadingKm Int?           @map("starting_reference_reading_km")
   intervalType             MaintenanceIntervalType? @map("interval_type")
+  timeIntervalValue        Int? @map("time_interval_value")
+  timeIntervalUnit         String? @map("time_interval_unit") @db.VarChar(6)
   startReferenceDate       DateTime?         @map("start_reference_date") @db.Timestamptz(6)
   startDate                DateTime?         @map("start_date") @db.Date
   previousScheduleId       String?           @unique @map("previous_schedule_id") @db.Uuid
