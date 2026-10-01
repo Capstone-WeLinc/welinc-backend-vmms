@@ -8,6 +8,11 @@ import { ExtractJwt, Strategy } from "passport-jwt";
 import { ConfigService } from "@nestjs/config";
 import { SystemType } from "@prisma/client";
 import { PrismaService } from "../../shared/prisma.service";
+import {
+  assertTokenPlatform,
+  assertVmmsPlatformAccess,
+  getClientPlatform,
+} from "../client-platform";
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -30,8 +35,14 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       email: string;
       roles: { role: string; system: string }[];
       system?: string;
+      clientPlatform?: string;
     },
   ) {
+    const clientPlatform = getClientPlatform(
+      request.headers?.["x-vmms-client"],
+    );
+    assertTokenPlatform(clientPlatform, payload.clientPlatform);
+
     let requestedSystem = (payload.system || '') as SystemType;
 
     if (!requestedSystem || !Object.values(SystemType).includes(requestedSystem)) {
@@ -59,7 +70,6 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
           path.startsWith('/checklists') ||
           path.startsWith('/maintenance-schedules') ||
           path.startsWith('/vehicles') ||
-          path.startsWith('/drivers') ||
           path.startsWith('/garages') ||
           path.startsWith('/locations')
         ) {
@@ -110,6 +120,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         "Account is locked. Contact your Admin to unlock.",
       );
     }
+
+    assertVmmsPlatformAccess(user.roles, clientPlatform);
 
     // Resolve system from user's roles if still empty
     if (!requestedSystem || !Object.values(SystemType).includes(requestedSystem)) {

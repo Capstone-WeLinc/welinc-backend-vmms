@@ -520,6 +520,7 @@ export class MaintenanceSchedulesService {
 
     const payload: Record<string, any> = {
       status: workflow.status,
+      ...(workflow.status === MaintenanceStatus.COMPLETED ? { completedAt: new Date() } : {}),
       partsCost: normalizedCosts.partsCost ?? undefined,
       laborCost: normalizedCosts.laborCost ?? undefined,
       totalCost: normalizedCosts.totalCost ?? undefined,

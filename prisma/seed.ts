@@ -6,9 +6,7 @@ import pg from 'pg';
 import { seedGarages } from './seeds/garages.seed';
 import { seedUsers } from './seeds/users.seed';
 import { seedVehicles } from './seeds/vehicles.seed';
-import { seedDrivers } from './seeds/drivers.seed';
-import { seedBookings } from './seeds/bookings.seed';
-import { seedRepairs } from './seeds/repairs.seed';
+import { seedWorkOrders } from './seeds/work-orders.seed';
 import { seedVmms } from './seeds/vmms.seed';
 
 const pool = new pg.Pool({
@@ -23,7 +21,7 @@ async function cleanDatabase(prisma: PrismaClient) {
   await prisma.shopChangeLog.deleteMany({});
   await prisma.repairPart.deleteMany({});
   await prisma.repairIssue.deleteMany({});
-  await prisma.repairTicket.deleteMany({});
+  await prisma.workOrder.deleteMany({});
   
   // Clean self-referencing maintenance schedules
   await prisma.maintenanceSchedule.updateMany({
@@ -34,8 +32,6 @@ async function cleanDatabase(prisma: PrismaClient) {
   await prisma.checklistItem.deleteMany({});
   await prisma.checklistTemplate.deleteMany({});
   
-  await prisma.booking.deleteMany({});
-  await prisma.driver.deleteMany({});
   await prisma.mechanic.deleteMany({});
   await prisma.vehicle.deleteMany({});
   await prisma.garage.deleteMany({});
@@ -62,26 +58,17 @@ async function main() {
   // 3. Vehicles (Independent)
   await seedVehicles(prisma);
 
-  // 4. Drivers (Independent)
-  await seedDrivers(prisma);
+  // 4. VMMS work orders (Depends on garages, vehicles, mechanics, users)
+  await seedWorkOrders(prisma);
 
-  // 5. Bookings (Independent)
-  await seedBookings(prisma);
-
-  // 6. Repairs (Depends on garages, vehicles, drivers, mechanics, users)
-  await seedRepairs(prisma);
-
-  // 7. VMMS (Depends on garages, vehicles, mechanics)
+  // 5. VMMS schedules (Depends on garages, vehicles, mechanics)
   await seedVmms(prisma);
 
   console.log('Database seeded successfully!');
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log('Login credentials:');
-  console.log('  BMS Admin  → email: bms.admin@welinc.com  password: admin1234');
-  console.log('  VRMS Admin → email: vrms.admin@welinc.com password: admin1234');
   console.log('  VMMS Admin → email: vmms.admin@welinc.com password: admin1234');
-  console.log('  CS user    → email: cs.user@welinc.com    password: cs1234 (BMS)');
-  console.log('  Operations → email: ops.user@welinc.com   password: ops1234 (BMS & VMMS)');
+  console.log('  Operations → email: ops.user@welinc.com   password: ops1234 (VMMS)');
   console.log('  VMMS Chief Mechanic → email: vmms.chiefmech@welinc.com  password: chiefmech1234 (VMMS)');
   console.log('  VMMS Chief Mechanic → email: vmms.chiefmech2@welinc.com password: chiefmech1234 (VMMS)');
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');

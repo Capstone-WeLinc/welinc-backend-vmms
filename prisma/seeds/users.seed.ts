@@ -6,63 +6,7 @@ export async function seedUsers(prisma: PrismaClient) {
 
   const adminPasswordHash = await argon2.hash('admin1234');
 
-  // 1. BMS Admin
-  const bmsAdminUser = await prisma.user.upsert({
-    where: { email: 'bms.admin@welinc.com' },
-    update: { emailVerified: true },
-    create: {
-      name: 'Bernardo Mendoza',
-      email: 'bms.admin@welinc.com',
-      emailVerified: true,
-      passwordHash: adminPasswordHash,
-    },
-  });
-
-  await prisma.userRoleAssignment.upsert({
-    where: {
-      userId_role_system: {
-        userId: bmsAdminUser.id,
-        role: UserRole.ADMIN,
-        system: SystemType.BMS,
-      },
-    },
-    update: {},
-    create: {
-      userId: bmsAdminUser.id,
-      role: UserRole.ADMIN,
-      system: SystemType.BMS,
-    },
-  });
-
-  // 2. VRMS Admin
-  const vrmsAdminUser = await prisma.user.upsert({
-    where: { email: 'vrms.admin@welinc.com' },
-    update: { emailVerified: true },
-    create: {
-      name: 'Victor Ramos',
-      email: 'vrms.admin@welinc.com',
-      emailVerified: true,
-      passwordHash: adminPasswordHash,
-    },
-  });
-
-  await prisma.userRoleAssignment.upsert({
-    where: {
-      userId_role_system: {
-        userId: vrmsAdminUser.id,
-        role: UserRole.ADMIN,
-        system: SystemType.VRMS,
-      },
-    },
-    update: {},
-    create: {
-      userId: vrmsAdminUser.id,
-      role: UserRole.ADMIN,
-      system: SystemType.VRMS,
-    },
-  });
-
-  // 3. VMMS Admin
+  // VMMS Admin
   const vmmsAdminUser = await prisma.user.upsert({
     where: { email: 'vmms.admin@welinc.com' },
     update: { emailVerified: true },
@@ -90,40 +34,12 @@ export async function seedUsers(prisma: PrismaClient) {
     },
   });
 
-  console.log('  Partitioned admin users created (BMS, VRMS, VMMS)');
+  console.log('  VMMS admin user created');
 
-  // 4. CS and Ops Users
-  console.log('Creating Customer Service and Operations users...');
-  const csPasswordHash = await argon2.hash('cs1234');
+  // VMMS Operations and mechanic users
+  console.log('Creating VMMS Operations and mechanic users...');
   const opsPasswordHash = await argon2.hash('ops1234');
   const chiefMechanicPasswordHash = await argon2.hash('chiefmech1234');
-
-  const csUser = await prisma.user.upsert({
-    where: { email: 'cs.user@welinc.com' },
-    update: { emailVerified: true },
-    create: {
-      name: 'Clara Reyes',
-      email: 'cs.user@welinc.com',
-      emailVerified: true,
-      passwordHash: csPasswordHash,
-    },
-  });
-
-  await prisma.userRoleAssignment.upsert({
-    where: {
-      userId_role_system: {
-        userId: csUser.id,
-        role: UserRole.CUSTOMER_SUPPORT,
-        system: SystemType.BMS,
-      },
-    },
-    update: {},
-    create: {
-      userId: csUser.id,
-      role: UserRole.CUSTOMER_SUPPORT,
-      system: SystemType.BMS,
-    },
-  });
 
   const opsUser = await prisma.user.upsert({
     where: { email: 'ops.user@welinc.com' },
@@ -136,7 +52,7 @@ export async function seedUsers(prisma: PrismaClient) {
     },
   });
 
-  for (const sys of [SystemType.BMS, SystemType.VMMS]) {
+  for (const sys of [SystemType.VMMS]) {
     await prisma.userRoleAssignment.upsert({
       where: {
         userId_role_system: {
@@ -206,7 +122,6 @@ export async function seedUsers(prisma: PrismaClient) {
     { email: 'mech.carl@welinc.com', name: 'Carl Santos' },
   ];
 
-  const mechanicsList: any[] = [];
   for (const m of mechEmails) {
     const user = await prisma.user.upsert({
       where: { email: m.email },
@@ -219,7 +134,7 @@ export async function seedUsers(prisma: PrismaClient) {
       },
     });
 
-    for (const sys of [SystemType.VRMS, SystemType.VMMS]) {
+    for (const sys of [SystemType.VMMS]) {
       await prisma.userRoleAssignment.upsert({
         where: {
           userId_role_system: {
@@ -237,7 +152,7 @@ export async function seedUsers(prisma: PrismaClient) {
       });
     }
 
-    const mech = await prisma.mechanic.upsert({
+    await prisma.mechanic.upsert({
       where: { userId: user.id },
       update: {},
       create: {
@@ -246,7 +161,6 @@ export async function seedUsers(prisma: PrismaClient) {
         isOutsourced: false,
       },
     });
-    mechanicsList.push(mech);
   }
 
   // 6. Bulk seeding for pagination (60 users)
@@ -348,7 +262,7 @@ export async function seedUsers(prisma: PrismaClient) {
       },
     });
 
-    for (const sys of [SystemType.VRMS, SystemType.VMMS]) {
+    for (const sys of [SystemType.VMMS]) {
       await prisma.userRoleAssignment.upsert({
         where: {
           userId_role_system: {

@@ -61,7 +61,6 @@ export class RolesGuard implements CanActivate {
           path.startsWith('/checklists') ||
           path.startsWith('/maintenance-schedules') ||
           path.startsWith('/vehicles') ||
-          path.startsWith('/drivers') ||
           path.startsWith('/garages') ||
           path.startsWith('/locations')
         ) {

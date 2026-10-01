@@ -26,11 +26,21 @@ import { UpdateUserDto } from './dto/update-user.dto';
 import { RoleAssignmentDto } from './dto/role-assignment.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
+import { assertSingleVmmsRoleAssignment } from './vmms-role-assignments';
+import {
+  assertVmmsPlatformAccess,
+  type ClientPlatform,
+} from './client-platform';
 
 type PendingPhoneVerification = {
   phone: string;
   codeHash: string;
   expiresAt: number;
+};
+
+export type LoginRequestMetadata = {
+  ipAddress?: string | null;
+  userAgent?: string | null;
 };
 
 export async function validateEmailDomain(email: string): Promise<void> {
@@ -190,7 +200,9 @@ export class AuthService {
 
   async login(
     dto: LoginDto,
-  ): Promise<{ accessToken: string; user: AuthUserResponse }> {
+    metadata: LoginRequestMetadata = {},
+    clientPlatform: ClientPlatform = 'web',
+  ): Promise<{ accessToken: string; refreshToken: string; user: AuthUserResponse }> {
     // TODO: Transparent migration — if passwordHash starts with '$2b$' (bcrypt),
     // verify with bcrypt first, re-hash with argon2, then save. Requires bcrypt as
     // an optional dep. Skipped until all passwords are migrated.
@@ -218,11 +230,13 @@ export class AuthService {
 
     // User not found — generic message to prevent user enumeration
     if (!user) {
+      await this.recordLoginActivity(null, dto.email, 'FAILED_LOGIN', metadata);
       throw new UnauthorizedException("Invalid credentials");
     }
 
     // Locked account check — must happen before password validation
     if (user.lockedAt !== null) {
+      await this.recordLoginActivity(user.id, user.email, 'ACCOUNT_LOCKOUT', metadata);
       throw new ForbiddenException({
         message: "Account is locked. Contact your Admin to unlock.",
         remainingAttempts: 0,
@@ -232,6 +246,7 @@ export class AuthService {
 
     // Deactivated account
     if (!user.isActive) {
+      await this.recordLoginActivity(user.id, user.email, 'FAILED_LOGIN', metadata);
       throw new UnauthorizedException("Invalid credentials");
     }
 
@@ -249,6 +264,11 @@ export class AuthService {
         },
       });
 
+      await this.recordLoginActivity(user.id, user.email, 'FAILED_LOGIN', metadata);
+      if (shouldLock) {
+        await this.recordLoginActivity(user.id, user.email, 'ACCOUNT_LOCKOUT', metadata);
+      }
+
       if (shouldLock) {
         throw new ForbiddenException({
           message: "Account is locked. Contact your Admin to unlock.",
@@ -265,19 +285,36 @@ export class AuthService {
     }
 
     // Successful login — reset failure counter
+    try {
+      assertVmmsPlatformAccess(user.roles, clientPlatform);
+    } catch (error) {
+      await this.recordLoginActivity(
+        user.id,
+        user.email,
+        'PLATFORM_ACCESS_DENIED',
+        metadata,
+      );
+      throw error;
+    }
+
     await this.prisma.user.update({
       where: { id: user.id },
       data: { failedLoginAttempts: 0 },
     });
 
+    await this.recordLoginActivity(user.id, user.email, 'SUCCESSFUL_LOGIN', metadata);
+
     const payload = {
       sub: user.id,
       email: user.email,
       roles: user.roles.map((r) => ({ role: r.role, system: r.system })),
+      clientPlatform,
     };
+    const refreshToken = await this.issueRefreshToken(user.id, clientPlatform);
 
     return {
       accessToken: this.jwtService.sign(payload),
+      refreshToken,
       user: {
         id: user.id,
         name: user.name,
@@ -287,6 +324,197 @@ export class AuthService {
         roles: user.roles.map((r) => ({ role: r.role, system: r.system })),
       },
     };
+  }
+
+  async refreshSession(refreshToken: string, clientPlatform: ClientPlatform) {
+    if (!refreshToken || refreshToken.length > 256) {
+      throw new UnauthorizedException('Invalid or expired refresh token.');
+    }
+
+    const tokenHash = this.hashRefreshToken(refreshToken);
+    const storedToken = await this.prisma.refreshToken.findUnique({
+      where: { tokenHash },
+    });
+    if (!storedToken || storedToken.clientPlatform !== clientPlatform || storedToken.expiresAt <= new Date()) {
+      if (storedToken) await this.prisma.refreshToken.deleteMany({ where: { id: storedToken.id } });
+      throw new UnauthorizedException('Invalid or expired refresh token.');
+    }
+
+    const user = await this.prisma.user.findFirst({
+      where: { id: storedToken.userId, deletedAt: null },
+      select: {
+        id: true,
+        email: true,
+        isActive: true,
+        lockedAt: true,
+        roles: { select: { role: true, system: true } },
+      },
+    });
+    if (!user?.isActive || user.lockedAt !== null) {
+      await this.prisma.refreshToken.deleteMany({ where: { userId: storedToken.userId } });
+      throw new UnauthorizedException('Invalid or expired refresh token.');
+    }
+    assertVmmsPlatformAccess(user.roles, clientPlatform);
+
+    const nextRefreshToken = this.createRawRefreshToken();
+    const nextExpiry = this.getRefreshTokenExpiry();
+    await this.prisma.$transaction(async (tx) => {
+      const revoked = await tx.refreshToken.deleteMany({
+        where: { id: storedToken.id, tokenHash, expiresAt: { gt: new Date() } },
+      });
+      if (revoked.count !== 1) throw new UnauthorizedException('Refresh token was already used.');
+      await tx.refreshToken.create({
+        data: {
+          userId: user.id,
+          tokenHash: this.hashRefreshToken(nextRefreshToken),
+          clientPlatform,
+          expiresAt: nextExpiry,
+        },
+      });
+    });
+
+    const payload = {
+      sub: user.id,
+      email: user.email,
+      roles: user.roles.map((role) => ({ role: role.role, system: role.system })),
+      clientPlatform,
+    };
+    return { accessToken: this.jwtService.sign(payload), refreshToken: nextRefreshToken };
+  }
+
+  async recordLogout(userId: string, email: string, metadata: LoginRequestMetadata = {}, refreshToken?: string) {
+    if (refreshToken) {
+      await this.prisma.refreshToken.deleteMany({
+        where: { userId, tokenHash: this.hashRefreshToken(refreshToken) },
+      });
+    }
+    await this.recordLoginActivity(userId, email, 'LOGOUT', metadata);
+    return { message: 'Logout recorded.' };
+  }
+
+  private async issueRefreshToken(userId: string, clientPlatform: ClientPlatform) {
+    const refreshToken = this.createRawRefreshToken();
+    await this.prisma.refreshToken.create({
+      data: {
+        userId,
+        tokenHash: this.hashRefreshToken(refreshToken),
+        clientPlatform,
+        expiresAt: this.getRefreshTokenExpiry(),
+      },
+    });
+    return refreshToken;
+  }
+
+  private createRawRefreshToken() {
+    return crypto.randomBytes(48).toString('base64url');
+  }
+
+  private hashRefreshToken(token: string) {
+    return crypto.createHash('sha256').update(token).digest('hex');
+  }
+
+  private getRefreshTokenExpiry() {
+    const configured = this.config.get<string>('JWT_REFRESH_EXPIRY') ?? '7d';
+    const match = /^([1-9]\d*)([smhd])$/.exec(configured.trim());
+    if (!match) throw new Error('JWT_REFRESH_EXPIRY must use seconds, minutes, hours, or days (for example 7d).');
+    const units: Record<string, number> = { s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 };
+    return new Date(Date.now() + Number(match[1]) * units[match[2]]);
+  }
+
+  async getLoginActivity(userId: string) {
+    await this.ensureUserExists(userId);
+    return this.prisma.loginActivity.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      take: 10,
+      select: {
+        id: true,
+        event: true,
+        email: true,
+        ipAddress: true,
+        deviceType: true,
+        createdAt: true,
+      },
+    });
+  }
+
+  async getAuditLogs(source = 'all') {
+    const supportedSources = ['all', 'login', 'vehicle', 'work-order', 'schedule'];
+    if (!supportedSources.includes(source)) {
+      throw new BadRequestException(`Source must be one of: ${supportedSources.join(', ')}.`);
+    }
+
+    const take = 500;
+    const requests: Promise<any[]>[] = [];
+    if (source === 'all' || source === 'login') {
+      requests.push(this.prisma.loginActivity.findMany({
+        orderBy: { createdAt: 'desc' }, take,
+        select: { id: true, email: true, event: true, ipAddress: true, deviceType: true, createdAt: true },
+      }).then((rows) => rows.map((row) => ({
+        id: `login:${row.id}`, source: 'login', actor: row.email, action: row.event,
+        entity: row.deviceType, details: row.ipAddress ? `IP ${row.ipAddress}` : null,
+        previousValue: null, newValue: null, createdAt: row.createdAt,
+      }))));
+    }
+    if (source === 'all' || source === 'vehicle') {
+      requests.push(this.prisma.vehicleAuditLog.findMany({
+        orderBy: { createdAt: 'desc' }, take,
+        select: { id: true, email: true, action: true, fieldName: true, previousValue: true, newValue: true, createdAt: true, vehicle: { select: { plateNumber: true } } },
+      }).then((rows) => rows.map((row) => ({
+        id: `vehicle:${row.id}`, source: 'vehicle', actor: row.email, action: row.action,
+        entity: row.vehicle.plateNumber, details: row.fieldName,
+        previousValue: row.previousValue, newValue: row.newValue, createdAt: row.createdAt,
+      }))));
+    }
+    if (source === 'all' || source === 'work-order') {
+      requests.push(this.prisma.auditLog.findMany({
+        orderBy: { createdAt: 'desc' }, take,
+        select: { id: true, email: true, action: true, fieldName: true, previousValue: true, newValue: true, createdAt: true, workOrder: { select: { workOrderNumber: true } } },
+      }).then((rows) => rows.map((row) => ({
+        id: `work-order:${row.id}`, source: 'work-order', actor: row.email, action: row.action,
+        entity: row.workOrder.workOrderNumber, details: row.fieldName,
+        previousValue: row.previousValue, newValue: row.newValue, createdAt: row.createdAt,
+      }))));
+    }
+    if (source === 'all' || source === 'schedule') {
+      requests.push(this.prisma.maintenanceScheduleCancellation.findMany({
+        orderBy: { createdAt: 'desc' }, take,
+        select: { id: true, actorName: true, actorEmail: true, reason: true, previousStatus: true, createdAt: true, schedule: { select: { id: true } } },
+      }).then((rows) => rows.map((row) => ({
+        id: `schedule:${row.id}`, source: 'schedule', actor: row.actorName || row.actorEmail,
+        action: 'SCHEDULE_CANCELLED', entity: row.schedule.id, details: row.reason,
+        previousValue: row.previousStatus, newValue: 'CANCELLED', createdAt: row.createdAt,
+      }))));
+    }
+
+    const groups = await Promise.all(requests);
+    return groups.flat().sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).slice(0, take);
+  }
+
+  private async recordLoginActivity(
+    userId: string | null,
+    email: string,
+    event: string,
+    metadata: LoginRequestMetadata,
+  ) {
+    const userAgent = metadata.userAgent?.slice(0, 2000) ?? null;
+    await this.prisma.loginActivity.create({
+      data: {
+        userId,
+        email: email.slice(0, 255),
+        event,
+        ipAddress: metadata.ipAddress?.slice(0, 45) ?? null,
+        deviceType: this.getDeviceType(userAgent),
+        userAgent,
+      },
+    });
+  }
+
+  private getDeviceType(userAgent: string | null): string {
+    if (!userAgent) return 'Unknown';
+    if (/ipad|tablet|kindle/i.test(userAgent)) return 'Tablet';
+    if (/mobile|iphone|android/i.test(userAgent)) return 'Mobile';
+    return 'Desktop';
   }
 
   async unlockUser(userId: string): Promise<ManagedUserResponse> {
@@ -317,6 +545,8 @@ export class AuthService {
         },
       },
     });
+
+    await this.prisma.refreshToken.deleteMany({ where: { userId } });
 
     return this.mapManagedUser(user);
   }
@@ -363,6 +593,7 @@ export class AuthService {
 
   async createUser(dto: CreateUserDto): Promise<ManagedUserResponse> {
     const roleAssignments = this.normalizeRoleAssignments(dto.roleAssignments);
+    assertSingleVmmsRoleAssignment(roleAssignments);
     await validateEmailDomain(dto.email);
 
     try {
@@ -484,6 +715,12 @@ This code will expire in 1 hour.`;
           this.normalizeRoleAssignments(dto.roleAssignments),
         )
       : undefined;
+
+    if (dto.roleAssignments) {
+      assertSingleVmmsRoleAssignment(
+        roleAssignments!.filter((assignment) => assignment.system === SystemType.VMMS),
+      );
+    }
 
     try {
       const user = await this.prisma.user.update({
@@ -617,6 +854,8 @@ This code will expire in 1 hour.`;
       },
     });
 
+    await this.prisma.refreshToken.deleteMany({ where: { userId } });
+
     return this.mapManagedUser(user);
   }
 
@@ -743,6 +982,7 @@ This code will expire in 10 minutes.`;
         },
       }),
     ]);
+    await this.prisma.refreshToken.deleteMany({ where: { userId: user.id } });
 
     return { message: 'Password has been reset successfully.' };
   }
@@ -888,6 +1128,8 @@ This code will expire in 10 minutes.`;
       },
     });
 
+    await this.prisma.refreshToken.deleteMany({ where: { userId } });
+
     await this.notificationsService.createForUser(userId, {
       title: 'Security notice',
       message: 'Your password was changed successfully.',
@@ -957,13 +1199,13 @@ This code will expire in 10 minutes.`;
             createdAt: { gte: startOfMonth },
           },
         }),
-        this.prisma.repairTicket.count({
-          where: { repairStatus: 'IN_PROGRESS' },
+        this.prisma.workOrder.count({
+          where: { status: 'IN_PROGRESS' },
         }),
-        this.prisma.repairTicket.count({
-          where: { repairStatus: 'COMPLETED' },
+        this.prisma.workOrder.count({
+          where: { status: 'COMPLETED' },
         }),
-        this.prisma.repairTicket.count(),
+        this.prisma.workOrder.count(),
       ]);
 
     return {

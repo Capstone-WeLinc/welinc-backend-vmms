@@ -1,6 +1,7 @@
 import { Type } from 'class-transformer';
 import {
   ArrayMinSize,
+  ArrayMaxSize,
   IsArray,
   IsBoolean,
   IsEmail,
@@ -16,6 +17,9 @@ export class UpdateUserDto {
   @IsOptional()
   @IsString()
   @IsNotEmpty()
+  @Matches(/^(?=.*[A-Za-z0-9])[A-Za-z0-9 -]+$/, {
+    message: 'Name must contain alphanumeric characters only.',
+  })
   name?: string;
 
   @IsOptional()
@@ -39,6 +43,7 @@ export class UpdateUserDto {
   @IsOptional()
   @IsArray()
   @ArrayMinSize(1)
+  @ArrayMaxSize(1, { message: 'A user account must have exactly one role.' })
   @ValidateNested({ each: true })
   @Type(() => RoleAssignmentDto)
   roleAssignments?: RoleAssignmentDto[];

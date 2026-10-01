@@ -1,15 +1,14 @@
-import { PrismaClient, RepairStatus } from '@prisma/client';
+import { PrismaClient, WorkOrderStatus } from '@prisma/client';
 
-export async function seedRepairs(prisma: PrismaClient) {
-  console.log('Creating sample repair tickets for VRMS...');
+export async function seedWorkOrders(prisma: PrismaClient) {
+  console.log('Creating sample VMMS work orders...');
 
   // Fetch needed relations from DB
   const garages = await prisma.garage.findMany();
   const vehicles = await prisma.vehicle.findMany();
-  const drivers = await prisma.driver.findMany();
   
-  const vrmsAdminUser = await prisma.user.findFirstOrThrow({
-    where: { email: 'vrms.admin@welinc.com' }
+  const vmmsAdminUser = await prisma.user.findFirstOrThrow({
+    where: { email: 'vmms.admin@welinc.com' }
   });
   const opsUser = await prisma.user.findFirstOrThrow({
     where: { email: 'ops.user@welinc.com' }
@@ -21,7 +20,7 @@ export async function seedRepairs(prisma: PrismaClient) {
         roles: {
           some: {
             role: 'MECHANIC',
-            system: 'VRMS'
+            system: 'VMMS'
           }
         }
       }
@@ -29,17 +28,16 @@ export async function seedRepairs(prisma: PrismaClient) {
     include: { user: { select: { email: true } } },
   });
 
-  const adminUser = { id: vrmsAdminUser.id, email: vrmsAdminUser.email };
+  const adminUser = { id: vmmsAdminUser.id, email: vmmsAdminUser.email };
 
-  // Manual 10 tickets
-  const ticket1 = await prisma.repairTicket.upsert({
-    where: { repairNumber: 'REP-20260610-0001' },
+  // Manual 10 work orders
+  const workOrder1 = await prisma.workOrder.upsert({
+    where: { workOrderNumber: 'WO-20260610-0001' },
     update: {},
     create: {
-      repairNumber: 'REP-20260610-0001',
-      repairStatus: RepairStatus.PENDING,
+      workOrderNumber: 'WO-20260610-0001',
+      status: WorkOrderStatus.PENDING,
       vehicleId: vehicles[0].id,
-      driverId: drivers[0].id,
       garageId: garages[0].id,
       odometer: 45200,
       remarks: 'Truck transmission slips occasionally when shifting to second gear.',
@@ -64,14 +62,13 @@ export async function seedRepairs(prisma: PrismaClient) {
     }
   });
 
-  const ticket2 = await prisma.repairTicket.upsert({
-    where: { repairNumber: 'REP-20260612-0002' },
+  const workOrder2 = await prisma.workOrder.upsert({
+    where: { workOrderNumber: 'WO-20260612-0002' },
     update: {},
     create: {
-      repairNumber: 'REP-20260612-0002',
-      repairStatus: RepairStatus.IN_PROGRESS,
+      workOrderNumber: 'WO-20260612-0002',
+      status: WorkOrderStatus.IN_PROGRESS,
       vehicleId: vehicles[1].id,
-      driverId: drivers[1].id,
       garageId: garages[1].id,
       odometer: 72500,
       remarks: 'Squealing sound from brakes when loaded.',
@@ -99,7 +96,7 @@ export async function seedRepairs(prisma: PrismaClient) {
             userId: adminUser.id,
             email: adminUser.email,
             action: 'STATUS_CHANGE',
-            fieldName: 'repairStatus',
+            fieldName: 'status',
             previousValue: 'PENDING',
             newValue: 'IN_PROGRESS',
             createdAt: new Date('2026-06-12T09:30:00.000Z'),
@@ -109,14 +106,13 @@ export async function seedRepairs(prisma: PrismaClient) {
     }
   });
 
-  const ticket3 = await prisma.repairTicket.upsert({
-    where: { repairNumber: 'REP-20260614-0003' },
+  const workOrder3 = await prisma.workOrder.upsert({
+    where: { workOrderNumber: 'WO-20260614-0003' },
     update: {},
     create: {
-      repairNumber: 'REP-20260614-0003',
-      repairStatus: RepairStatus.FOR_VERIFICATION,
+      workOrderNumber: 'WO-20260614-0003',
+      status: WorkOrderStatus.FOR_VERIFICATION,
       vehicleId: vehicles[2].id,
-      driverId: drivers[2].id,
       garageId: garages[2].id,
       odometer: 32000,
       remarks: 'Scheduled PMS: Engine oil, air filter, and fuel filter replacement.',
@@ -154,7 +150,7 @@ export async function seedRepairs(prisma: PrismaClient) {
             userId: adminUser.id,
             email: adminUser.email,
             action: 'STATUS_CHANGE',
-            fieldName: 'repairStatus',
+            fieldName: 'status',
             previousValue: 'PENDING',
             newValue: 'IN_PROGRESS',
             createdAt: new Date('2026-06-14T09:00:00.000Z'),
@@ -170,7 +166,7 @@ export async function seedRepairs(prisma: PrismaClient) {
             userId: mechanics[1].userId!,
             email: `mech.${mechanics[1].name.split(' ')[0].toLowerCase()}@welinc.com`,
             action: 'STATUS_CHANGE',
-            fieldName: 'repairStatus',
+            fieldName: 'status',
             previousValue: 'IN_PROGRESS',
             newValue: 'FOR_VERIFICATION',
             createdAt: new Date('2026-06-14T16:00:00.000Z'),
@@ -180,14 +176,13 @@ export async function seedRepairs(prisma: PrismaClient) {
     }
   });
 
-  const ticket4 = await prisma.repairTicket.upsert({
-    where: { repairNumber: 'REP-20260611-0004' },
+  const workOrder4 = await prisma.workOrder.upsert({
+    where: { workOrderNumber: 'WO-20260611-0004' },
     update: {},
     create: {
-      repairNumber: 'REP-20260611-0004',
-      repairStatus: RepairStatus.COMPLETED,
+      workOrderNumber: 'WO-20260611-0004',
+      status: WorkOrderStatus.COMPLETED,
       vehicleId: vehicles[0].id,
-      driverId: drivers[0].id,
       garageId: garages[0].id,
       odometer: 44900,
       remarks: 'Replace front passenger side tire due to puncture.',
@@ -222,7 +217,7 @@ export async function seedRepairs(prisma: PrismaClient) {
             userId: adminUser.id,
             email: adminUser.email,
             action: 'STATUS_CHANGE',
-            fieldName: 'repairStatus',
+            fieldName: 'status',
             previousValue: 'PENDING',
             newValue: 'IN_PROGRESS',
             createdAt: new Date('2026-06-11T10:00:00.000Z'),
@@ -231,7 +226,7 @@ export async function seedRepairs(prisma: PrismaClient) {
             userId: adminUser.id,
             email: adminUser.email,
             action: 'STATUS_CHANGE',
-            fieldName: 'repairStatus',
+            fieldName: 'status',
             previousValue: 'IN_PROGRESS',
             newValue: 'FOR_VERIFICATION',
             createdAt: new Date('2026-06-12T11:00:00.000Z'),
@@ -247,7 +242,7 @@ export async function seedRepairs(prisma: PrismaClient) {
             userId: adminUser.id,
             email: adminUser.email,
             action: 'STATUS_CHANGE',
-            fieldName: 'repairStatus',
+            fieldName: 'status',
             previousValue: 'FOR_VERIFICATION',
             newValue: 'COMPLETED',
             createdAt: new Date('2026-06-12T16:30:00.000Z'),
@@ -257,14 +252,13 @@ export async function seedRepairs(prisma: PrismaClient) {
     }
   });
 
-  const ticket5 = await prisma.repairTicket.upsert({
-    where: { repairNumber: 'REP-20260613-0005' },
+  const workOrder5 = await prisma.workOrder.upsert({
+    where: { workOrderNumber: 'WO-20260613-0005' },
     update: {},
     create: {
-      repairNumber: 'REP-20260613-0005',
-      repairStatus: RepairStatus.COMPLETED,
+      workOrderNumber: 'WO-20260613-0005',
+      status: WorkOrderStatus.COMPLETED,
       vehicleId: vehicles[4].id,
-      driverId: drivers[3].id,
       garageId: garages[1].id,
       odometer: 92200,
       remarks: 'Blown head gasket replacement. Engine overheating.',
@@ -301,7 +295,7 @@ export async function seedRepairs(prisma: PrismaClient) {
             userId: mechanics[0].userId!,
             email: `mech.${mechanics[0].name.split(' ')[0].toLowerCase()}@welinc.com`,
             action: 'STATUS_CHANGE',
-            fieldName: 'repairStatus',
+            fieldName: 'status',
             previousValue: 'PENDING',
             newValue: 'IN_PROGRESS',
             createdAt: new Date('2026-06-13T10:00:00.000Z'),
@@ -317,7 +311,7 @@ export async function seedRepairs(prisma: PrismaClient) {
             userId: mechanics[0].userId!,
             email: `mech.${mechanics[0].name.split(' ')[0].toLowerCase()}@welinc.com`,
             action: 'STATUS_CHANGE',
-            fieldName: 'repairStatus',
+            fieldName: 'status',
             previousValue: 'IN_PROGRESS',
             newValue: 'FOR_VERIFICATION',
             createdAt: new Date('2026-06-15T12:00:00.000Z'),
@@ -326,7 +320,7 @@ export async function seedRepairs(prisma: PrismaClient) {
             userId: adminUser.id,
             email: adminUser.email,
             action: 'STATUS_CHANGE',
-            fieldName: 'repairStatus',
+            fieldName: 'status',
             previousValue: 'FOR_VERIFICATION',
             newValue: 'COMPLETED',
             createdAt: new Date('2026-06-15T15:00:00.000Z'),
@@ -336,17 +330,16 @@ export async function seedRepairs(prisma: PrismaClient) {
     }
   });
 
-  const ticket6 = await prisma.repairTicket.upsert({
-    where: { repairNumber: 'REP-20260614-0006' },
+  const workOrder6 = await prisma.workOrder.upsert({
+    where: { workOrderNumber: 'WO-20260614-0006' },
     update: {},
     create: {
-      repairNumber: 'REP-20260614-0006',
-      repairStatus: RepairStatus.CANCELLED,
+      workOrderNumber: 'WO-20260614-0006',
+      status: WorkOrderStatus.CANCELLED,
       vehicleId: vehicles[0].id,
-      driverId: drivers[5].id,
       garageId: garages[0].id,
       odometer: 45400,
-      remarks: 'Intermittent starter issue reported by driver.',
+      remarks: 'Intermittent starter issue reported during vehicle inspection.',
       issues: {
         create: [
           { description: '[Electrical] Electrical fault: Starter motor intermittent fault' }
@@ -368,7 +361,7 @@ export async function seedRepairs(prisma: PrismaClient) {
             userId: adminUser.id,
             email: adminUser.email,
             action: 'STATUS_CHANGE',
-            fieldName: 'repairStatus',
+            fieldName: 'status',
             previousValue: 'PENDING',
             newValue: 'CANCELLED',
             createdAt: new Date('2026-06-14T17:30:00.000Z'),
@@ -378,17 +371,16 @@ export async function seedRepairs(prisma: PrismaClient) {
     }
   });
 
-  const ticket7 = await prisma.repairTicket.upsert({
-    where: { repairNumber: 'REP-20260615-0007' },
+  const workOrder7 = await prisma.workOrder.upsert({
+    where: { workOrderNumber: 'WO-20260615-0007' },
     update: {},
     create: {
-      repairNumber: 'REP-20260615-0007',
-      repairStatus: RepairStatus.PENDING,
+      workOrderNumber: 'WO-20260615-0007',
+      status: WorkOrderStatus.PENDING,
       vehicleId: vehicles[5].id,
-      driverId: drivers[6].id,
       garageId: garages[2].id,
       odometer: 145100,
-      remarks: 'Driver reports rough clutch engagement when vehicle is hot.',
+      remarks: 'Rough clutch engagement reported during vehicle inspection.',
       issues: {
         create: [
           { description: '[Transmission] Wear and tear: Rough clutch engagement' }
@@ -410,14 +402,13 @@ export async function seedRepairs(prisma: PrismaClient) {
     }
   });
 
-  const ticket8 = await prisma.repairTicket.upsert({
-    where: { repairNumber: 'REP-20260615-0008' },
+  const workOrder8 = await prisma.workOrder.upsert({
+    where: { workOrderNumber: 'WO-20260615-0008' },
     update: {},
     create: {
-      repairNumber: 'REP-20260615-0008',
-      repairStatus: RepairStatus.IN_PROGRESS,
+      workOrderNumber: 'WO-20260615-0008',
+      status: WorkOrderStatus.IN_PROGRESS,
       vehicleId: vehicles[1].id,
-      driverId: drivers[1].id,
       garageId: garages[1].id,
       odometer: 72800,
       remarks: 'Rear suspension squeak when loaded.',
@@ -444,7 +435,7 @@ export async function seedRepairs(prisma: PrismaClient) {
             userId: adminUser.id,
             email: adminUser.email,
             action: 'STATUS_CHANGE',
-            fieldName: 'repairStatus',
+            fieldName: 'status',
             previousValue: 'PENDING',
             newValue: 'IN_PROGRESS',
             createdAt: new Date('2026-06-15T10:00:00.000Z'),
@@ -454,14 +445,13 @@ export async function seedRepairs(prisma: PrismaClient) {
     }
   });
 
-  const ticket9 = await prisma.repairTicket.upsert({
-    where: { repairNumber: 'REP-20260615-0009' },
+  const workOrder9 = await prisma.workOrder.upsert({
+    where: { workOrderNumber: 'WO-20260615-0009' },
     update: {},
     create: {
-      repairNumber: 'REP-20260615-0009',
-      repairStatus: RepairStatus.FOR_VERIFICATION,
+      workOrderNumber: 'WO-20260615-0009',
+      status: WorkOrderStatus.FOR_VERIFICATION,
       vehicleId: vehicles[2].id,
-      driverId: drivers[2].id,
       garageId: garages[0].id,
       odometer: 32100,
       remarks: 'Overheating under heavy load. Thermostat stuck.',
@@ -497,7 +487,7 @@ export async function seedRepairs(prisma: PrismaClient) {
             userId: adminUser.id,
             email: adminUser.email,
             action: 'STATUS_CHANGE',
-            fieldName: 'repairStatus',
+            fieldName: 'status',
             previousValue: 'PENDING',
             newValue: 'IN_PROGRESS',
             createdAt: new Date('2026-06-15T11:00:00.000Z'),
@@ -513,7 +503,7 @@ export async function seedRepairs(prisma: PrismaClient) {
             userId: mechanics[1].userId!,
             email: `mech.${mechanics[1].name.split(' ')[0].toLowerCase()}@welinc.com`,
             action: 'STATUS_CHANGE',
-            fieldName: 'repairStatus',
+            fieldName: 'status',
             previousValue: 'IN_PROGRESS',
             newValue: 'FOR_VERIFICATION',
             createdAt: new Date('2026-06-15T16:00:00.000Z'),
@@ -523,14 +513,13 @@ export async function seedRepairs(prisma: PrismaClient) {
     }
   });
 
-  const ticket10 = await prisma.repairTicket.upsert({
-    where: { repairNumber: 'REP-20260614-0010' },
+  const workOrder10 = await prisma.workOrder.upsert({
+    where: { workOrderNumber: 'WO-20260614-0010' },
     update: {},
     create: {
-      repairNumber: 'REP-20260614-0010',
-      repairStatus: RepairStatus.COMPLETED,
+      workOrderNumber: 'WO-20260614-0010',
+      status: WorkOrderStatus.COMPLETED,
       vehicleId: vehicles[3].id,
-      driverId: drivers[4].id,
       garageId: garages[0].id,
       odometer: 18500,
       remarks: 'Battery replacement completed.',
@@ -567,7 +556,7 @@ export async function seedRepairs(prisma: PrismaClient) {
             userId: mechanics[0].userId!,
             email: `mech.${mechanics[0].name.split(' ')[0].toLowerCase()}@welinc.com`,
             action: 'STATUS_CHANGE',
-            fieldName: 'repairStatus',
+            fieldName: 'status',
             previousValue: 'PENDING',
             newValue: 'IN_PROGRESS',
             createdAt: new Date('2026-06-14T10:00:00.000Z'),
@@ -576,7 +565,7 @@ export async function seedRepairs(prisma: PrismaClient) {
             userId: mechanics[0].userId!,
             email: `mech.${mechanics[0].name.split(' ')[0].toLowerCase()}@welinc.com`,
             action: 'STATUS_CHANGE',
-            fieldName: 'repairStatus',
+            fieldName: 'status',
             previousValue: 'IN_PROGRESS',
             newValue: 'FOR_VERIFICATION',
             createdAt: new Date('2026-06-14T12:00:00.000Z'),
@@ -592,7 +581,7 @@ export async function seedRepairs(prisma: PrismaClient) {
             userId: adminUser.id,
             email: adminUser.email,
             action: 'STATUS_CHANGE',
-            fieldName: 'repairStatus',
+            fieldName: 'status',
             previousValue: 'FOR_VERIFICATION',
             newValue: 'COMPLETED',
             createdAt: new Date('2026-06-14T15:00:00.000Z'),
@@ -609,16 +598,16 @@ export async function seedRepairs(prisma: PrismaClient) {
     }
   });
 
-  console.log('  Created 10 sample repair tickets with full histories and audit logs for VRMS\n');
+  console.log('  Created 10 sample work orders with full histories and audit logs for VMMS\n');
 
-  // Bulk seeding for pagination (80 tickets)
-  console.log('Generating 80 additional repair tickets with realistic real-world details...');
+  // Bulk seeding for pagination (80 work orders)
+  console.log('Generating 80 additional work orders with realistic real-world details...');
   const statuses = [
-    RepairStatus.PENDING,
-    RepairStatus.IN_PROGRESS,
-    RepairStatus.FOR_VERIFICATION,
-    RepairStatus.COMPLETED,
-    RepairStatus.CANCELLED,
+    WorkOrderStatus.PENDING,
+    WorkOrderStatus.IN_PROGRESS,
+    WorkOrderStatus.FOR_VERIFICATION,
+    WorkOrderStatus.COMPLETED,
+    WorkOrderStatus.CANCELLED,
   ];
 
   const categories = ['Engine', 'Brakes', 'Transmission', 'Suspension', 'Electrical', 'Cooling'];
@@ -662,11 +651,11 @@ export async function seedRepairs(prisma: PrismaClient) {
   });
 
   for (let i = 1; i <= 80; i++) {
-    // Spreads tickets over the last 80 days
-    const ticketBaseDate = new Date('2026-06-20T08:00:00.000Z');
-    ticketBaseDate.setUTCDate(ticketBaseDate.getUTCDate() - (80 - i));
+    // Spreads work orders over the last 80 days
+    const workOrderBaseDate = new Date('2026-06-20T08:00:00.000Z');
+    workOrderBaseDate.setUTCDate(workOrderBaseDate.getUTCDate() - (80 - i));
 
-    const createdTime = ticketBaseDate;
+    const createdTime = workOrderBaseDate;
     const inProgressTime = new Date(createdTime.getTime() + 2 * 60 * 60 * 1000);
     const forVerificationTime = new Date(createdTime.getTime() + 6 * 60 * 60 * 1000);
     const completedTime = new Date(createdTime.getTime() + 8 * 60 * 60 * 1000);
@@ -674,11 +663,10 @@ export async function seedRepairs(prisma: PrismaClient) {
     const year = createdTime.getUTCFullYear();
     const month = String(createdTime.getUTCMonth() + 1).padStart(2, '0');
     const day = String(createdTime.getUTCDate()).padStart(2, '0');
-    const repairNumber = `REP-${year}${month}${day}-${String(i).padStart(4, '0')}`;
+    const workOrderNumber = `WO-${year}${month}${day}-${String(i).padStart(4, '0')}`;
 
     const status = statuses[i % statuses.length];
     const vehicle = vehicles[i % vehicles.length];
-    const driver = drivers[i % drivers.length];
     const garage = garages[i % garages.length];
     const mechanic = allMechanics[i % allMechanics.length];
     
@@ -689,29 +677,28 @@ export async function seedRepairs(prisma: PrismaClient) {
     const desc = `[${cat}] Diagnostic: ${template.desc}`;
     const remarks = template.remarks;
 
-    const isClosed = status === RepairStatus.COMPLETED || status === RepairStatus.CANCELLED;
+    const isClosed = status === WorkOrderStatus.COMPLETED || status === WorkOrderStatus.CANCELLED;
     const completedAt = isClosed ? completedTime : null;
-    const cancellationReason = status === RepairStatus.CANCELLED ? 'Deferred repair to next scheduled PMS interval.' : null;
+    const cancellationReason = status === WorkOrderStatus.CANCELLED ? 'Deferred repair to next scheduled PMS interval.' : null;
 
     const partsCost = isClosed ? template.baseCost : null;
     const laborCost = isClosed ? Math.round(template.baseCost * 0.3) : null;
     const totalCost = isClosed ? (partsCost! + laborCost!) : null;
 
-    await prisma.repairTicket.upsert({
-      where: { repairNumber },
+    await prisma.workOrder.upsert({
+      where: { workOrderNumber },
       update: {},
       create: {
-        repairNumber,
-        repairStatus: status,
+        workOrderNumber,
+        status: status,
         vehicleId: vehicle.id,
-        driverId: driver.id,
         garageId: garage.id,
         odometer: vehicle.odometer + 100 + i,
         remarks: `Vehicle reported with ${template.desc.toLowerCase()}. Remarks: ${remarks}`,
         issues: {
           create: [{ description: desc }]
         },
-        mechanics: status !== RepairStatus.PENDING ? {
+        mechanics: status !== WorkOrderStatus.PENDING ? {
           connect: [{ id: mechanic.id }]
         } : undefined,
         partsCost,
@@ -733,29 +720,29 @@ export async function seedRepairs(prisma: PrismaClient) {
         auditLogs: {
           create: [
             {
-              userId: vrmsAdminUser.id,
-              email: vrmsAdminUser.email,
+              userId: vmmsAdminUser.id,
+              email: vmmsAdminUser.email,
               action: 'CREATE',
               newValue: 'PENDING',
               createdAt: createdTime,
             },
-            ...(status !== RepairStatus.PENDING ? [
+            ...(status !== WorkOrderStatus.PENDING ? [
               {
-                userId: vrmsAdminUser.id,
-                email: vrmsAdminUser.email,
+                userId: vmmsAdminUser.id,
+                email: vmmsAdminUser.email,
                 action: 'STATUS_CHANGE',
-                fieldName: 'repairStatus',
+                fieldName: 'status',
                 previousValue: 'PENDING',
                 newValue: 'IN_PROGRESS',
                 createdAt: inProgressTime,
               }
             ] : []),
-            ...(status === RepairStatus.FOR_VERIFICATION || isClosed ? [
+            ...(status === WorkOrderStatus.FOR_VERIFICATION || isClosed ? [
               {
                 userId: mechanic.userId!,
                 email: mechanic.user!.email,
                 action: 'STATUS_CHANGE',
-                fieldName: 'repairStatus',
+                fieldName: 'status',
                 previousValue: 'IN_PROGRESS',
                 newValue: 'FOR_VERIFICATION',
                 createdAt: forVerificationTime,
@@ -763,10 +750,10 @@ export async function seedRepairs(prisma: PrismaClient) {
             ] : []),
             ...(isClosed ? [
               {
-                userId: vrmsAdminUser.id,
-                email: vrmsAdminUser.email,
+                userId: vmmsAdminUser.id,
+                email: vmmsAdminUser.email,
                 action: 'STATUS_CHANGE',
-                fieldName: 'repairStatus',
+                fieldName: 'status',
                 previousValue: 'FOR_VERIFICATION',
                 newValue: status,
                 createdAt: completedTime,
@@ -777,5 +764,5 @@ export async function seedRepairs(prisma: PrismaClient) {
       }
     });
   }
-  console.log('  Seeded 80 additional repair tickets with realistic names, remarks, and audit logs.\n');
+  console.log('  Seeded 80 additional work orders with realistic names, remarks, and audit logs.\n');
 }

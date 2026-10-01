@@ -13,7 +13,11 @@ test('VMMS seed preserves fixtures without duplicate pending recurrence', async 
   const prisma = {
     garage: { findMany: async () => ['Sta. Rosa', 'Marikina', 'Pulilan'].map(name => ({ id: name, name })) },
     vehicle: { findMany: async () => Array.from({ length: 6 }, (_, i) => ({ plateNumber: `TRUCK-${i}` })) },
-    mechanic: { findMany: async () => Array.from({ length: 5 }, (_, i) => ({ name: `Mechanic ${i}` })) },
+    mechanic: { findMany: async () => Array.from({ length: 5 }, (_, i) => ({
+      name: `Mechanic ${i}`,
+      userId: `user-${i}`,
+      isOutsourced: false,
+    })) },
     checklistTemplate: {
       findUnique: async () => null,
       upsert: async ({ create }) => ({ id: create.type, ...create }),

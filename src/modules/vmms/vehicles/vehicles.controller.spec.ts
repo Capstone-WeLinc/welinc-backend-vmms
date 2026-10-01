@@ -18,7 +18,7 @@ describe('vehicle HTTP permissions', () => {
   let app: INestApplication;
   const jwt = new JwtService({ secret });
   const prisma = { user: { findFirst: jest.fn() } };
-  const service = { create: jest.fn(), update: jest.fn(), delete: jest.fn(), findAll: jest.fn() };
+  const service = { create: jest.fn(), update: jest.fn(), delete: jest.fn(), findAll: jest.fn(), findAuditHistory: jest.fn() };
   const writes: ['post' | 'patch' | 'delete', string, keyof typeof service][] = [
     ['post', '/vehicles', 'create'],
     ['patch', `/vehicles/${vehicleId}`, 'update'],
@@ -62,8 +62,30 @@ describe('vehicle HTTP permissions', () => {
   it.each(writes)('allows Operations %s %s', async (method, path, handler) => {
     await request(app.getHttpServer())[method](path)
       .set('Authorization', `Bearer ${token([roleFor(UserRole.OPERATIONS)])}`)
-      .send({ plateNumber: 'ABC123', model: 'Truck' }).expect(method === 'post' ? 201 : 200);
+      .send({
+        plateNumber: 'ABC123',
+        make: 'Isuzu',
+        model: 'Truck',
+        year: 2022,
+        engineType: 'Diesel',
+        truckSizeCategory: 'Medium Duty',
+        odometer: 100,
+        garageId: '8da72728-b06e-4475-945e-2cf3c99a996e',
+      }).expect(method === 'post' ? 201 : 200);
     expect(service[handler]).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes the authenticated editor identity to the vehicle update service', async () => {
+    await request(app.getHttpServer()).patch(`/vehicles/${vehicleId}`)
+      .set('Authorization', `Bearer ${token([roleFor(UserRole.OPERATIONS)])}`)
+      .send({ make: 'Hino' }).expect(200);
+
+    expect(service.update).toHaveBeenCalledWith(vehicleId, { make: 'Hino' }, {
+      sub: 'user-id',
+      email: 'test@example.invalid',
+      roles: [roleFor(UserRole.OPERATIONS)],
+      system: SystemType.VMMS,
+    });
   });
 
   describe.each([UserRole.ADMIN, UserRole.MECHANIC, UserRole.CHIEF_MECHANIC])('%s cannot manage vehicles', (role) => {
@@ -78,11 +100,30 @@ describe('vehicle HTTP permissions', () => {
   it.each([UserRole.ADMIN, UserRole.OPERATIONS, UserRole.MECHANIC, UserRole.CHIEF_MECHANIC])(
     'preserves vehicle reads for %s', async (role) => {
       setUser([roleFor(role)]);
-      await request(app.getHttpServer()).get('/vehicles')
-        .set('Authorization', `Bearer ${token([roleFor(role)])}`).expect(200);
+      const readRequest = request(app.getHttpServer()).get('/vehicles')
+        .set('Authorization', `Bearer ${token([roleFor(role)])}`);
+      if (role === UserRole.MECHANIC || role === UserRole.CHIEF_MECHANIC) {
+        readRequest.set('X-VMMS-Client', 'mobile');
+      }
+      await readRequest.expect(200);
       expect(service.findAll).toHaveBeenCalledTimes(1);
     },
   );
+
+  it.each([UserRole.ADMIN, UserRole.OPERATIONS])('allows %s to read vehicle audit history', async (role) => {
+    setUser([roleFor(role)]);
+    await request(app.getHttpServer()).get(`/vehicles/${vehicleId}/audit`)
+      .set('Authorization', `Bearer ${token([roleFor(role)])}`).expect(200);
+    expect(service.findAuditHistory).toHaveBeenCalledWith(vehicleId);
+  });
+
+  it.each([UserRole.MECHANIC, UserRole.CHIEF_MECHANIC])('denies %s access to vehicle audit history', async (role) => {
+    setUser([roleFor(role)]);
+    await request(app.getHttpServer()).get(`/vehicles/${vehicleId}/audit`)
+      .set('Authorization', `Bearer ${token([roleFor(role)])}`)
+      .set('X-VMMS-Client', 'mobile').expect(403);
+    expect(service.findAuditHistory).not.toHaveBeenCalled();
+  });
 
   describe.each([SystemType.VRMS, SystemType.BMS])('%s cannot grant VMMS mutation access', (system) => {
     it.each(writes)('denies %s %s despite spoofed subsystem context', async (method, path) => {

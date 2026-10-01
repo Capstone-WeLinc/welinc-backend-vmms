@@ -86,6 +86,9 @@ describe('Next maintenance cycle after approval', () => {
   it('approval saves completion and the next cycle in one transaction and returns the due date', async () => {
     const result = await service.updateProgress('completed', { action: 'APPROVE', inspectionItems }, chief);
     expect(result).toMatchObject({ status: 'COMPLETED', nextSchedule: { id: 'next', dueDate: '2026-02-28', dueOdometer: null } });
+    expect(tx.maintenanceSchedule.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ completedAt: expect.any(Date) }),
+    }));
     expect(tx.$transaction).toHaveBeenCalledTimes(1);
   });
   it('rejection returns work to the mechanic without creating another cycle', async () => {

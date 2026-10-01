@@ -59,7 +59,7 @@ async function bootstrap() {
       callback(null, isLocalDevOrigin(origin));
     },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Authorization', 'Content-Type'],
+    allowedHeaders: ['Authorization', 'Content-Type', 'X-VMMS-Client'],
     credentials: true,
   });
   await app.listen(process.env['PORT'] ?? 3000);

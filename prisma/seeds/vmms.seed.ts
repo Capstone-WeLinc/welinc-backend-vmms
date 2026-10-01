@@ -1238,7 +1238,9 @@ export async function seedVmms(prisma: PrismaClient) {
     assertCompletedScheduleHasProgress(schedule);
 
     const createdSchedule = await prisma.maintenanceSchedule.create({
-      data: schedule,
+      data: schedule.status === MaintenanceStatus.COMPLETED
+        ? { ...schedule, completedAt: schedule.createdAt }
+        : schedule,
     });
     createdMaintenanceSchedulesCount += 1;
 
