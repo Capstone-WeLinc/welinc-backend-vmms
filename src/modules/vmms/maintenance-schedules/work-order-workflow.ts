@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { MaintenanceSchedule, MaintenanceStatus } from '@prisma/client';
 import { ScheduleActor } from './schedule-access';
+import { getWorkOrderStartDateError } from './work-order-start-date';
 
 export type AssignedChecklistItem = { id: string; text: string };
 
@@ -64,6 +65,8 @@ export function applyWorkOrderWorkflow(schedule: MaintenanceSchedule, incoming: 
     if (['APPROVE', 'REJECT', 'REPAIR'].includes(intent as string) || incoming.workflowStatus === 'Completed' || incoming.approvalStatus === 'Verified') throw new ForbiddenException('Only the assigned chief mechanic can approve completion.');
     if (prior.mechanicSubmitted) throw new BadRequestException('Work is awaiting chief mechanic review.');
     if (intent === 'START') {
+      const startDateError = getWorkOrderStartDateError(schedule.startDate);
+      if (startDateError) throw new BadRequestException(startDateError);
       if (!['PENDING', 'DUE', 'OVERDUE'].includes(schedule.status) && prior.workflowStatus !== 'Rejected') throw new BadRequestException('This work order has already started.');
       status = MaintenanceStatus.IN_PROGRESS;
       progress.workflowStatus = 'In Progress';

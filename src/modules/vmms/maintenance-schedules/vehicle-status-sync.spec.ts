@@ -105,6 +105,7 @@ describe('maintenance vehicle status synchronization', () => {
       const schedule = {
         id: 'schedule-1', vehicleId: 'ABC123', assignedMechanicId: 'mechanic-1',
         chiefMechanicId: 'chief-1', updatedAt: new Date(), odometerReading: null,
+        startDate: new Date('2020-01-01T00:00:00.000Z'),
         status: action === 'START' ? MaintenanceStatus.PENDING : MaintenanceStatus.DONE,
         workOrderProgress: action === 'START' ? {} : {
           mechanicSubmitted: true, executionItems: [{ id: 'item-1', status: 'checked' }],

@@ -672,11 +672,19 @@ export class MaintenanceSchedulesService {
       return null;
     }
 
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
+    const dateParts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Manila',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(date);
+    const part = (type: Intl.DateTimeFormatPartTypes) =>
+      dateParts.find((item) => item.type === type)?.value;
+    const year = part('year');
+    const month = part('month');
+    const day = part('day');
 
-    return `${year}-${month}-${day}`;
+    return year && month && day ? `${year}-${month}-${day}` : null;
   }
 
   private normalizeCostValue(value: unknown): number | null {

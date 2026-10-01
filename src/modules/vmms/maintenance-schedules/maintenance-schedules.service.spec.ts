@@ -69,6 +69,27 @@ describe('MaintenanceSchedulesService', () => {
     expect(result[0].totalCost).toBe(170.75);
   });
 
+  it('formats created dates using the Philippine calendar day', async () => {
+    prisma.maintenanceSchedule.findMany.mockResolvedValue([
+      {
+        id: 'schedule-date-boundary',
+        vehicleId: 'ABC123',
+        title: 'Inspection',
+        status: 'PENDING',
+        createdAt: new Date('2026-09-30T16:05:00.000Z'),
+        startDate: null,
+        cancellations: [],
+        partsCost: null,
+        laborCost: null,
+        totalCost: null,
+      },
+    ]);
+
+    const result = await service.findAll();
+
+    expect(result[0].date).toBe('2026-10-01');
+  });
+
   it('does not create a recurring schedule before Chief Mechanic approval', async () => {
     const tx = {
       maintenanceSchedule: {
