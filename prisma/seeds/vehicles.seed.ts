@@ -91,7 +91,16 @@ export async function seedVehicles(prisma: PrismaClient) {
       }
       return prisma.vehicle.upsert({
         where: { plateNumber: vehicle.plateNumber },
-        update: { garageId },
+        update: {
+          make: vehicle.make,
+          model: vehicle.model,
+          year: vehicle.year,
+          engineType: vehicle.engineType,
+          truckSizeCategory: vehicle.truckSizeCategory,
+          status: vehicle.status,
+          odometer: vehicle.odometer,
+          garageId,
+        },
         create: { ...vehicle, garageId },
       });
     }),

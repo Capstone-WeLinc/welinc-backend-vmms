@@ -7,20 +7,25 @@ const { seedVmms } = require('../prisma/seeds/vmms.seed');
 
 test('VMMS seed preserves fixtures without duplicate pending recurrence', async () => {
   const rows = [];
+  const templateUpserts = [];
   const normalize = value => value.replace(/^ +| +$/g, '').toLowerCase();
   const sameIdentity = (a, b) => normalize(a.vehicleId) === normalize(b.vehicleId)
     && normalize(a.title) === normalize(b.title);
   const prisma = {
     garage: { findMany: async () => ['Sta. Rosa', 'Marikina', 'Pulilan'].map(name => ({ id: name, name })) },
-    vehicle: { findMany: async () => Array.from({ length: 6 }, (_, i) => ({ plateNumber: `TRUCK-${i}` })) },
-    mechanic: { findMany: async () => Array.from({ length: 5 }, (_, i) => ({
-      name: `Mechanic ${i}`,
-      userId: `user-${i}`,
-      isOutsourced: false,
+    vehicle: { findMany: async () => [
+      ['NDG 5821', 'Marikina'], ['CAK 9043', 'Sta. Rosa'], ['WOB 2947', 'Pulilan'],
+      ['PXW 382', 'Marikina'], ['TGD 908', 'Sta. Rosa'], ['NRE 471', 'Pulilan'],
+    ].map(([plateNumber, branch]) => ({ plateNumber, garageId: branch })) },
+    mechanic: { findMany: async () => ['Juan dela Cruz', 'Pedro Santos', 'Rommel Cruz', 'Isabel Reyes', 'Carl Santos'].map((name, i) => ({
+      name, userId: `user-${i}`, isOutsourced: false,
     })) },
     checklistTemplate: {
       findUnique: async () => null,
-      upsert: async ({ create }) => ({ id: create.type, ...create }),
+      upsert: async args => {
+        templateUpserts.push(args);
+        return { id: args.create.type, ...args.create };
+      },
     },
     checklistItem: { createMany: async () => ({ count: 5 }) },
     maintenanceSchedule: {
@@ -39,8 +44,15 @@ test('VMMS seed preserves fixtures without duplicate pending recurrence', async 
 
   await seedVmms(prisma);
 
+  assert.equal(templateUpserts.length, 5);
+  for (const template of templateUpserts) assert.equal(template.update.deletedAt, null);
   assert.equal(rows.filter(row => !row.previousScheduleId).length, 48);
-  const inspections = rows.filter(row => row.vehicleId === 'TRUCK-5' && row.title === 'General Inspection');
+  const garageByPlate = new Map([
+    ['NDG 5821', 'Marikina'], ['CAK 9043', 'Sta. Rosa'], ['WOB 2947', 'Pulilan'],
+    ['PXW 382', 'Marikina'], ['TGD 908', 'Sta. Rosa'], ['NRE 471', 'Pulilan'],
+  ]);
+  for (const row of rows) assert.equal(row.garageId, garageByPlate.get(row.vehicleId));
+  const inspections = rows.filter(row => row.vehicleId === 'NRE 471' && row.title === 'General Inspection');
   assert.equal(inspections.filter(row => row.status === 'COMPLETED').length, 1);
   assert.equal(inspections.filter(row => row.status === 'PENDING').length, 1);
   assert.equal(inspections.find(row => row.status === 'PENDING').previousScheduleId, undefined);

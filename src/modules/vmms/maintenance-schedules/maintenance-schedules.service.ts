@@ -15,12 +15,157 @@ import { scheduleDue } from './schedule-due';
 import { validateStartDate } from './schedule-start-date';
 import { validateScheduleMileage } from './schedule-mileage';
 import { validateTimeSchedule, getTimeInterval } from './time-interval';
+import { createReadStream } from 'node:fs';
+import { mkdir, unlink, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { extname, join, resolve } from 'node:path';
+
+type WorkOrderUploadFile = { originalname: string; mimetype: string; size: number; buffer: Buffer };
 
 @Injectable()
 export class MaintenanceSchedulesService {
   private readonly logger = new Logger(MaintenanceSchedulesService.name);
 
   constructor(private readonly prisma: PrismaService) {}
+
+  private readonly attachmentMimeTypes: Record<string, string> = {
+    '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
+    '.webp': 'image/webp', '.gif': 'image/gif', '.mp4': 'video/mp4',
+    '.pdf': 'application/pdf', '.txt': 'text/plain',
+  };
+
+  private async getAttachmentSchedule(id: string, actor: ScheduleActor) {
+    const scope = scheduleScope(actor);
+    const schedule = await this.prisma.maintenanceSchedule.findFirst({
+      where: { id, deletedAt: null, ...scope },
+    });
+    if (!schedule) throw new NotFoundException('Work order not found.');
+    return schedule;
+  }
+
+  private assertAssignedMechanic(schedule: MaintenanceSchedule, actor: ScheduleActor) {
+    if (schedule.assignedMechanicId !== actor.sub) {
+      throw new ForbiddenException('Only the assigned mechanic can manage work order attachments.');
+    }
+  }
+
+  async uploadAttachment(id: string, itemId: string, file: WorkOrderUploadFile | undefined, actor: ScheduleActor) {
+    if (!file) throw new BadRequestException('Choose a supported file no larger than 5 MB.');
+    if (!itemId?.trim()) throw new BadRequestException('A checklist item is required.');
+    const schedule = await this.getAttachmentSchedule(id, actor);
+    this.assertAssignedMechanic(schedule, actor);
+    const progress = this.asProgressRecord(schedule.workOrderProgress);
+    const execution = Array.isArray(progress.executionItems) ? progress.executionItems : [];
+    const changed = execution.some((raw) => {
+      const item = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+      return item.id === itemId && item.status === 'changed';
+    });
+    if (!changed) throw new BadRequestException('Attachments can only be added to checklist items marked Changed.');
+
+    const extension = extname(file.originalname).toLowerCase();
+    const contentType = this.attachmentMimeTypes[extension];
+    if (!contentType) throw new BadRequestException('Unsupported attachment type.');
+    const attachmentId = randomUUID();
+    const storageName = `${attachmentId}${extension}`;
+    const directory = resolve('private-uploads', 'work-orders', id);
+    const filePath = join(directory, storageName);
+    await mkdir(directory, { recursive: true });
+    await writeFile(filePath, file.buffer, { flag: 'wx' });
+
+    try {
+      const partDetails = progress.partDetails && typeof progress.partDetails === 'object'
+        ? progress.partDetails as Record<string, unknown> : {};
+      const rawEntry = partDetails[itemId];
+      const entry = rawEntry && typeof rawEntry === 'object'
+        ? rawEntry as Record<string, unknown> : {};
+      const attachments = Array.isArray(entry.attachments) ? entry.attachments : [];
+      const retainedAttachments = attachments.filter((candidate) => {
+        if (typeof candidate === 'string') return candidate.toLowerCase() !== file.originalname.toLowerCase();
+        if (!candidate || typeof candidate !== 'object') return true;
+        const previous = candidate as Record<string, unknown>;
+        return !(typeof previous.name === 'string' && previous.name.toLowerCase() === file.originalname.toLowerCase() && !previous.storageName);
+      });
+      if (retainedAttachments.length >= 5) throw new BadRequestException('A checklist item can have at most 5 attachments.');
+      const attachment = {
+        id: attachmentId,
+        name: file.originalname,
+        sizeMb: Number((file.size / (1024 * 1024)).toFixed(2)),
+        contentType,
+        storageName,
+      };
+      const nextProgress = {
+        ...progress,
+        partDetails: { ...partDetails, [itemId]: { ...entry, attachments: [...retainedAttachments, attachment] } },
+      } as Prisma.InputJsonObject;
+      await this.prisma.maintenanceSchedule.update({
+        where: { id: schedule.id, updatedAt: schedule.updatedAt },
+        data: { workOrderProgress: nextProgress },
+      });
+      return { ...attachment, url: `/maintenance-schedules/${id}/attachments/${attachmentId}` };
+    } catch (error) {
+      await unlink(filePath).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  async getAttachment(id: string, attachmentId: string, actor: ScheduleActor) {
+    const schedule = await this.getAttachmentSchedule(id, actor);
+    const progress = this.asProgressRecord(schedule.workOrderProgress);
+    const partDetails = progress.partDetails && typeof progress.partDetails === 'object'
+      ? progress.partDetails as Record<string, unknown> : {};
+    for (const rawEntry of Object.values(partDetails)) {
+      const entry = rawEntry && typeof rawEntry === 'object' ? rawEntry as Record<string, unknown> : {};
+      const attachments = Array.isArray(entry.attachments) ? entry.attachments : [];
+      const rawAttachment = attachments.find((candidate) => candidate && typeof candidate === 'object' && (candidate as Record<string, unknown>).id === attachmentId);
+      if (!rawAttachment) continue;
+      const attachment = rawAttachment as Record<string, unknown>;
+      const storageName = typeof attachment.storageName === 'string' ? attachment.storageName : '';
+      const extension = extname(storageName).toLowerCase();
+      if (!storageName || storageName !== `${attachmentId}${extension}` || !this.attachmentMimeTypes[extension]) {
+        throw new NotFoundException('Attachment not found.');
+      }
+      return {
+        name: typeof attachment.name === 'string' ? attachment.name : 'attachment',
+        contentType: this.attachmentMimeTypes[extension],
+        stream: createReadStream(join(resolve('private-uploads', 'work-orders', id), storageName)),
+      };
+    }
+    throw new NotFoundException('Attachment not found.');
+  }
+
+  async deleteAttachment(id: string, attachmentId: string, actor: ScheduleActor) {
+    const schedule = await this.getAttachmentSchedule(id, actor);
+    this.assertAssignedMechanic(schedule, actor);
+    const progress = this.asProgressRecord(schedule.workOrderProgress);
+    const partDetails = progress.partDetails && typeof progress.partDetails === 'object'
+      ? progress.partDetails as Record<string, unknown> : {};
+    let storageName: string | null = null;
+    const nextPartDetails: Record<string, unknown> = {};
+    for (const [itemId, rawEntry] of Object.entries(partDetails)) {
+      const entry = rawEntry && typeof rawEntry === 'object' ? rawEntry as Record<string, unknown> : {};
+      const attachments = Array.isArray(entry.attachments) ? entry.attachments : [];
+      const removed = attachments.find((candidate) => candidate && typeof candidate === 'object' && (candidate as Record<string, unknown>).id === attachmentId);
+      if (removed) storageName = typeof (removed as Record<string, unknown>).storageName === 'string' ? (removed as Record<string, unknown>).storageName as string : null;
+      nextPartDetails[itemId] = { ...entry, attachments: attachments.filter((candidate) => !candidate || typeof candidate !== 'object' || (candidate as Record<string, unknown>).id !== attachmentId) };
+    }
+    if (!storageName) throw new NotFoundException('Attachment not found.');
+    await this.prisma.maintenanceSchedule.update({
+      where: { id: schedule.id, updatedAt: schedule.updatedAt },
+      data: { workOrderProgress: { ...progress, partDetails: nextPartDetails } as Prisma.InputJsonObject },
+    });
+    const extension = extname(storageName).toLowerCase();
+    if (storageName === `${attachmentId}${extension}` && this.attachmentMimeTypes[extension]) {
+      await unlink(join(resolve('private-uploads', 'work-orders', id), storageName)).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== 'ENOENT') throw error;
+      });
+    }
+    return { success: true };
+  }
+
+  private asProgressRecord(value: Prisma.JsonValue | null): Record<string, unknown> {
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? value as Record<string, unknown> : {};
+  }
 
   private async resolveMileage(db: Pick<Prisma.TransactionClient, 'vehicle'>, data: CreateMaintenanceScheduleDto, previous?: MaintenanceSchedule) {
     const vehicle = (data.triggerType ?? previous?.triggerType) === MaintenanceTriggerType.ODOMETER
@@ -111,6 +256,7 @@ export class MaintenanceSchedulesService {
 
         return {
           id: schedule.id,
+          workOrderNumber: schedule.workOrderNumber,
           vehicleId: schedule.vehicleId,
           title: schedule.title,
           status: schedule.status,
@@ -153,6 +299,7 @@ export class MaintenanceSchedulesService {
 
       type RawScheduleRow = {
         id: string;
+        work_order_number?: string | null;
         vehicleId: string | null;
         title: string | null;
         status: string | null;
@@ -188,7 +335,7 @@ export class MaintenanceSchedulesService {
       const dateOrder = createdDateColumn ?? 'id';
       const whereClause = columns.has('deleted_at') ? 'WHERE deleted_at IS NULL' : '';
       const rows = await this.prisma.$queryRawUnsafe<RawScheduleRow[]>(
-        `SELECT id, ${optionalColumn('vehicle_id')} AS vehicleId, title, status, ${optionalColumn('created_at')} AS created_at, ${optionalColumn('start_date')} AS start_date, ${optionalColumn('scheduled_date')} AS scheduled_date, assigned_mechanic, account_type, checklist_template_id, ${optionalColumn('garage_id')} AS garage_id, odometer_reading, trigger_type, ${optionalColumn('interval_km')} AS interval_km, ${optionalColumn('buffer_distance_km')} AS buffer_distance_km, ${optionalColumn('starting_reference_reading_km')} AS starting_reference_reading_km, ${optionalColumn('interval_type')} AS interval_type, ${optionalColumn('start_reference_date')} AS start_reference_date, ${optionalColumn('previous_schedule_id')} AS previous_schedule_id, ${optionalColumn('work_order_progress')} AS work_order_progress, ${optionalColumn('parts_cost')} AS parts_cost, ${optionalColumn('labor_cost')} AS labor_cost, ${optionalColumn('total_cost')} AS total_cost FROM maintenance_schedules ${whereClause} ORDER BY ${dateOrder} DESC`,
+        `SELECT id, ${optionalColumn('work_order_number')} AS work_order_number, ${optionalColumn('vehicle_id')} AS vehicleId, title, status, ${optionalColumn('created_at')} AS created_at, ${optionalColumn('start_date')} AS start_date, ${optionalColumn('scheduled_date')} AS scheduled_date, assigned_mechanic, account_type, checklist_template_id, ${optionalColumn('garage_id')} AS garage_id, odometer_reading, trigger_type, ${optionalColumn('interval_km')} AS interval_km, ${optionalColumn('buffer_distance_km')} AS buffer_distance_km, ${optionalColumn('starting_reference_reading_km')} AS starting_reference_reading_km, ${optionalColumn('interval_type')} AS interval_type, ${optionalColumn('start_reference_date')} AS start_reference_date, ${optionalColumn('previous_schedule_id')} AS previous_schedule_id, ${optionalColumn('work_order_progress')} AS work_order_progress, ${optionalColumn('parts_cost')} AS parts_cost, ${optionalColumn('labor_cost')} AS labor_cost, ${optionalColumn('total_cost')} AS total_cost FROM maintenance_schedules ${whereClause} ORDER BY ${dateOrder} DESC`,
       );
 
       return rows.map((r) => {
@@ -200,6 +347,7 @@ export class MaintenanceSchedulesService {
 
         return {
           id: String(r.id),
+          workOrderNumber: r.work_order_number ?? null,
           vehicleId: r.vehicleId ?? '',
           title: r.title ?? '',
           status: r.status ?? MaintenanceStatus.PENDING,
@@ -289,6 +437,7 @@ export class MaintenanceSchedulesService {
 
     return {
       id: schedule.id,
+      workOrderNumber: schedule.workOrderNumber,
       vehicleId: schedule.vehicleId,
       title: schedule.title,
       status: schedule.status,
@@ -404,6 +553,7 @@ export class MaintenanceSchedulesService {
 
     return {
       id: schedule.id,
+      workOrderNumber: schedule.workOrderNumber,
       vehicleId: schedule.vehicleId,
       title: schedule.title,
       status: schedule.status,
@@ -476,8 +626,29 @@ export class MaintenanceSchedulesService {
     const scope = scheduleScope(actor);
     const accessible = await this.prisma.maintenanceSchedule.findFirst({ where: { id, deletedAt: null, ...scope } });
     if (!accessible) throw new ForbiddenException('This work order is not assigned to you.');
-    const input = this.getUpdateProgressPayload(progress);
+    let input = this.getUpdateProgressPayload(progress);
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw new BadRequestException('A work order progress object is required.');
+    const storedProgress = this.asProgressRecord(accessible.workOrderProgress);
+    const storedParts = storedProgress.partDetails && typeof storedProgress.partDetails === 'object'
+      ? storedProgress.partDetails as Record<string, unknown> : {};
+    const requestedProgress = input as Record<string, unknown>;
+    const requestedParts = requestedProgress.partDetails && typeof requestedProgress.partDetails === 'object'
+      ? requestedProgress.partDetails as Record<string, unknown> : {};
+    let preserveAttachmentState = false;
+    const mergedParts = { ...requestedParts };
+    for (const [itemId, storedValue] of Object.entries(storedParts)) {
+      const storedEntry = storedValue && typeof storedValue === 'object'
+        ? storedValue as Record<string, unknown> : {};
+      if (!Array.isArray(storedEntry.attachments)) continue;
+      preserveAttachmentState = true;
+      const requestedValue = requestedParts[itemId];
+      const requestedEntry = requestedValue && typeof requestedValue === 'object'
+        ? requestedValue as Record<string, unknown> : {};
+      mergedParts[itemId] = { ...storedEntry, ...requestedEntry, attachments: storedEntry.attachments };
+    }
+    if (preserveAttachmentState) {
+      input = { ...requestedProgress, partDetails: mergedParts } as Prisma.InputJsonObject;
+    }
     const assignments: Record<string, unknown> = {
       assignedMechanicId: accessible.assignedMechanicId,
       assignedMechanic: accessible.assignedMechanic,

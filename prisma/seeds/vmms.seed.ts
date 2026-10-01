@@ -10,9 +10,19 @@ export async function seedVmms(prisma: PrismaClient) {
   console.log('Creating checklist templates for VMMS...');
 
   // Fetch relations from DB
-  const garages = await prisma.garage.findMany();
-  const vehicles = await prisma.vehicle.findMany();
-  const mechanics = await prisma.mechanic.findMany();
+  const garages = await prisma.garage.findMany({ orderBy: { name: 'asc' } });
+  const seededVehiclePlates = ['NDG 5821', 'CAK 9043', 'WOB 2947', 'PXW 382', 'TGD 908', 'NRE 471'];
+  const vehicleRows = await prisma.vehicle.findMany({ where: { plateNumber: { in: seededVehiclePlates } } });
+  const vehiclesByPlate = new Map(vehicleRows.map((vehicle) => [vehicle.plateNumber, vehicle]));
+  const missingPlate = seededVehiclePlates.find((plate) => !vehiclesByPlate.has(plate));
+  if (missingPlate) throw new Error(`Cannot seed maintenance schedules: sample vehicle "${missingPlate}" is missing.`);
+  const vehicles = seededVehiclePlates.map((plate) => vehiclesByPlate.get(plate)!);
+  const seededMechanicNames = ['Juan dela Cruz', 'Pedro Santos', 'Rommel Cruz', 'Isabel Reyes', 'Carl Santos'];
+  const mechanicRows = await prisma.mechanic.findMany({ where: { name: { in: seededMechanicNames }, isOutsourced: false }, orderBy: { name: 'asc' } });
+  const mechanicsByName = new Map(mechanicRows.map((mechanic) => [mechanic.name, mechanic]));
+  const missingMechanic = seededMechanicNames.find((name) => !mechanicsByName.has(name));
+  if (missingMechanic) throw new Error(`Cannot seed maintenance schedules: in-house mechanic "${missingMechanic}" is missing.`);
+  const mechanics = seededMechanicNames.map((name) => mechanicsByName.get(name)!);
 
   const checklistTemplatesData = [
     {
@@ -81,7 +91,7 @@ export async function seedVmms(prisma: PrismaClient) {
 
     const t = await prisma.checklistTemplate.upsert({
       where: { type: templateData.type },
-      update: {},
+      update: { deletedAt: null },
       create: {
         type: templateData.type,
       },
@@ -139,7 +149,7 @@ export async function seedVmms(prisma: PrismaClient) {
 
   const maintenanceSchedulesData = [
     {
-      vehicleId: vehicles[0].plateNumber, // ABC-1234
+      vehicleId: vehicles[0].plateNumber, // NDG 5821
       title: oilChangeTemplate?.type ?? 'Oil Change',
       status: MaintenanceStatus.PENDING,
       createdAt: new Date('2026-06-22T00:00:00.000Z'),
@@ -154,7 +164,7 @@ export async function seedVmms(prisma: PrismaClient) {
       startingReferenceReadingKm: 40000,
     },
     {
-      vehicleId: vehicles[1].plateNumber, // XYZ-5678
+      vehicleId: vehicles[1].plateNumber, // CAK 9043
       title: brakeInspectionTemplate?.type ?? 'Brake Inspection',
       status: MaintenanceStatus.IN_PROGRESS,
       createdAt: new Date('2026-06-19T00:00:00.000Z'),
@@ -168,7 +178,7 @@ export async function seedVmms(prisma: PrismaClient) {
       startingReferenceReadingKm: 60000,
     },
     {
-      vehicleId: vehicles[2].plateNumber, // DEF-9012
+      vehicleId: vehicles[2].plateNumber, // WOB 2947
       title: generalInspectionTemplate?.type ?? 'General Inspection',
       status: MaintenanceStatus.COMPLETED,
       createdAt: new Date('2026-06-14T00:00:00.000Z'),
@@ -217,7 +227,7 @@ export async function seedVmms(prisma: PrismaClient) {
       },
     },
     {
-      vehicleId: vehicles[3].plateNumber, // GHI-3456
+      vehicleId: vehicles[3].plateNumber, // PXW 382
       title: generalInspectionTemplate?.type ?? 'General Inspection',
       status: MaintenanceStatus.COMPLETED,
       createdAt: new Date('2026-06-15T00:00:00.000Z'),
@@ -268,7 +278,7 @@ export async function seedVmms(prisma: PrismaClient) {
       },
     },
     {
-      vehicleId: vehicles[4].plateNumber, // JKL-7890
+      vehicleId: vehicles[4].plateNumber, // TGD 908
       title: seededTemplates.find(t => t.type === 'Engine Tune-up')?.type ?? 'Engine Tune-up',
       status: MaintenanceStatus.OVERDUE,
       createdAt: new Date('2026-06-10T00:00:00.000Z'),
@@ -283,7 +293,7 @@ export async function seedVmms(prisma: PrismaClient) {
       startingReferenceReadingKm: 70000,
     },
     {
-      vehicleId: vehicles[5].plateNumber, // MNO-1122
+      vehicleId: vehicles[5].plateNumber, // NRE 471
       title: generalInspectionTemplate?.type ?? 'General Inspection',
       status: MaintenanceStatus.PENDING,
       createdAt: new Date('2026-06-28T00:00:00.000Z'),
@@ -295,11 +305,11 @@ export async function seedVmms(prisma: PrismaClient) {
       triggerType: MaintenanceTriggerType.MANUAL,
     },
     {
-      vehicleId: vehicles[0].plateNumber, // ABC-1234
+      vehicleId: vehicles[0].plateNumber, // NDG 5821
       title: tireRotationTemplate?.type ?? 'Tire Rotation',
       status: MaintenanceStatus.PENDING,
       createdAt: new Date('2026-06-30T00:00:00.000Z'),
-      assignedMechanic: mechanics[2].name, // Isabel Reyes
+      assignedMechanic: mechanics[2].name, // Rommel Cruz
       accountType: AccountType.IN_HOUSE,
       checklistTemplateId: tireRotationTemplate?.id,
       garageId: staRosaGarage?.id,
@@ -310,11 +320,11 @@ export async function seedVmms(prisma: PrismaClient) {
       startingReferenceReadingKm: 43000,
     },
     {
-      vehicleId: vehicles[1].plateNumber, // XYZ-5678
+      vehicleId: vehicles[1].plateNumber, // CAK 9043
       title: engineTuneupTemplate?.type ?? 'Engine Tune-up',
       status: MaintenanceStatus.IN_PROGRESS,
       createdAt: new Date('2026-06-27T00:00:00.000Z'),
-      assignedMechanic: mechanics[3].name, // Carl Santos
+      assignedMechanic: mechanics[3].name, // Isabel Reyes
       accountType: AccountType.IN_HOUSE,
       checklistTemplateId: engineTuneupTemplate?.id,
       garageId: marikinaGarage?.id,
@@ -325,11 +335,11 @@ export async function seedVmms(prisma: PrismaClient) {
       startingReferenceReadingKm: 50000,
     },
     {
-      vehicleId: vehicles[2].plateNumber, // DEF-9012
+      vehicleId: vehicles[2].plateNumber, // WOB 2947
       title: brakeInspectionTemplate?.type ?? 'Brake Inspection',
       status: MaintenanceStatus.COMPLETED,
       createdAt: new Date('2026-06-21T00:00:00.000Z'),
-      assignedMechanic: mechanics[2].name, // Isabel Reyes
+      assignedMechanic: mechanics[2].name, // Rommel Cruz
       accountType: AccountType.OUTSOURCED,
       checklistTemplateId: brakeInspectionTemplate?.id,
       garageId: staRosaGarage?.id,
@@ -377,7 +387,7 @@ export async function seedVmms(prisma: PrismaClient) {
       },
     },
     {
-      vehicleId: vehicles[3].plateNumber, // GHI-3456
+      vehicleId: vehicles[3].plateNumber, // PXW 382
       title: oilChangeTemplate?.type ?? 'Oil Change',
       status: MaintenanceStatus.OVERDUE,
       createdAt: new Date('2026-06-16T00:00:00.000Z'),
@@ -391,7 +401,7 @@ export async function seedVmms(prisma: PrismaClient) {
       startReferenceDate: new Date('2026-05-16T00:00:00.000Z'),
     },
     {
-      vehicleId: vehicles[4].plateNumber, // JKL-7890
+      vehicleId: vehicles[4].plateNumber, // TGD 908
       title: generalInspectionTemplate?.type ?? 'General Inspection',
       status: MaintenanceStatus.PENDING,
       createdAt: new Date('2026-06-24T00:00:00.000Z'),
@@ -405,7 +415,7 @@ export async function seedVmms(prisma: PrismaClient) {
       startReferenceDate: new Date('2026-03-24T00:00:00.000Z'),
     },
     {
-      vehicleId: vehicles[5].plateNumber, // MNO-1122
+      vehicleId: vehicles[5].plateNumber, // NRE 471
       title: tireRotationTemplate?.type ?? 'Tire Rotation',
       status: MaintenanceStatus.PENDING,
       createdAt: new Date('2026-06-18T00:00:00.000Z'),
@@ -419,7 +429,7 @@ export async function seedVmms(prisma: PrismaClient) {
       startReferenceDate: new Date('2026-06-01T00:00:00.000Z'),
     },
     {
-      vehicleId: vehicles[0].plateNumber, // ABC-1234
+      vehicleId: vehicles[0].plateNumber, // NDG 5821
       title: engineTuneupTemplate?.type ?? 'Engine Tune-up',
       status: MaintenanceStatus.COMPLETED,
       createdAt: new Date('2026-05-10T00:00:00.000Z'),
@@ -444,7 +454,7 @@ export async function seedVmms(prisma: PrismaClient) {
       },
     },
     {
-      vehicleId: vehicles[1].plateNumber, // XYZ-5678
+      vehicleId: vehicles[1].plateNumber, // CAK 9043
       title: oilChangeTemplate?.type ?? 'Oil Change',
       status: MaintenanceStatus.COMPLETED,
       createdAt: new Date('2026-04-12T00:00:00.000Z'),
@@ -469,7 +479,7 @@ export async function seedVmms(prisma: PrismaClient) {
       },
     },
     {
-      vehicleId: vehicles[2].plateNumber, // DEF-9012
+      vehicleId: vehicles[2].plateNumber, // WOB 2947
       title: tireRotationTemplate?.type ?? 'Tire Rotation',
       status: MaintenanceStatus.DUE,
       createdAt: new Date('2026-08-01T00:00:00.000Z'),
@@ -484,7 +494,7 @@ export async function seedVmms(prisma: PrismaClient) {
       startingReferenceReadingKm: 28000,
     },
     {
-      vehicleId: vehicles[3].plateNumber, // GHI-3456
+      vehicleId: vehicles[3].plateNumber, // PXW 382
       title: brakeInspectionTemplate?.type ?? 'Brake Inspection',
       status: MaintenanceStatus.IN_PROGRESS,
       createdAt: new Date('2026-08-02T00:00:00.000Z'),
@@ -498,7 +508,7 @@ export async function seedVmms(prisma: PrismaClient) {
       startingReferenceReadingKm: 12000,
     },
     {
-      vehicleId: vehicles[4].plateNumber, // JKL-7890
+      vehicleId: vehicles[4].plateNumber, // TGD 908
       title: oilChangeTemplate?.type ?? 'Oil Change',
       status: MaintenanceStatus.OVERDUE,
       createdAt: new Date('2026-07-10T00:00:00.000Z'),
@@ -513,7 +523,7 @@ export async function seedVmms(prisma: PrismaClient) {
       startingReferenceReadingKm: 88000,
     },
     {
-      vehicleId: vehicles[5].plateNumber, // MNO-1122
+      vehicleId: vehicles[5].plateNumber, // NRE 471
       title: generalInspectionTemplate?.type ?? 'General Inspection',
       status: MaintenanceStatus.COMPLETED,
       createdAt: new Date('2026-05-20T00:00:00.000Z'),
@@ -538,7 +548,7 @@ export async function seedVmms(prisma: PrismaClient) {
       },
     },
     {
-      vehicleId: vehicles[0].plateNumber, // ABC-1234
+      vehicleId: vehicles[0].plateNumber, // NDG 5821
       title: brakeInspectionTemplate?.type ?? 'Brake Inspection',
       status: MaintenanceStatus.COMPLETED,
       createdAt: new Date('2026-03-05T00:00:00.000Z'),
@@ -563,7 +573,7 @@ export async function seedVmms(prisma: PrismaClient) {
       },
     },
     {
-      vehicleId: vehicles[1].plateNumber, // XYZ-5678
+      vehicleId: vehicles[1].plateNumber, // CAK 9043
       title: tireRotationTemplate?.type ?? 'Tire Rotation',
       status: MaintenanceStatus.COMPLETED,
       createdAt: new Date('2026-02-18T00:00:00.000Z'),
@@ -588,7 +598,7 @@ export async function seedVmms(prisma: PrismaClient) {
       },
     },
     {
-      vehicleId: vehicles[2].plateNumber, // DEF-9012
+      vehicleId: vehicles[2].plateNumber, // WOB 2947
       title: oilChangeTemplate?.type ?? 'Oil Change',
       status: MaintenanceStatus.COMPLETED,
       createdAt: new Date('2026-01-25T00:00:00.000Z'),
@@ -613,7 +623,7 @@ export async function seedVmms(prisma: PrismaClient) {
       },
     },
     {
-      vehicleId: vehicles[3].plateNumber, // GHI-3456
+      vehicleId: vehicles[3].plateNumber, // PXW 382
       title: engineTuneupTemplate?.type ?? 'Engine Tune-up',
       status: MaintenanceStatus.COMPLETED,
       createdAt: new Date('2026-03-14T00:00:00.000Z'),
@@ -638,7 +648,7 @@ export async function seedVmms(prisma: PrismaClient) {
       },
     },
     {
-      vehicleId: vehicles[4].plateNumber, // JKL-7890
+      vehicleId: vehicles[4].plateNumber, // TGD 908
       title: brakeInspectionTemplate?.type ?? 'Brake Inspection',
       status: MaintenanceStatus.COMPLETED,
       createdAt: new Date('2026-02-10T00:00:00.000Z'),
@@ -663,7 +673,7 @@ export async function seedVmms(prisma: PrismaClient) {
       },
     },
     {
-      vehicleId: vehicles[5].plateNumber, // MNO-1122
+      vehicleId: vehicles[5].plateNumber, // NRE 471
       title: oilChangeTemplate?.type ?? 'Oil Change',
       status: MaintenanceStatus.COMPLETED,
       createdAt: new Date('2026-01-10T00:00:00.000Z'),
@@ -688,7 +698,7 @@ export async function seedVmms(prisma: PrismaClient) {
       },
     },
     {
-      vehicleId: vehicles[0].plateNumber, // ABC-1234
+      vehicleId: vehicles[0].plateNumber, // NDG 5821
       title: generalInspectionTemplate?.type ?? 'General Inspection',
       status: MaintenanceStatus.DUE,
       createdAt: new Date('2026-08-05T00:00:00.000Z'),
@@ -702,7 +712,7 @@ export async function seedVmms(prisma: PrismaClient) {
       startReferenceDate: new Date('2026-08-08T00:00:00.000Z'),
     },
     {
-      vehicleId: vehicles[1].plateNumber, // XYZ-5678
+      vehicleId: vehicles[1].plateNumber, // CAK 9043
       title: engineTuneupTemplate?.type ?? 'Engine Tune-up',
       status: MaintenanceStatus.PENDING,
       createdAt: new Date('2026-08-04T00:00:00.000Z'),
@@ -717,7 +727,7 @@ export async function seedVmms(prisma: PrismaClient) {
       startingReferenceReadingKm: 55000,
     },
     {
-      vehicleId: vehicles[2].plateNumber, // DEF-9012
+      vehicleId: vehicles[2].plateNumber, // WOB 2947
       title: brakeInspectionTemplate?.type ?? 'Brake Inspection',
       status: MaintenanceStatus.IN_PROGRESS,
       createdAt: new Date('2026-08-03T00:00:00.000Z'),
@@ -731,7 +741,7 @@ export async function seedVmms(prisma: PrismaClient) {
       startingReferenceReadingKm: 20000,
     },
     {
-      vehicleId: vehicles[3].plateNumber, // GHI-3456
+      vehicleId: vehicles[3].plateNumber, // PXW 382
       title: tireRotationTemplate?.type ?? 'Tire Rotation',
       status: MaintenanceStatus.OVERDUE,
       createdAt: new Date('2026-07-20T00:00:00.000Z'),
@@ -745,7 +755,7 @@ export async function seedVmms(prisma: PrismaClient) {
       startReferenceDate: new Date('2026-07-25T00:00:00.000Z'),
     },
     {
-      vehicleId: vehicles[4].plateNumber, // JKL-7890
+      vehicleId: vehicles[4].plateNumber, // TGD 908
       title: tireRotationTemplate?.type ?? 'Tire Rotation',
       status: MaintenanceStatus.PENDING,
       createdAt: new Date('2026-08-06T00:00:00.000Z'),
@@ -760,7 +770,7 @@ export async function seedVmms(prisma: PrismaClient) {
       startingReferenceReadingKm: 91000,
     },
     {
-      vehicleId: vehicles[5].plateNumber, // MNO-1122
+      vehicleId: vehicles[5].plateNumber, // NRE 471
       title: brakeInspectionTemplate?.type ?? 'Brake Inspection',
       status: MaintenanceStatus.DUE,
       createdAt: new Date('2026-08-04T00:00:00.000Z'),
@@ -1129,14 +1139,18 @@ export async function seedVmms(prisma: PrismaClient) {
       intervalType: MaintenanceIntervalType.MONTHLY,
       startReferenceDate: new Date('2026-08-20T00:00:00.000Z'),
     },
-  ].map((schedule) => ({
+  ].map((schedule) => {
+    const vehicle = vehicles.find((entry) => entry.plateNumber === schedule.vehicleId);
+    if (!vehicle?.garageId) throw new Error(`Cannot seed schedule for ${schedule.vehicleId}: vehicle garage assignment is missing.`);
+    return {
     ...schedule,
+    garageId: vehicle.garageId,
     startDate: schedule.createdAt,
     assignedMechanicId: resolveSeedMechanicId(
       schedule.assignedMechanic,
       schedule.accountType,
     ),
-  }));
+  }; });
 
   const assertCompletedScheduleHasProgress = (schedule: any) => {
     if (schedule.status === MaintenanceStatus.COMPLETED && schedule.workOrderProgress == null) {

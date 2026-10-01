@@ -328,6 +328,7 @@ model ChecklistItem {
 
 model MaintenanceSchedule {
   id                       String            @id @default(uuid()) @db.Uuid
+  workOrderNumber          String            @unique @default(dbgenerated("('WO-'::text || to_char(CURRENT_DATE, 'YYYYMMDD'::text) || '-'::text || lpad(nextval('maintenance_schedule_work_order_number_seq'::regclass)::text, 6, '0'::text))")) @map("work_order_number") @db.VarChar(32)
   vehicleId                String            @db.VarChar(50)
   title                    String            @db.VarChar(100)
   garageId                 String?           @map("garage_id") @db.VarChar(50)

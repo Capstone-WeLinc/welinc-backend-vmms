@@ -4,8 +4,14 @@ export async function seedWorkOrders(prisma: PrismaClient) {
   console.log('Creating sample VMMS work orders...');
 
   // Fetch needed relations from DB
-  const garages = await prisma.garage.findMany();
-  const vehicles = await prisma.vehicle.findMany();
+  const seededVehiclePlates = ['NDG 5821', 'CAK 9043', 'WOB 2947', 'PXW 382', 'TGD 908', 'NRE 471'];
+  const vehicleRows = await prisma.vehicle.findMany({ where: { plateNumber: { in: seededVehiclePlates } } });
+  const vehiclesByPlate = new Map(vehicleRows.map((vehicle) => [vehicle.plateNumber, vehicle]));
+  const missingPlate = seededVehiclePlates.find((plate) => !vehiclesByPlate.has(plate));
+  if (missingPlate) throw new Error(`Cannot seed work orders: sample vehicle "${missingPlate}" is missing.`);
+  const vehicles = seededVehiclePlates.map((plate) => vehiclesByPlate.get(plate)!);
+  const unassignedVehicle = vehicles.find((vehicle) => !vehicle.garageId);
+  if (unassignedVehicle) throw new Error(`Cannot seed work orders: vehicle "${unassignedVehicle.plateNumber}" has no garage assignment.`);
   
   const vmmsAdminUser = await prisma.user.findFirstOrThrow({
     where: { email: 'vmms.admin@welinc.com' }
@@ -38,7 +44,7 @@ export async function seedWorkOrders(prisma: PrismaClient) {
       workOrderNumber: 'WO-20260610-0001',
       status: WorkOrderStatus.PENDING,
       vehicleId: vehicles[0].id,
-      garageId: garages[0].id,
+      garageId: vehicles[0].garageId!,
       odometer: 45200,
       remarks: 'Truck transmission slips occasionally when shifting to second gear.',
       issues: {
@@ -69,7 +75,7 @@ export async function seedWorkOrders(prisma: PrismaClient) {
       workOrderNumber: 'WO-20260612-0002',
       status: WorkOrderStatus.IN_PROGRESS,
       vehicleId: vehicles[1].id,
-      garageId: garages[1].id,
+      garageId: vehicles[1].garageId!,
       odometer: 72500,
       remarks: 'Squealing sound from brakes when loaded.',
       issues: {
@@ -113,7 +119,7 @@ export async function seedWorkOrders(prisma: PrismaClient) {
       workOrderNumber: 'WO-20260614-0003',
       status: WorkOrderStatus.FOR_VERIFICATION,
       vehicleId: vehicles[2].id,
-      garageId: garages[2].id,
+      garageId: vehicles[2].garageId!,
       odometer: 32000,
       remarks: 'Scheduled PMS: Engine oil, air filter, and fuel filter replacement.',
       issues: {
@@ -183,7 +189,7 @@ export async function seedWorkOrders(prisma: PrismaClient) {
       workOrderNumber: 'WO-20260611-0004',
       status: WorkOrderStatus.COMPLETED,
       vehicleId: vehicles[0].id,
-      garageId: garages[0].id,
+      garageId: vehicles[0].garageId!,
       odometer: 44900,
       remarks: 'Replace front passenger side tire due to puncture.',
       issues: {
@@ -259,7 +265,7 @@ export async function seedWorkOrders(prisma: PrismaClient) {
       workOrderNumber: 'WO-20260613-0005',
       status: WorkOrderStatus.COMPLETED,
       vehicleId: vehicles[4].id,
-      garageId: garages[1].id,
+      garageId: vehicles[4].garageId!,
       odometer: 92200,
       remarks: 'Blown head gasket replacement. Engine overheating.',
       issues: {
@@ -337,7 +343,7 @@ export async function seedWorkOrders(prisma: PrismaClient) {
       workOrderNumber: 'WO-20260614-0006',
       status: WorkOrderStatus.CANCELLED,
       vehicleId: vehicles[0].id,
-      garageId: garages[0].id,
+      garageId: vehicles[0].garageId!,
       odometer: 45400,
       remarks: 'Intermittent starter issue reported during vehicle inspection.',
       issues: {
@@ -378,7 +384,7 @@ export async function seedWorkOrders(prisma: PrismaClient) {
       workOrderNumber: 'WO-20260615-0007',
       status: WorkOrderStatus.PENDING,
       vehicleId: vehicles[5].id,
-      garageId: garages[2].id,
+      garageId: vehicles[5].garageId!,
       odometer: 145100,
       remarks: 'Rough clutch engagement reported during vehicle inspection.',
       issues: {
@@ -409,7 +415,7 @@ export async function seedWorkOrders(prisma: PrismaClient) {
       workOrderNumber: 'WO-20260615-0008',
       status: WorkOrderStatus.IN_PROGRESS,
       vehicleId: vehicles[1].id,
-      garageId: garages[1].id,
+      garageId: vehicles[1].garageId!,
       odometer: 72800,
       remarks: 'Rear suspension squeak when loaded.',
       issues: {
@@ -452,7 +458,7 @@ export async function seedWorkOrders(prisma: PrismaClient) {
       workOrderNumber: 'WO-20260615-0009',
       status: WorkOrderStatus.FOR_VERIFICATION,
       vehicleId: vehicles[2].id,
-      garageId: garages[0].id,
+      garageId: vehicles[2].garageId!,
       odometer: 32100,
       remarks: 'Overheating under heavy load. Thermostat stuck.',
       issues: {
@@ -520,7 +526,7 @@ export async function seedWorkOrders(prisma: PrismaClient) {
       workOrderNumber: 'WO-20260614-0010',
       status: WorkOrderStatus.COMPLETED,
       vehicleId: vehicles[3].id,
-      garageId: garages[0].id,
+      garageId: vehicles[3].garageId!,
       odometer: 18500,
       remarks: 'Battery replacement completed.',
       issues: {
@@ -667,7 +673,6 @@ export async function seedWorkOrders(prisma: PrismaClient) {
 
     const status = statuses[i % statuses.length];
     const vehicle = vehicles[i % vehicles.length];
-    const garage = garages[i % garages.length];
     const mechanic = allMechanics[i % allMechanics.length];
     
     const cat = categories[i % categories.length];
@@ -692,7 +697,7 @@ export async function seedWorkOrders(prisma: PrismaClient) {
         workOrderNumber,
         status: status,
         vehicleId: vehicle.id,
-        garageId: garage.id,
+        garageId: vehicle.garageId!,
         odometer: vehicle.odometer + 100 + i,
         remarks: `Vehicle reported with ${template.desc.toLowerCase()}. Remarks: ${remarks}`,
         issues: {

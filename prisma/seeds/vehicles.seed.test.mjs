@@ -39,6 +39,8 @@ test('seeded vehicles receive registered garage IDs on create and rerun', async 
     assert.equal(prisma.upserts[index].where.plateNumber, plateNumber);
     assert.equal(prisma.upserts[index].update.garageId, garageId);
     assert.equal(prisma.upserts[index].create.garageId, garageId);
+    assert.equal(prisma.upserts[index].update.model, prisma.upserts[index].create.model);
+    assert.equal(prisma.upserts[index].update.odometer, prisma.upserts[index].create.odometer);
   }
 });
 

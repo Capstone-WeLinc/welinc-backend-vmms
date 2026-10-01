@@ -26,6 +26,7 @@ describe('MaintenanceSchedulesService', () => {
     prisma.maintenanceSchedule.findMany.mockResolvedValue([
       {
         id: 'schedule-1',
+        workOrderNumber: 'WO-20261001-000042',
         vehicleId: 'ABC123',
         title: 'Oil Change',
         status: 'PENDING',
@@ -67,6 +68,7 @@ describe('MaintenanceSchedulesService', () => {
     expect(result[0].partsCost).toBe(125.5);
     expect(result[0].laborCost).toBe(45.25);
     expect(result[0].totalCost).toBe(170.75);
+    expect(result[0].workOrderNumber).toBe('WO-20261001-000042');
   });
 
   it('formats created dates using the Philippine calendar day', async () => {
