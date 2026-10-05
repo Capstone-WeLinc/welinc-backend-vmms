@@ -55,6 +55,13 @@ enum MaintenanceStatus {
   CANCELLED
 }
 
+enum MaintenanceApprovalStatus {
+  UNVERIFIED
+  VERIFIED
+  REJECTED
+  FOR_REPAIR
+}
+
 enum MaintenanceTriggerType {
   MANUAL
   ODOMETER
@@ -333,6 +340,7 @@ model MaintenanceSchedule {
   title                    String            @db.VarChar(100)
   garageId                 String?           @map("garage_id") @db.VarChar(50)
   status                   MaintenanceStatus @default(PENDING)
+  approvalStatus           MaintenanceApprovalStatus @default(UNVERIFIED) @map("approval_status")
   assignedMechanic         String            @map("assigned_mechanic") @db.VarChar(100)
   assignedMechanicId       String?           @map("assigned_mechanic_id") @db.Uuid
   chiefMechanicId          String?           @map("chief_mechanic_id") @db.Uuid

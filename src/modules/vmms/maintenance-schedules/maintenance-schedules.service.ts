@@ -9,6 +9,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../../../shared/prisma.service';
 import { applyWorkOrderWorkflow, AssignedChecklistItem } from './work-order-workflow';
+import { progressForClient, stateForStorage } from './work-order-state';
 import { scheduleScope, ScheduleActor } from './schedule-access';
 import { CreateMaintenanceScheduleDto } from './dto/create-maintenance-schedule.dto';
 import { scheduleDue } from './schedule-due';
@@ -283,7 +284,8 @@ export class MaintenanceSchedulesService {
           timeIntervalUnit: schedule.timeIntervalUnit ?? null,
           startReferenceDate: this.formatDateOnly(schedule.startReferenceDate),
           previousScheduleId: schedule.previousScheduleId ?? null,
-          workOrderProgress: schedule.workOrderProgress ?? null,
+          approvalStatus: schedule.approvalStatus,
+      workOrderProgress: progressForClient(schedule),
           partsCost: costs.partsCost,
           laborCost: costs.laborCost,
           totalCost: costs.totalCost,
@@ -318,7 +320,7 @@ export class MaintenanceSchedulesService {
         interval_type?: string | null;
         start_reference_date?: Date | string | null;
         previous_schedule_id?: string | null;
-        work_order_progress?: Prisma.JsonValue | null;
+        work_order_progress?: Prisma.JsonValue | null; approval_status?: string;
         parts_cost?: number | null;
         labor_cost?: number | null;
         total_cost?: number | null;
@@ -335,7 +337,7 @@ export class MaintenanceSchedulesService {
       const dateOrder = createdDateColumn ?? 'id';
       const whereClause = columns.has('deleted_at') ? 'WHERE deleted_at IS NULL' : '';
       const rows = await this.prisma.$queryRawUnsafe<RawScheduleRow[]>(
-        `SELECT id, ${optionalColumn('work_order_number')} AS work_order_number, ${optionalColumn('vehicle_id')} AS vehicleId, title, status, ${optionalColumn('created_at')} AS created_at, ${optionalColumn('start_date')} AS start_date, ${optionalColumn('scheduled_date')} AS scheduled_date, assigned_mechanic, account_type, checklist_template_id, ${optionalColumn('garage_id')} AS garage_id, odometer_reading, trigger_type, ${optionalColumn('interval_km')} AS interval_km, ${optionalColumn('buffer_distance_km')} AS buffer_distance_km, ${optionalColumn('starting_reference_reading_km')} AS starting_reference_reading_km, ${optionalColumn('interval_type')} AS interval_type, ${optionalColumn('start_reference_date')} AS start_reference_date, ${optionalColumn('previous_schedule_id')} AS previous_schedule_id, ${optionalColumn('work_order_progress')} AS work_order_progress, ${optionalColumn('parts_cost')} AS parts_cost, ${optionalColumn('labor_cost')} AS labor_cost, ${optionalColumn('total_cost')} AS total_cost FROM maintenance_schedules ${whereClause} ORDER BY ${dateOrder} DESC`,
+        `SELECT id, ${optionalColumn('work_order_number')} AS work_order_number, ${optionalColumn('vehicle_id')} AS vehicleId, title, status, ${optionalColumn('created_at')} AS created_at, ${optionalColumn('start_date')} AS start_date, ${optionalColumn('scheduled_date')} AS scheduled_date, assigned_mechanic, account_type, checklist_template_id, ${optionalColumn('garage_id')} AS garage_id, odometer_reading, trigger_type, ${optionalColumn('interval_km')} AS interval_km, ${optionalColumn('buffer_distance_km')} AS buffer_distance_km, ${optionalColumn('starting_reference_reading_km')} AS starting_reference_reading_km, ${optionalColumn('interval_type')} AS interval_type, ${optionalColumn('start_reference_date')} AS start_reference_date, ${optionalColumn('previous_schedule_id')} AS previous_schedule_id, ${optionalColumn('work_order_progress')} AS work_order_progress, ${optionalColumn('approval_status')} AS approval_status, ${optionalColumn('parts_cost')} AS parts_cost, ${optionalColumn('labor_cost')} AS labor_cost, ${optionalColumn('total_cost')} AS total_cost FROM maintenance_schedules ${whereClause} ORDER BY ${dateOrder} DESC`,
       );
 
       return rows.map((r) => {
@@ -373,7 +375,8 @@ export class MaintenanceSchedulesService {
           intervalType: r.interval_type ?? null,
           startReferenceDate: this.formatDateOnly(r.start_reference_date ?? null),
           previousScheduleId: r.previous_schedule_id ?? null,
-          workOrderProgress: r.work_order_progress ?? null,
+          approvalStatus: r.approval_status,
+          workOrderProgress: progressForClient({ status: r.status, approvalStatus: r.approval_status, workOrderProgress: r.work_order_progress }),
           partsCost: costs.partsCost,
           laborCost: costs.laborCost,
           totalCost: costs.totalCost,
@@ -464,7 +467,8 @@ export class MaintenanceSchedulesService {
         ? schedule.startReferenceDate.toISOString().slice(0, 10)
         : null,
       previousScheduleId: schedule.previousScheduleId ?? null,
-      workOrderProgress: schedule.workOrderProgress ?? null,
+      approvalStatus: schedule.approvalStatus,
+      workOrderProgress: progressForClient(schedule),
       partsCost: costs.partsCost,
       laborCost: costs.laborCost,
       totalCost: costs.totalCost,
@@ -578,7 +582,8 @@ export class MaintenanceSchedulesService {
       timeIntervalUnit: schedule.timeIntervalUnit ?? null,
       startReferenceDate: this.formatDateOnly(schedule.startReferenceDate),
       previousScheduleId: schedule.previousScheduleId ?? null,
-      workOrderProgress: schedule.workOrderProgress ?? null,
+      approvalStatus: schedule.approvalStatus,
+      workOrderProgress: progressForClient(schedule),
       partsCost: costs.partsCost,
       laborCost: costs.laborCost,
       totalCost: costs.totalCost,
@@ -691,6 +696,7 @@ export class MaintenanceSchedulesService {
 
     const payload: Record<string, any> = {
       status: workflow.status,
+      ...stateForStorage(workflow.progress, workflow.status),
       ...(workflow.status === MaintenanceStatus.COMPLETED ? { completedAt: new Date() } : {}),
       partsCost: normalizedCosts.partsCost ?? undefined,
       laborCost: normalizedCosts.laborCost ?? undefined,
@@ -699,7 +705,7 @@ export class MaintenanceSchedulesService {
 
     if (normalizedProgress !== undefined) {
       payload.workOrderProgress = {
-        ...normalizedProgress,
+        ...stateForStorage(workflow.progress, workflow.status).workOrderProgress,
         chiefMechanic: accessible.chiefMechanic ?? '',
       };
     }
@@ -730,7 +736,8 @@ export class MaintenanceSchedulesService {
       id: schedule.id,
       status: schedule.status,
       nextSchedule: nextSchedule ? { id: nextSchedule.id, ...scheduleDue(nextSchedule) } : null,
-      workOrderProgress: schedule.workOrderProgress ?? null,
+      approvalStatus: schedule.approvalStatus,
+      workOrderProgress: progressForClient(schedule),
       partsCost: costs.partsCost,
       laborCost: costs.laborCost,
       totalCost: costs.totalCost,

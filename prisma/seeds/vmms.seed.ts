@@ -1,3 +1,4 @@
+import { stateForStorage } from '../../src/modules/vmms/maintenance-schedules/work-order-state';
 import {
   PrismaClient,
   MaintenanceStatus,
@@ -1251,10 +1252,12 @@ export async function seedVmms(prisma: PrismaClient) {
   for (const schedule of maintenanceSchedulesData) {
     assertCompletedScheduleHasProgress(schedule);
 
+
+    const persistedSchedule = { ...schedule, ...stateForStorage((schedule.workOrderProgress ?? {}) as Record<string, any>, schedule.status) };
     const createdSchedule = await prisma.maintenanceSchedule.create({
       data: schedule.status === MaintenanceStatus.COMPLETED
-        ? { ...schedule, completedAt: schedule.createdAt }
-        : schedule,
+        ? { ...persistedSchedule, completedAt: schedule.createdAt }
+        : persistedSchedule,
     });
     createdMaintenanceSchedulesCount += 1;
 

@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { MaintenanceSchedule, MaintenanceStatus } from '@prisma/client';
 import { ScheduleActor } from './schedule-access';
 import { getWorkOrderStartDateError } from './work-order-start-date';
+import { progressForClient } from './work-order-state';
 
 export type AssignedChecklistItem = { id: string; text: string };
 
@@ -34,7 +35,7 @@ function validateChecklistSubmission(items: unknown, assignedItems?: AssignedChe
 }
 
 export function applyWorkOrderWorkflow(schedule: MaintenanceSchedule, incoming: Record<string, any>, action: unknown, actor: ScheduleActor, assignedItems?: AssignedChecklistItem[]) {
-  const prior = (schedule.workOrderProgress && typeof schedule.workOrderProgress === 'object' && !Array.isArray(schedule.workOrderProgress) ? schedule.workOrderProgress : {}) as Record<string, any>;
+  const prior = progressForClient(schedule);
   const chief = actor.roles.some((r) => r.system === 'VMMS' && r.role === 'CHIEF_MECHANIC') && schedule.chiefMechanicId === actor.sub;
   const mechanic = actor.roles.some((r) => r.system === 'VMMS' && r.role === 'MECHANIC') && schedule.assignedMechanicId === actor.sub;
   if (!chief && !mechanic) throw new ForbiddenException('Only the assigned mechanic or chief mechanic may progress this work order.');
@@ -47,6 +48,7 @@ export function applyWorkOrderWorkflow(schedule: MaintenanceSchedule, incoming: 
     if (!prior.mechanicSubmitted) throw new BadRequestException('The mechanic must submit the work before review.');
     if (['START', 'SUBMIT'].includes(intent as string)) throw new ForbiddenException('Only the assigned mechanic can execute the work.');
     for (const key of ['inspectionItems', 'inspectorRemarks']) if (incoming[key] !== undefined) progress[key] = incoming[key];
+    if (incoming.inspectorRemarks !== undefined && typeof incoming.inspectorRemarks !== 'string') throw new BadRequestException('Inspection remarks must be text.');
     const items = progress.inspectionItems;
     if (intent !== 'SAVE') {
       const execution = prior.executionItems;
@@ -58,6 +60,12 @@ export function applyWorkOrderWorkflow(schedule: MaintenanceSchedule, incoming: 
       if (intent === 'APPROVE' && items.some((item) => item.status !== 'pass')) throw new BadRequestException('Every inspection item must pass before completion.');
       progress.approvalStatus = intent === 'APPROVE' ? 'Verified' : intent === 'REJECT' ? 'Rejected' : 'For Repair';
       progress.workflowStatus = intent === 'APPROVE' ? 'Completed' : intent === 'REJECT' ? 'Rejected' : 'For Repair';
+      if (intent === 'REJECT') {
+        const rejectionRemarks = typeof progress.inspectorRemarks === 'string'
+          ? progress.inspectorRemarks.trim() : '';
+        if (!rejectionRemarks) throw new BadRequestException('Add rejection remarks before returning this work order to the mechanic.');
+        progress.rejectionRemarks = rejectionRemarks;
+      }
       progress.mechanicSubmitted = intent !== 'REJECT';
       status = intent === 'APPROVE' ? MaintenanceStatus.COMPLETED : MaintenanceStatus.IN_PROGRESS;
     }
@@ -73,10 +81,15 @@ export function applyWorkOrderWorkflow(schedule: MaintenanceSchedule, incoming: 
       progress.approvalStatus = 'Unverified';
       progress.mechanicSubmitted = false;
       progress.inspectionItems = [];
+      if (prior.workflowStatus === 'Rejected' && !progress.rejectionRemarks && typeof prior.inspectorRemarks === 'string') progress.rejectionRemarks = prior.inspectorRemarks;
       progress.inspectorRemarks = '';
     } else {
       if (status !== MaintenanceStatus.IN_PROGRESS || prior.workflowStatus === 'Rejected') throw new BadRequestException('Start work before updating the checklist.');
       for (const key of ['executionItems', 'partDetails', 'chiefMechanic']) if (incoming[key] !== undefined) progress[key] = incoming[key];
+      if (incoming.maintenanceRemarks !== undefined) {
+        if (typeof incoming.maintenanceRemarks !== 'string') throw new BadRequestException('Maintenance remarks must be text.');
+        progress.maintenanceRemarks = incoming.maintenanceRemarks;
+      }
       if (intent === 'SUBMIT') {
         const items = progress.executionItems;
         validateChecklistSubmission(items, assignedItems);

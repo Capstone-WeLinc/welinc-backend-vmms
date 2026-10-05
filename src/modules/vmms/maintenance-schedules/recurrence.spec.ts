@@ -94,8 +94,14 @@ describe('Next maintenance cycle after approval', () => {
   it('rejection returns work to the mechanic without creating another cycle', async () => {
     const result = await service.updateProgress('completed', { action: 'REJECT', inspectionItems, inspectorRemarks: 'Redo inspection' }, chief);
     expect(result.status).toBe('IN_PROGRESS');
+    expect(result.workOrderProgress).toMatchObject({ rejectionRemarks: 'Redo inspection', inspectorRemarks: 'Redo inspection' });
     expect(result.nextSchedule).toBeNull();
     expect(tx.maintenanceSchedule.upsert).not.toHaveBeenCalled();
+  });
+  it('requires a reason before rejecting completed work', async () => {
+    await expect(service.updateProgress('completed', { action: 'REJECT', inspectionItems, inspectorRemarks: '  ' }, chief))
+      .rejects.toThrow('Add rejection remarks before returning this work order to the mechanic.');
+    expect(tx.maintenanceSchedule.update).not.toHaveBeenCalled();
   });
   it('translates a race with another Pending insert into a conflict', async () => {
     tx.maintenanceSchedule.upsert.mockRejectedValue(new Prisma.PrismaClientKnownRequestError('unique', { code: 'P2002', clientVersion: '7' }));
