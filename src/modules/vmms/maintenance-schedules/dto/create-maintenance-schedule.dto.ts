@@ -2,6 +2,7 @@ import {
   AccountType,
   MaintenanceIntervalType,
   MaintenanceStatus,
+  MaintenancePriority,
   MaintenanceTriggerType,
 } from '@prisma/client';
 import {
@@ -19,6 +20,10 @@ import {
 import { Type } from 'class-transformer';
 
 export class CreateMaintenanceScheduleDto {
+  @IsEnum(MaintenancePriority)
+  @IsOptional()
+  priority?: MaintenancePriority;
+
   @IsOptional()
   @IsInt()
   @Min(1)

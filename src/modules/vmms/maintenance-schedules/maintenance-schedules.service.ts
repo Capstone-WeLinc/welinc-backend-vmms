@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException, Injectable,
 import {
   AccountType,
   MaintenanceSchedule,
+  MaintenancePriority,
   MaintenanceStatus,
   MaintenanceTriggerType,
   Prisma,
@@ -261,6 +262,7 @@ export class MaintenanceSchedulesService {
           vehicleId: schedule.vehicleId,
           title: schedule.title,
           status: schedule.status,
+          priority: schedule.priority,
           cancellations: schedule.cancellations ?? [],
           ...scheduleDue(schedule),
           date: this.formatDateOnly(schedule.createdAt),
@@ -324,6 +326,7 @@ export class MaintenanceSchedulesService {
         parts_cost?: number | null;
         labor_cost?: number | null;
         total_cost?: number | null;
+        priority?: string | null;
       };
 
       const columns = await this.getMaintenanceScheduleColumns();
@@ -337,7 +340,7 @@ export class MaintenanceSchedulesService {
       const dateOrder = createdDateColumn ?? 'id';
       const whereClause = columns.has('deleted_at') ? 'WHERE deleted_at IS NULL' : '';
       const rows = await this.prisma.$queryRawUnsafe<RawScheduleRow[]>(
-        `SELECT id, ${optionalColumn('work_order_number')} AS work_order_number, ${optionalColumn('vehicle_id')} AS vehicleId, title, status, ${optionalColumn('created_at')} AS created_at, ${optionalColumn('start_date')} AS start_date, ${optionalColumn('scheduled_date')} AS scheduled_date, assigned_mechanic, account_type, checklist_template_id, ${optionalColumn('garage_id')} AS garage_id, odometer_reading, trigger_type, ${optionalColumn('interval_km')} AS interval_km, ${optionalColumn('buffer_distance_km')} AS buffer_distance_km, ${optionalColumn('starting_reference_reading_km')} AS starting_reference_reading_km, ${optionalColumn('interval_type')} AS interval_type, ${optionalColumn('start_reference_date')} AS start_reference_date, ${optionalColumn('previous_schedule_id')} AS previous_schedule_id, ${optionalColumn('work_order_progress')} AS work_order_progress, ${optionalColumn('approval_status')} AS approval_status, ${optionalColumn('parts_cost')} AS parts_cost, ${optionalColumn('labor_cost')} AS labor_cost, ${optionalColumn('total_cost')} AS total_cost FROM maintenance_schedules ${whereClause} ORDER BY ${dateOrder} DESC`,
+        `SELECT id, ${optionalColumn('work_order_number')} AS work_order_number, ${optionalColumn('vehicle_id')} AS vehicleId, title, status, ${optionalColumn('priority')} AS priority, ${optionalColumn('created_at')} AS created_at, ${optionalColumn('start_date')} AS start_date, ${optionalColumn('scheduled_date')} AS scheduled_date, assigned_mechanic, account_type, checklist_template_id, ${optionalColumn('garage_id')} AS garage_id, odometer_reading, trigger_type, ${optionalColumn('interval_km')} AS interval_km, ${optionalColumn('buffer_distance_km')} AS buffer_distance_km, ${optionalColumn('starting_reference_reading_km')} AS starting_reference_reading_km, ${optionalColumn('interval_type')} AS interval_type, ${optionalColumn('start_reference_date')} AS start_reference_date, ${optionalColumn('previous_schedule_id')} AS previous_schedule_id, ${optionalColumn('work_order_progress')} AS work_order_progress, ${optionalColumn('approval_status')} AS approval_status, ${optionalColumn('parts_cost')} AS parts_cost, ${optionalColumn('labor_cost')} AS labor_cost, ${optionalColumn('total_cost')} AS total_cost FROM maintenance_schedules ${whereClause} ORDER BY ${dateOrder} DESC`,
       );
 
       return rows.map((r) => {
@@ -353,6 +356,7 @@ export class MaintenanceSchedulesService {
           vehicleId: r.vehicleId ?? '',
           title: r.title ?? '',
           status: r.status ?? MaintenanceStatus.PENDING,
+          priority: r.priority ?? MaintenancePriority.MEDIUM,
           date: this.formatDateOnly(r.created_at ?? r.scheduled_date ?? null),
           startDate: this.formatDateOnly(r.start_date ?? null),
           assignedMechanic: r.assigned_mechanic ?? null,
@@ -409,6 +413,7 @@ export class MaintenanceSchedulesService {
         vehicleId: data.vehicleId,
         startDate,
         status: data.status ?? MaintenanceStatus.PENDING,
+        priority: data.priority ?? MaintenancePriority.MEDIUM,
         ...await this.resolveAssignedMechanic(data),
         chiefMechanicId,
         chiefMechanic,
@@ -444,6 +449,7 @@ export class MaintenanceSchedulesService {
       vehicleId: schedule.vehicleId,
       title: schedule.title,
       status: schedule.status,
+      priority: schedule.priority,
       date: schedule.createdAt.toISOString().slice(0, 10),
       startDate: this.formatDateOnly(schedule.startDate),
       assignedMechanic: schedule.assignedMechanic,
@@ -513,6 +519,7 @@ export class MaintenanceSchedulesService {
           vehicleId: data.vehicleId,
           startDate,
           status: data.status ?? MaintenanceStatus.PENDING,
+          priority: data.priority ?? previous.priority,
           ...await this.resolveAssignedMechanic(data),
           chiefMechanicId: chiefMechanicId ?? previous.chiefMechanicId,
           chiefMechanic: chiefMechanic ?? previous.chiefMechanic,
@@ -561,6 +568,7 @@ export class MaintenanceSchedulesService {
       vehicleId: schedule.vehicleId,
       title: schedule.title,
       status: schedule.status,
+      priority: schedule.priority,
       date: this.formatDateOnly(schedule.createdAt),
       startDate: this.formatDateOnly(schedule.startDate),
       assignedMechanic: schedule.assignedMechanic,
@@ -588,6 +596,28 @@ export class MaintenanceSchedulesService {
       laborCost: costs.laborCost,
       totalCost: costs.totalCost,
     };
+  }
+
+  async updatePriority(id: string, priority: MaintenancePriority, actor: ScheduleActor) {
+    const canEditPriority = actor?.roles?.some(
+      (role) => role.system === 'VMMS' && ['ADMIN', 'OPERATIONS'].includes(role.role),
+    );
+    if (!actor?.sub || !canEditPriority) {
+      throw new ForbiddenException('Only Admin or Operations can change work-order priority.');
+    }
+    const schedule = await this.prisma.maintenanceSchedule.findUnique({
+      where: { id },
+      select: { id: true, status: true },
+    });
+    if (!schedule) throw new NotFoundException('Work order not found.');
+    if (schedule.status === MaintenanceStatus.COMPLETED || schedule.status === MaintenanceStatus.CANCELLED) {
+      throw new ForbiddenException('Priority cannot be changed on a closed work order.');
+    }
+    return this.prisma.maintenanceSchedule.update({
+      where: { id },
+      data: { priority },
+      select: { id: true, priority: true },
+    });
   }
 
   async cancel(id: string, reason: unknown, actor: ScheduleActor) {
@@ -1057,6 +1087,7 @@ export class MaintenanceSchedulesService {
         title: schedule.title,
         garageId: schedule.garageId,
         status: MaintenanceStatus.PENDING,
+        priority: schedule.priority,
         assignedMechanic: schedule.assignedMechanic,
           assignedMechanicId: schedule.assignedMechanicId,
         chiefMechanicId: schedule.chiefMechanicId,

@@ -82,28 +82,28 @@ enum MaintenanceIntervalType {
 // ==========================================
 
 model User {
-  id                  String               @id @default(uuid()) @db.Uuid
-  name                String               @db.VarChar(100)
-  email               String               @unique @map("email") @db.VarChar(255)
-  emailVerified       Boolean              @default(false) @map("email_verified")
-  passwordHash        String               @map("password_hash") @db.VarChar(255)
-  contact             String?              @db.VarChar(100)
-  profilePicture      String?              @map("profile_picture") @db.Text
-  isActive            Boolean              @default(true) @map("is_active")
-  failedLoginAttempts Int                  @default(0) @map("failed_login_attempts")
-  lockedAt            DateTime?            @map("locked_at") @db.Timestamptz(6)
-  deletedAt           DateTime?            @map("deleted_at") @db.Timestamptz(6)
-  createdAt           DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt           DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
-  roles               UserRoleAssignment[]
-  mechanic            Mechanic?
-  notifications      Notification[]
+  id                       String                    @id @default(uuid()) @db.Uuid
+  name                     String                    @db.VarChar(100)
+  email                    String                    @unique @map("email") @db.VarChar(255)
+  emailVerified            Boolean                   @default(false) @map("email_verified")
+  passwordHash             String                    @map("password_hash") @db.VarChar(255)
+  contact                  String?                   @db.VarChar(100)
+  profilePicture           String?                   @map("profile_picture") @db.Text
+  isActive                 Boolean                   @default(true) @map("is_active")
+  failedLoginAttempts      Int                       @default(0) @map("failed_login_attempts")
+  lockedAt                 DateTime?                 @map("locked_at") @db.Timestamptz(6)
+  deletedAt                DateTime?                 @map("deleted_at") @db.Timestamptz(6)
+  createdAt                DateTime                  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  roles                    UserRoleAssignment[]
+  mechanic                 Mechanic?
+  notifications            Notification[]
   maintenanceNotifications MaintenanceNotification[]
-  passwordResetTokens PasswordResetToken[]
-  refreshTokens       RefreshToken[]
-  loginActivities     LoginActivity[]
-  chiefMechanicSchedules MaintenanceSchedule[] @relation("ScheduleChiefMechanic")
-  assignedSchedules MaintenanceSchedule[] @relation("ScheduleMechanic")
+  passwordResetTokens      PasswordResetToken[]
+  refreshTokens            RefreshToken[]
+  loginActivities          LoginActivity[]
+  chiefMechanicSchedules   MaintenanceSchedule[]     @relation("ScheduleChiefMechanic")
+  assignedSchedules        MaintenanceSchedule[]     @relation("ScheduleMechanic")
 
   @@index([deletedAt])
   @@map("users")
@@ -140,38 +140,38 @@ model UserRoleAssignment {
 }
 
 model Vehicle {
-  id            String         @id @default(uuid()) @db.Uuid
-  plateNumber   String         @unique @map("plate_number") @db.VarChar(20)
-  make          String?        @db.VarChar(80)
-  model         String         @db.VarChar(100)
-  year          Int?
-  engineType    String?        @map("engine_type") @db.VarChar(50)
-  truckSizeCategory String?    @map("truck_size_category") @db.VarChar(50)
-  capacity      Int            @default(0) @map("capacity")
-  status        VehicleStatus  @default(AVAILABLE)
-  odometer      Int            @default(0)
-  garageId      String?        @map("garage_id") @db.Uuid
-  workOrders    WorkOrder[]
-  isActive      Boolean        @default(true) @map("is_active")
-  deletedAt     DateTime?      @map("deleted_at") @db.Timestamptz(6)
-  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt     DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
-  auditLogs     VehicleAuditLog[]
-  garage        Garage?        @relation(fields: [garageId], references: [id], onDelete: Restrict)
+  id                String            @id @default(uuid()) @db.Uuid
+  plateNumber       String            @unique @map("plate_number") @db.VarChar(20)
+  make              String?           @db.VarChar(80)
+  model             String            @db.VarChar(100)
+  year              Int?
+  engineType        String?           @map("engine_type") @db.VarChar(50)
+  truckSizeCategory String?           @map("truck_size_category") @db.VarChar(50)
+  capacity          Int               @default(0) @map("capacity")
+  status            VehicleStatus     @default(AVAILABLE)
+  odometer          Int               @default(0)
+  garageId          String?           @map("garage_id") @db.Uuid
+  workOrders        WorkOrder[]
+  isActive          Boolean           @default(true) @map("is_active")
+  deletedAt         DateTime?         @map("deleted_at") @db.Timestamptz(6)
+  createdAt         DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+  auditLogs         VehicleAuditLog[]
+  garage            Garage?           @relation(fields: [garageId], references: [id], onDelete: Restrict)
 
   @@index([deletedAt])
   @@map("vehicles")
 }
 
 model Garage {
-  id            String         @id @default(uuid()) @db.Uuid
-  name          String         @unique @db.VarChar(50) // Sta. Rosa, Marikina, Pulilan
-  isActive      Boolean        @default(true) @map("is_active")
-  deletedAt     DateTime?      @map("deleted_at") @db.Timestamptz(6)
-  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt     DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
-  vehicles      Vehicle[]
-  workOrders    WorkOrder[]
+  id         String      @id @default(uuid()) @db.Uuid
+  name       String      @unique @db.VarChar(50) // Sta. Rosa, Marikina, Pulilan
+  isActive   Boolean     @default(true) @map("is_active")
+  deletedAt  DateTime?   @map("deleted_at") @db.Timestamptz(6)
+  createdAt  DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+  vehicles   Vehicle[]
+  workOrders WorkOrder[]
 
   @@index([deletedAt])
   @@map("garages")
@@ -187,9 +187,16 @@ model Mechanic {
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  user          User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
-  workOrders    WorkOrder[]    @relation("WorkOrderMechanics")
+  user       User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  workOrders WorkOrder[] @relation("WorkOrderMechanics")
+
   @@map("mechanics")
+}
+
+enum MaintenancePriority {
+  HIGH
+  MEDIUM
+  LOW
 }
 
 model WorkOrder {
@@ -216,10 +223,10 @@ model WorkOrder {
   updatedAt                DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
   completedAt              DateTime?       @map("completed_at") @db.Timestamptz(6)
 
-  vehicle        Vehicle          @relation(fields: [vehicleId], references: [id])
-  garage         Garage           @relation(fields: [garageId], references: [id])
+  vehicle        Vehicle         @relation(fields: [vehicleId], references: [id])
+  garage         Garage          @relation(fields: [garageId], references: [id])
   issues         RepairIssue[]
-  mechanics      Mechanic[]       @relation("WorkOrderMechanics")
+  mechanics      Mechanic[]      @relation("WorkOrderMechanics")
   repairParts    RepairPart[]
   shopChangeLogs ShopChangeLog[]
   auditLogs      AuditLog[]
@@ -285,6 +292,7 @@ model AuditLog {
   @@index([workOrderId, createdAt])
   @@map("audit_logs")
 }
+
 model VehicleAuditLog {
   id            String   @id @default(uuid()) @db.Uuid
   vehicleId     String   @map("vehicle_id") @db.Uuid
@@ -304,13 +312,13 @@ model VehicleAuditLog {
 }
 
 model ChecklistTemplate {
-  id        String            @id @default(uuid()) @db.Uuid
-  type      String            @db.VarChar(100) // Oil Change, Brake Inspection, etc.
+  id        String                @id @default(uuid()) @db.Uuid
+  type      String                @db.VarChar(100) // Oil Change, Brake Inspection, etc.
   items     ChecklistItem[]
   schedules MaintenanceSchedule[]
-  deletedAt DateTime?         @map("deleted_at") @db.Timestamptz(6)
-  createdAt DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt DateTime?             @map("deleted_at") @db.Timestamptz(6)
+  createdAt DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   @@unique([type])
   @@index([deletedAt])
@@ -318,13 +326,13 @@ model ChecklistTemplate {
 }
 
 model ChecklistItem {
-  id                 String   @id @default(uuid()) @db.Uuid
-  checklistTemplateId String  @map("checklist_template_id") @db.Uuid
-  text               String   @db.Text
-  order              Int      @default(0)
-  deletedAt          DateTime? @map("deleted_at") @db.Timestamptz(6)
-  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt          DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id                  String    @id @default(uuid()) @db.Uuid
+  checklistTemplateId String    @map("checklist_template_id") @db.Uuid
+  text                String    @db.Text
+  order               Int       @default(0)
+  deletedAt           DateTime? @map("deleted_at") @db.Timestamptz(6)
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   checklistTemplate ChecklistTemplate @relation(fields: [checklistTemplateId], references: [id], onDelete: Cascade)
 
@@ -334,46 +342,47 @@ model ChecklistItem {
 }
 
 model MaintenanceSchedule {
-  id                       String            @id @default(uuid()) @db.Uuid
-  workOrderNumber          String            @unique @default(dbgenerated("('WO-'::text || to_char(CURRENT_DATE, 'YYYYMMDD'::text) || '-'::text || lpad(nextval('maintenance_schedule_work_order_number_seq'::regclass)::text, 6, '0'::text))")) @map("work_order_number") @db.VarChar(32)
-  vehicleId                String            @db.VarChar(50)
-  title                    String            @db.VarChar(100)
-  garageId                 String?           @map("garage_id") @db.VarChar(50)
-  status                   MaintenanceStatus @default(PENDING)
-  approvalStatus           MaintenanceApprovalStatus @default(UNVERIFIED) @map("approval_status")
-  assignedMechanic         String            @map("assigned_mechanic") @db.VarChar(100)
-  assignedMechanicId       String?           @map("assigned_mechanic_id") @db.Uuid
-  chiefMechanicId          String?           @map("chief_mechanic_id") @db.Uuid
-  chiefMechanic            String?           @map("chief_mechanic") @db.VarChar(100)
-  accountType              AccountType?      @map("account_type")
-  checklistTemplateId      String?           @map("checklist_template_id") @db.Uuid
-  odometerReading          Int?              @map("odometer_reading")
-  triggerType              MaintenanceTriggerType? @map("trigger_type")
-  intervalKm               Int?              @map("interval_km")
-  bufferDistanceKm         Int?              @map("buffer_distance_km")
-  startingReferenceReadingKm Int?           @map("starting_reference_reading_km")
-  intervalType             MaintenanceIntervalType? @map("interval_type")
-  timeIntervalValue        Int? @map("time_interval_value")
-  timeIntervalUnit         String? @map("time_interval_unit") @db.VarChar(6)
-  startReferenceDate       DateTime?         @map("start_reference_date") @db.Timestamptz(6)
-  startDate                DateTime?         @map("start_date") @db.Date
-  previousScheduleId       String?           @unique @map("previous_schedule_id") @db.Uuid
-  workOrderProgress        Json?             @map("work_order_progress")
-  partsCost                Decimal?          @map("parts_cost") @db.Decimal(10, 2)
-  laborCost                Decimal?          @map("labor_cost") @db.Decimal(10, 2)
-  totalCost                Decimal?          @map("total_cost") @db.Decimal(10, 2)
-  deletedAt                DateTime?         @map("deleted_at") @db.Timestamptz(6)
-  completedAt              DateTime?         @map("completed_at") @db.Timestamptz(6)
-  createdAt                DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt                DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id                         String                    @id @default(uuid()) @db.Uuid
+  workOrderNumber            String                    @unique @default(dbgenerated("('WO-'::text || to_char(CURRENT_DATE, 'YYYYMMDD'::text) || '-'::text || lpad(nextval('maintenance_schedule_work_order_number_seq'::regclass)::text, 6, '0'::text))")) @map("work_order_number") @db.VarChar(32)
+  vehicleId                  String                    @db.VarChar(50)
+  title                      String                    @db.VarChar(100)
+  garageId                   String?                   @map("garage_id") @db.VarChar(50)
+  status                     MaintenanceStatus         @default(PENDING)
+  priority                   MaintenancePriority       @default(MEDIUM)
+  approvalStatus             MaintenanceApprovalStatus @default(UNVERIFIED) @map("approval_status")
+  assignedMechanic           String                    @map("assigned_mechanic") @db.VarChar(100)
+  assignedMechanicId         String?                   @map("assigned_mechanic_id") @db.Uuid
+  chiefMechanicId            String?                   @map("chief_mechanic_id") @db.Uuid
+  chiefMechanic              String?                   @map("chief_mechanic") @db.VarChar(100)
+  accountType                AccountType?              @map("account_type")
+  checklistTemplateId        String?                   @map("checklist_template_id") @db.Uuid
+  odometerReading            Int?                      @map("odometer_reading")
+  triggerType                MaintenanceTriggerType?   @map("trigger_type")
+  intervalKm                 Int?                      @map("interval_km")
+  bufferDistanceKm           Int?                      @map("buffer_distance_km")
+  startingReferenceReadingKm Int?                      @map("starting_reference_reading_km")
+  intervalType               MaintenanceIntervalType?  @map("interval_type")
+  timeIntervalValue          Int?                      @map("time_interval_value")
+  timeIntervalUnit           String?                   @map("time_interval_unit") @db.VarChar(6)
+  startReferenceDate         DateTime?                 @map("start_reference_date") @db.Timestamptz(6)
+  startDate                  DateTime?                 @map("start_date") @db.Date
+  previousScheduleId         String?                   @unique @map("previous_schedule_id") @db.Uuid
+  workOrderProgress          Json?                     @map("work_order_progress")
+  partsCost                  Decimal?                  @map("parts_cost") @db.Decimal(10, 2)
+  laborCost                  Decimal?                  @map("labor_cost") @db.Decimal(10, 2)
+  totalCost                  Decimal?                  @map("total_cost") @db.Decimal(10, 2)
+  deletedAt                  DateTime?                 @map("deleted_at") @db.Timestamptz(6)
+  completedAt                DateTime?                 @map("completed_at") @db.Timestamptz(6)
+  createdAt                  DateTime                  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                  DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  chiefMechanicUser  User?              @relation("ScheduleChiefMechanic", fields: [chiefMechanicId], references: [id], onDelete: SetNull)
-  assignedMechanicUser User? @relation("ScheduleMechanic", fields: [assignedMechanicId], references: [id], onDelete: SetNull)
-    notifications MaintenanceNotification[]
-    cancellations MaintenanceScheduleCancellation[]
-  checklistTemplate ChecklistTemplate? @relation(fields: [checklistTemplateId], references: [id], onDelete: SetNull)
-  previousSchedule   MaintenanceSchedule? @relation("MaintenanceScheduleRecurrence", fields: [previousScheduleId], references: [id], onDelete: SetNull)
-  nextSchedule       MaintenanceSchedule? @relation("MaintenanceScheduleRecurrence")
+  chiefMechanicUser    User?                             @relation("ScheduleChiefMechanic", fields: [chiefMechanicId], references: [id], onDelete: SetNull)
+  assignedMechanicUser User?                             @relation("ScheduleMechanic", fields: [assignedMechanicId], references: [id], onDelete: SetNull)
+  notifications        MaintenanceNotification[]
+  cancellations        MaintenanceScheduleCancellation[]
+  checklistTemplate    ChecklistTemplate?                @relation(fields: [checklistTemplateId], references: [id], onDelete: SetNull)
+  previousSchedule     MaintenanceSchedule?              @relation("MaintenanceScheduleRecurrence", fields: [previousScheduleId], references: [id], onDelete: SetNull)
+  nextSchedule         MaintenanceSchedule?              @relation("MaintenanceScheduleRecurrence")
 
   @@index([chiefMechanicId])
   @@index([assignedMechanicId])
@@ -387,15 +396,15 @@ model MaintenanceSchedule {
 // ==========================================
 
 model MaintenanceScheduleCancellation {
-  id String @id @default(uuid()) @db.Uuid
-  scheduleId String @map("schedule_id") @db.Uuid
-  actorId String @map("actor_id") @db.Uuid
-  actorName String @map("actor_name") @db.VarChar(100)
-  actorEmail String @map("actor_email") @db.VarChar(255)
-  reason String @db.Text
-  previousStatus MaintenanceStatus @map("previous_status")
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  schedule MaintenanceSchedule @relation(fields: [scheduleId], references: [id], onDelete: Restrict)
+  id             String              @id @default(uuid()) @db.Uuid
+  scheduleId     String              @map("schedule_id") @db.Uuid
+  actorId        String              @map("actor_id") @db.Uuid
+  actorName      String              @map("actor_name") @db.VarChar(100)
+  actorEmail     String              @map("actor_email") @db.VarChar(255)
+  reason         String              @db.Text
+  previousStatus MaintenanceStatus   @map("previous_status")
+  createdAt      DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  schedule       MaintenanceSchedule @relation(fields: [scheduleId], references: [id], onDelete: Restrict)
 
   @@index([scheduleId, createdAt])
   @@map("maintenance_schedule_cancellations")
@@ -418,17 +427,18 @@ model LoginActivity {
 }
 
 model MaintenanceNotification {
-  id String @id @default(uuid()) @db.Uuid
-  userId String @map("user_id") @db.Uuid
-  scheduleId String @map("schedule_id") @db.Uuid
-  kind String @db.VarChar(20)
-  message String @db.Text
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  readAt DateTime? @map("read_at") @db.Timestamptz(6)
-  smsStatus String @default("PENDING") @map("sms_status") @db.VarChar(20)
-  smsProviderId String? @map("sms_provider_id") @db.VarChar(100)
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  schedule MaintenanceSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  id            String              @id @default(uuid()) @db.Uuid
+  userId        String              @map("user_id") @db.Uuid
+  scheduleId    String              @map("schedule_id") @db.Uuid
+  kind          String              @db.VarChar(20)
+  message       String              @db.Text
+  createdAt     DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  readAt        DateTime?           @map("read_at") @db.Timestamptz(6)
+  smsStatus     String              @default("PENDING") @map("sms_status") @db.VarChar(20)
+  smsProviderId String?             @map("sms_provider_id") @db.VarChar(100)
+  user          User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  schedule      MaintenanceSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+
   @@unique([userId, scheduleId, kind])
   @@index([userId, createdAt])
   @@map("maintenance_notifications")
@@ -447,13 +457,13 @@ model PasswordResetToken {
 }
 
 model RefreshToken {
-  id        String   @id @default(cuid())
-  userId    String   @map("user_id") @db.Uuid
-  tokenHash String   @unique @map("token_hash")
-  clientPlatform String @map("client_platform") @db.VarChar(10)
-  expiresAt DateTime @map("expires_at") @db.Timestamptz(6)
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id             String   @id @default(cuid())
+  userId         String   @map("user_id") @db.Uuid
+  tokenHash      String   @unique @map("token_hash")
+  clientPlatform String   @map("client_platform") @db.VarChar(10)
+  expiresAt      DateTime @map("expires_at") @db.Timestamptz(6)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, expiresAt])
   @@map("refresh_tokens")

@@ -26,6 +26,7 @@ import { SystemType, UserRole } from '@prisma/client';
 import { MaintenanceSchedulesService } from './maintenance-schedules.service';
 import { CreateMaintenanceScheduleDto } from './dto/create-maintenance-schedule.dto';
 import { CancelMaintenanceScheduleDto } from './dto/cancel-maintenance-schedule.dto';
+import { UpdateWorkOrderPriorityDto } from './dto/update-work-order-priority.dto';
 
 type WorkOrderUploadFile = { originalname: string; mimetype: string; size: number; buffer: Buffer };
 
@@ -62,6 +63,16 @@ export class MaintenanceSchedulesController {
     @Body() body: CreateMaintenanceScheduleDto,
   ) {
     return this.maintenanceSchedulesService.update(id, body);
+  }
+
+  @Roles(UserRole.ADMIN, UserRole.OPERATIONS)
+  @Patch(':id/priority')
+  async updatePriority(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: UpdateWorkOrderPriorityDto,
+    @Req() req: { user: ScheduleActor },
+  ) {
+    return this.maintenanceSchedulesService.updatePriority(id, body.priority, req.user);
   }
 
   @Roles(UserRole.OPERATIONS)
