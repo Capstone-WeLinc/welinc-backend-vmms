@@ -5,6 +5,8 @@ import {
   AccountType,
   MaintenanceTriggerType,
   MaintenanceIntervalType,
+  SystemType,
+  UserRole,
 } from '@prisma/client';
 
 export async function seedVmms(prisma: PrismaClient) {
@@ -24,6 +26,18 @@ export async function seedVmms(prisma: PrismaClient) {
   const missingMechanic = seededMechanicNames.find((name) => !mechanicsByName.has(name));
   if (missingMechanic) throw new Error(`Cannot seed maintenance schedules: in-house mechanic "${missingMechanic}" is missing.`);
   const mechanics = seededMechanicNames.map((name) => mechanicsByName.get(name)!);
+  const chiefMechanics = await prisma.user.findMany({
+    where: {
+      deletedAt: null,
+      isActive: true,
+      roles: { some: { system: SystemType.VMMS, role: UserRole.CHIEF_MECHANIC } },
+    },
+    orderBy: { email: 'asc' },
+    select: { id: true, name: true, email: true },
+  });
+  if (!chiefMechanics.length) {
+    throw new Error('Cannot seed maintenance schedules: no active VMMS Chief Mechanic users exist. Run the users seed first.');
+  }
 
   const checklistTemplatesData = [
     {
@@ -1140,13 +1154,16 @@ export async function seedVmms(prisma: PrismaClient) {
       intervalType: MaintenanceIntervalType.MONTHLY,
       startReferenceDate: new Date('2026-08-20T00:00:00.000Z'),
     },
-  ].map((schedule) => {
+  ].map((schedule, index) => {
     const vehicle = vehicles.find((entry) => entry.plateNumber === schedule.vehicleId);
     if (!vehicle?.garageId) throw new Error(`Cannot seed schedule for ${schedule.vehicleId}: vehicle garage assignment is missing.`);
+    const chiefMechanic = chiefMechanics[index % chiefMechanics.length];
     return {
     ...schedule,
     garageId: vehicle.garageId,
     startDate: schedule.createdAt,
+    chiefMechanicId: chiefMechanic.id,
+    chiefMechanic: chiefMechanic.name,
     assignedMechanicId: resolveSeedMechanicId(
       schedule.assignedMechanic,
       schedule.accountType,
@@ -1231,6 +1248,8 @@ export async function seedVmms(prisma: PrismaClient) {
         status: seedStatus,
         assignedMechanic: completedSchedule.assignedMechanic,
         assignedMechanicId: completedSchedule.assignedMechanicId,
+        chiefMechanicId: completedSchedule.chiefMechanicId,
+        chiefMechanic: completedSchedule.chiefMechanic,
         accountType: completedSchedule.accountType,
         checklistTemplateId: completedSchedule.checklistTemplateId,
         garageId: completedSchedule.garageId,

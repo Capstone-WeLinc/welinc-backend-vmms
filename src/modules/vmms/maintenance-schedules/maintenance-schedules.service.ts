@@ -51,6 +51,13 @@ export class MaintenanceSchedulesService {
     }
   }
 
+  private canViewMaintenanceCosts(actor?: ScheduleActor): boolean {
+    if (!actor) return true;
+    return actor.roles.some(({ role, system }) =>
+      system === 'VMMS' && ['ADMIN', 'OPERATIONS', 'CHIEF_MECHANIC'].includes(role),
+    );
+  }
+
   async uploadAttachment(id: string, itemId: string, file: WorkOrderUploadFile | undefined, actor: ScheduleActor) {
     if (!file) throw new BadRequestException('Choose a supported file no larger than 5 MB.');
     if (!itemId?.trim()) throw new BadRequestException('A checklist item is required.');
@@ -242,6 +249,7 @@ export class MaintenanceSchedulesService {
 
   async findAll(actor?: ScheduleActor) {
     const scope = actor ? scheduleScope(actor) : {};
+    const includeCosts = this.canViewMaintenanceCosts(actor);
     try {
       const schedules = await this.prisma.maintenanceSchedule.findMany({
         where: { deletedAt: null, ...scope },
@@ -288,9 +296,11 @@ export class MaintenanceSchedulesService {
           previousScheduleId: schedule.previousScheduleId ?? null,
           approvalStatus: schedule.approvalStatus,
       workOrderProgress: progressForClient(schedule),
-          partsCost: costs.partsCost,
-          laborCost: costs.laborCost,
-          totalCost: costs.totalCost,
+          ...(includeCosts ? {
+            partsCost: costs.partsCost,
+            laborCost: costs.laborCost,
+            totalCost: costs.totalCost,
+          } : {}),
         };
       });
     } catch (err) {
@@ -381,9 +391,11 @@ export class MaintenanceSchedulesService {
           previousScheduleId: r.previous_schedule_id ?? null,
           approvalStatus: r.approval_status,
           workOrderProgress: progressForClient({ status: r.status, approvalStatus: r.approval_status, workOrderProgress: r.work_order_progress }),
-          partsCost: costs.partsCost,
-          laborCost: costs.laborCost,
-          totalCost: costs.totalCost,
+          ...(includeCosts ? {
+            partsCost: costs.partsCost,
+            laborCost: costs.laborCost,
+            totalCost: costs.totalCost,
+          } : {}),
         };
       });
     }
@@ -768,9 +780,11 @@ export class MaintenanceSchedulesService {
       nextSchedule: nextSchedule ? { id: nextSchedule.id, ...scheduleDue(nextSchedule) } : null,
       approvalStatus: schedule.approvalStatus,
       workOrderProgress: progressForClient(schedule),
-      partsCost: costs.partsCost,
-      laborCost: costs.laborCost,
-      totalCost: costs.totalCost,
+      ...(this.canViewMaintenanceCosts(actor) ? {
+        partsCost: costs.partsCost,
+        laborCost: costs.laborCost,
+        totalCost: costs.totalCost,
+      } : {}),
     };
   }
 
