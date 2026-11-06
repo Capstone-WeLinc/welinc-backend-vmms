@@ -194,6 +194,12 @@ export class AuthController {
     return this.authService.getCurrentUser(req.user.sub);
   }
 
+  @UseGuards(JwtAuthGuard)
+  @Get('me/login-activity')
+  getMyLoginActivity(@Req() req: { user: { sub: string } }) {
+    return this.authService.getLoginActivity(req.user.sub);
+  }
+
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
   @Get('users')
