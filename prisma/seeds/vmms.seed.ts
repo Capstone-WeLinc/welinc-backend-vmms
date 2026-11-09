@@ -1,4 +1,5 @@
 import { stateForStorage } from '../../src/modules/vmms/maintenance-schedules/work-order-state';
+import { addTimeInterval, getTimeInterval } from '../../src/modules/vmms/maintenance-schedules/time-interval';
 import {
   PrismaClient,
   MaintenanceStatus,
@@ -26,6 +27,13 @@ export async function seedVmms(prisma: PrismaClient) {
   const missingMechanic = seededMechanicNames.find((name) => !mechanicsByName.has(name));
   if (missingMechanic) throw new Error(`Cannot seed maintenance schedules: in-house mechanic "${missingMechanic}" is missing.`);
   const mechanics = seededMechanicNames.map((name) => mechanicsByName.get(name)!);
+  const sampleTargetDueDate = (schedule: any) => {
+    const baseDate = new Date(schedule.startReferenceDate ?? schedule.startDate ?? schedule.createdAt ?? new Date());
+    const interval = getTimeInterval(schedule);
+    return schedule.triggerType === MaintenanceTriggerType.TIME && interval
+      ? addTimeInterval(baseDate, interval)
+      : new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
+  };
   const chiefMechanics = await prisma.user.findMany({
     where: {
       deletedAt: null,
@@ -196,6 +204,7 @@ export async function seedVmms(prisma: PrismaClient) {
       vehicleId: vehicles[2].plateNumber, // WOB 2947
       title: generalInspectionTemplate?.type ?? 'General Inspection',
       status: MaintenanceStatus.COMPLETED,
+      maintenanceClass: 'PREVENTIVE',
       createdAt: new Date('2026-06-14T00:00:00.000Z'),
       assignedMechanic: mechanics[1].name, // Pedro Santos
       accountType: AccountType.OUTSOURCED,
@@ -245,6 +254,7 @@ export async function seedVmms(prisma: PrismaClient) {
       vehicleId: vehicles[3].plateNumber, // PXW 382
       title: generalInspectionTemplate?.type ?? 'General Inspection',
       status: MaintenanceStatus.COMPLETED,
+      maintenanceClass: 'PREVENTIVE',
       createdAt: new Date('2026-06-15T00:00:00.000Z'),
       assignedMechanic: mechanics[3].name, // Isabel Reyes
       accountType: AccountType.IN_HOUSE,
@@ -353,6 +363,7 @@ export async function seedVmms(prisma: PrismaClient) {
       vehicleId: vehicles[2].plateNumber, // WOB 2947
       title: brakeInspectionTemplate?.type ?? 'Brake Inspection',
       status: MaintenanceStatus.COMPLETED,
+      maintenanceClass: 'PREVENTIVE',
       createdAt: new Date('2026-06-21T00:00:00.000Z'),
       assignedMechanic: mechanics[2].name, // Rommel Cruz
       accountType: AccountType.OUTSOURCED,
@@ -447,6 +458,7 @@ export async function seedVmms(prisma: PrismaClient) {
       vehicleId: vehicles[0].plateNumber, // NDG 5821
       title: engineTuneupTemplate?.type ?? 'Engine Tune-up',
       status: MaintenanceStatus.COMPLETED,
+      maintenanceClass: 'PREVENTIVE',
       createdAt: new Date('2026-05-10T00:00:00.000Z'),
       assignedMechanic: mechanics[0].name,
       accountType: AccountType.IN_HOUSE,
@@ -472,6 +484,7 @@ export async function seedVmms(prisma: PrismaClient) {
       vehicleId: vehicles[1].plateNumber, // CAK 9043
       title: oilChangeTemplate?.type ?? 'Oil Change',
       status: MaintenanceStatus.COMPLETED,
+      maintenanceClass: 'PREVENTIVE',
       createdAt: new Date('2026-04-12T00:00:00.000Z'),
       assignedMechanic: mechanics[1].name,
       accountType: AccountType.IN_HOUSE,
@@ -541,6 +554,7 @@ export async function seedVmms(prisma: PrismaClient) {
       vehicleId: vehicles[5].plateNumber, // NRE 471
       title: generalInspectionTemplate?.type ?? 'General Inspection',
       status: MaintenanceStatus.COMPLETED,
+      maintenanceClass: 'PREVENTIVE',
       createdAt: new Date('2026-05-20T00:00:00.000Z'),
       assignedMechanic: mechanics[4].name,
       accountType: AccountType.OUTSOURCED,
@@ -566,6 +580,7 @@ export async function seedVmms(prisma: PrismaClient) {
       vehicleId: vehicles[0].plateNumber, // NDG 5821
       title: brakeInspectionTemplate?.type ?? 'Brake Inspection',
       status: MaintenanceStatus.COMPLETED,
+      maintenanceClass: 'PREVENTIVE',
       createdAt: new Date('2026-03-05T00:00:00.000Z'),
       assignedMechanic: mechanics[0].name,
       accountType: AccountType.IN_HOUSE,
@@ -591,6 +606,7 @@ export async function seedVmms(prisma: PrismaClient) {
       vehicleId: vehicles[1].plateNumber, // CAK 9043
       title: tireRotationTemplate?.type ?? 'Tire Rotation',
       status: MaintenanceStatus.COMPLETED,
+      maintenanceClass: 'PREVENTIVE',
       createdAt: new Date('2026-02-18T00:00:00.000Z'),
       assignedMechanic: mechanics[1].name,
       accountType: AccountType.IN_HOUSE,
@@ -616,6 +632,7 @@ export async function seedVmms(prisma: PrismaClient) {
       vehicleId: vehicles[2].plateNumber, // WOB 2947
       title: oilChangeTemplate?.type ?? 'Oil Change',
       status: MaintenanceStatus.COMPLETED,
+      maintenanceClass: 'PREVENTIVE',
       createdAt: new Date('2026-01-25T00:00:00.000Z'),
       assignedMechanic: mechanics[2].name,
       accountType: AccountType.OUTSOURCED,
@@ -641,6 +658,7 @@ export async function seedVmms(prisma: PrismaClient) {
       vehicleId: vehicles[3].plateNumber, // PXW 382
       title: engineTuneupTemplate?.type ?? 'Engine Tune-up',
       status: MaintenanceStatus.COMPLETED,
+      maintenanceClass: 'PREVENTIVE',
       createdAt: new Date('2026-03-14T00:00:00.000Z'),
       assignedMechanic: mechanics[3].name,
       accountType: AccountType.IN_HOUSE,
@@ -666,6 +684,7 @@ export async function seedVmms(prisma: PrismaClient) {
       vehicleId: vehicles[4].plateNumber, // TGD 908
       title: brakeInspectionTemplate?.type ?? 'Brake Inspection',
       status: MaintenanceStatus.COMPLETED,
+      maintenanceClass: 'PREVENTIVE',
       createdAt: new Date('2026-02-10T00:00:00.000Z'),
       assignedMechanic: mechanics[0].name,
       accountType: AccountType.IN_HOUSE,
@@ -691,6 +710,7 @@ export async function seedVmms(prisma: PrismaClient) {
       vehicleId: vehicles[5].plateNumber, // NRE 471
       title: oilChangeTemplate?.type ?? 'Oil Change',
       status: MaintenanceStatus.COMPLETED,
+      maintenanceClass: 'PREVENTIVE',
       createdAt: new Date('2026-01-10T00:00:00.000Z'),
       assignedMechanic: mechanics[4].name,
       accountType: AccountType.OUTSOURCED,
@@ -804,6 +824,7 @@ export async function seedVmms(prisma: PrismaClient) {
       vehicleId: vehicles[0].plateNumber,
       title: 'Coolant Flush & Radiator Inspection',
       status: MaintenanceStatus.COMPLETED,
+      maintenanceClass: 'PREVENTIVE',
       createdAt: new Date('2026-01-15T00:00:00.000Z'),
       assignedMechanic: mechanics[0].name,
       accountType: AccountType.IN_HOUSE,
@@ -827,6 +848,7 @@ export async function seedVmms(prisma: PrismaClient) {
       vehicleId: vehicles[0].plateNumber,
       title: 'Transmission Fluid & Filter Service',
       status: MaintenanceStatus.COMPLETED,
+      maintenanceClass: 'PREVENTIVE',
       createdAt: new Date('2026-03-10T00:00:00.000Z'),
       assignedMechanic: mechanics[1].name,
       accountType: AccountType.OUTSOURCED,
@@ -864,6 +886,7 @@ export async function seedVmms(prisma: PrismaClient) {
       vehicleId: vehicles[1].plateNumber,
       title: 'Battery & Electrical System Check',
       status: MaintenanceStatus.COMPLETED,
+      maintenanceClass: 'PREVENTIVE',
       createdAt: new Date('2026-02-18T00:00:00.000Z'),
       assignedMechanic: mechanics[3].name,
       accountType: AccountType.IN_HOUSE,
@@ -887,6 +910,7 @@ export async function seedVmms(prisma: PrismaClient) {
       vehicleId: vehicles[1].plateNumber,
       title: 'Suspension & Wheel Alignment',
       status: MaintenanceStatus.COMPLETED,
+      maintenanceClass: 'PREVENTIVE',
       createdAt: new Date('2026-05-02T00:00:00.000Z'),
       assignedMechanic: mechanics[4].name,
       accountType: AccountType.OUTSOURCED,
@@ -922,6 +946,7 @@ export async function seedVmms(prisma: PrismaClient) {
       vehicleId: vehicles[2].plateNumber,
       title: 'Differential Oil Replacement',
       status: MaintenanceStatus.COMPLETED,
+      maintenanceClass: 'PREVENTIVE',
       createdAt: new Date('2026-01-28T00:00:00.000Z'),
       assignedMechanic: mechanics[1].name,
       accountType: AccountType.IN_HOUSE,
@@ -945,6 +970,7 @@ export async function seedVmms(prisma: PrismaClient) {
       vehicleId: vehicles[2].plateNumber,
       title: 'Fuel Filter Replacement',
       status: MaintenanceStatus.COMPLETED,
+      maintenanceClass: 'PREVENTIVE',
       createdAt: new Date('2026-04-15T00:00:00.000Z'),
       assignedMechanic: mechanics[2].name,
       accountType: AccountType.IN_HOUSE,
@@ -982,6 +1008,7 @@ export async function seedVmms(prisma: PrismaClient) {
       vehicleId: vehicles[3].plateNumber,
       title: 'Engine Valve Clearance Adjustment',
       status: MaintenanceStatus.COMPLETED,
+      maintenanceClass: 'PREVENTIVE',
       createdAt: new Date('2026-02-05T00:00:00.000Z'),
       assignedMechanic: mechanics[4].name,
       accountType: AccountType.IN_HOUSE,
@@ -1003,6 +1030,7 @@ export async function seedVmms(prisma: PrismaClient) {
       vehicleId: vehicles[3].plateNumber,
       title: 'Front & Rear Brake Pad Replacement',
       status: MaintenanceStatus.COMPLETED,
+      maintenanceClass: 'REPAIR',
       createdAt: new Date('2026-05-18T00:00:00.000Z'),
       assignedMechanic: mechanics[0].name,
       accountType: AccountType.OUTSOURCED,
@@ -1040,6 +1068,7 @@ export async function seedVmms(prisma: PrismaClient) {
       vehicleId: vehicles[4].plateNumber,
       title: 'Turbocharger & Intercooler Hose Check',
       status: MaintenanceStatus.COMPLETED,
+      maintenanceClass: 'PREVENTIVE',
       createdAt: new Date('2026-03-22T00:00:00.000Z'),
       assignedMechanic: mechanics[2].name,
       accountType: AccountType.IN_HOUSE,
@@ -1061,6 +1090,7 @@ export async function seedVmms(prisma: PrismaClient) {
       vehicleId: vehicles[4].plateNumber,
       title: 'Clutch Master & Slave Cylinder Service',
       status: MaintenanceStatus.COMPLETED,
+      maintenanceClass: 'REPAIR',
       createdAt: new Date('2026-06-05T00:00:00.000Z'),
       assignedMechanic: mechanics[3].name,
       accountType: AccountType.OUTSOURCED,
@@ -1098,6 +1128,7 @@ export async function seedVmms(prisma: PrismaClient) {
       vehicleId: vehicles[5].plateNumber,
       title: 'Heavy Duty Air Brake Dryer Cartridge Service',
       status: MaintenanceStatus.COMPLETED,
+      maintenanceClass: 'PREVENTIVE',
       createdAt: new Date('2026-01-10T00:00:00.000Z'),
       assignedMechanic: mechanics[0].name,
       accountType: AccountType.IN_HOUSE,
@@ -1121,6 +1152,7 @@ export async function seedVmms(prisma: PrismaClient) {
       vehicleId: vehicles[5].plateNumber,
       title: 'Diesel Particulate Filter (DPF) Cleaning',
       status: MaintenanceStatus.COMPLETED,
+      maintenanceClass: 'PREVENTIVE',
       createdAt: new Date('2026-04-20T00:00:00.000Z'),
       assignedMechanic: mechanics[1].name,
       accountType: AccountType.OUTSOURCED,
@@ -1244,6 +1276,7 @@ export async function seedVmms(prisma: PrismaClient) {
       data: {
         vehicleId: completedSchedule.vehicleId,
         startDate: nextDate,
+        targetDueDate: sampleTargetDueDate({ ...completedSchedule, startReferenceDate: nextDate, startDate: nextDate, createdAt: nextDate }),
         title: completedSchedule.title,
         status: seedStatus,
         assignedMechanic: completedSchedule.assignedMechanic,
@@ -1271,12 +1304,44 @@ export async function seedVmms(prisma: PrismaClient) {
   for (const schedule of maintenanceSchedulesData) {
     assertCompletedScheduleHasProgress(schedule);
 
-
-    const persistedSchedule = { ...schedule, ...stateForStorage((schedule.workOrderProgress ?? {}) as Record<string, any>, schedule.status) };
+    const isMaintenanceLog = schedule.status === MaintenanceStatus.COMPLETED;
+    const maintenanceClass = (schedule as typeof schedule & { maintenanceClass?: 'REPAIR' | 'PREVENTIVE' }).maintenanceClass;
+    if (isMaintenanceLog && !maintenanceClass) {
+      throw new Error(`Completed sample schedule "${schedule.title}" requires an explicit Repair or Preventive classification.`);
+    }
+    const scheduleData = { ...schedule } as Record<string, any>;
+    delete scheduleData.maintenanceClass;
+    scheduleData.targetDueDate = scheduleData.targetDueDate ?? sampleTargetDueDate(scheduleData);
+    scheduleData.targetDueDate = scheduleData.targetDueDate ?? sampleTargetDueDate(scheduleData);
+    const [generatedLog] = isMaintenanceLog
+      ? await prisma.$queryRaw<Array<{ logNumber: string }>>`
+        WITH next_log_number AS (
+          SELECT NEXTVAL('maintenance_log_number_seq') AS value
+        )
+        SELECT 'MLG-' || TO_CHAR(${schedule.createdAt}::timestamptz AT TIME ZONE 'Asia/Manila', 'YYYYMMDD') || '-' ||
+          LPAD(next_log_number.value::TEXT, GREATEST(4, LENGTH(next_log_number.value::TEXT)), '0') AS "logNumber"
+        FROM next_log_number
+      `
+      : [];
+    const persistedSchedule = {
+      ...scheduleData,
+      ...(generatedLog?.logNumber ? { logNumber: generatedLog.logNumber } : {}),
+      ...stateForStorage({
+        ...((schedule.workOrderProgress ?? {}) as Record<string, any>),
+        ...(isMaintenanceLog ? {
+          maintenanceClass,
+          maintenanceRemarks:
+            (schedule.workOrderProgress as Record<string, unknown> | undefined)?.maintenanceRemarks ??
+            `Sample maintenance record: ${schedule.title} service completed.`,
+          serviceOdometerReading: schedule.odometerReading,
+          laborCost: schedule.laborCost ?? 0,
+        } : {}),
+      }, schedule.status),
+    };
     const createdSchedule = await prisma.maintenanceSchedule.create({
-      data: schedule.status === MaintenanceStatus.COMPLETED
+      data: (schedule.status === MaintenanceStatus.COMPLETED
         ? { ...persistedSchedule, completedAt: schedule.createdAt }
-        : persistedSchedule,
+        : persistedSchedule) as any,
     });
     createdMaintenanceSchedulesCount += 1;
 

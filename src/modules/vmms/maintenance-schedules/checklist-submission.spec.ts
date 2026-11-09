@@ -9,7 +9,7 @@ const assigned = [{ id: 'oil', text: 'Inspect oil' }, { id: 'brakes', text: 'Ins
 const checked = assigned.map((item) => ({ id: item.id, label: item.text, status: 'checked' }));
 const schedule = {
   id: 'schedule-1', vehicleId: 'ABC123', status: MaintenanceStatus.IN_PROGRESS,
-  assignedMechanicId: actor.sub, checklistTemplateId: 'template-1',
+  assignedMechanicId: actor.sub, assignedMechanic: 'Mechanic One', odometerReading: 1200, checklistTemplateId: 'template-1',
   updatedAt: new Date(), workOrderProgress: {},
 } as MaintenanceSchedule;
 
@@ -67,6 +67,17 @@ describe('checklist completion requirement', () => {
     expect(schedule.status).toBe(MaintenanceStatus.IN_PROGRESS);
   });
 
+  it('allows a mechanic to continue saving in-progress work after the daily overdue transition', () => {
+    const overdueSchedule = {
+      ...schedule,
+      status: MaintenanceStatus.OVERDUE,
+      workOrderProgress: { executionItems: checked, overdueFromStatus: MaintenanceStatus.IN_PROGRESS },
+    } as MaintenanceSchedule;
+    const result = applyWorkOrderWorkflow(overdueSchedule, { executionItems: checked }, 'SAVE', actor);
+    expect(result.status).toBe(MaintenanceStatus.OVERDUE);
+    expect(result.progress.overdueFromStatus).toBe(MaintenanceStatus.IN_PROGRESS);
+  });
+
   it('still requires parts details for Changed items', () => {
     const executionItems = [checked[0], { ...checked[1], status: 'changed' }];
     expect(rejection(executionItems).message).toMatch(/parts, quantity, cost and photos/);
@@ -93,6 +104,7 @@ describe('submission through MaintenanceSchedulesService', () => {
     checklistItem: { findMany: jest.fn() },
     vehicle: { findFirst: jest.fn(), updateMany: jest.fn() },
     $transaction: jest.fn(),
+    $queryRaw: jest.fn(),
   };
   beforeEach(() => {
     jest.clearAllMocks();
@@ -101,6 +113,7 @@ describe('submission through MaintenanceSchedulesService', () => {
     prisma.checklistItem.findMany.mockResolvedValue(assigned);
     prisma.vehicle.findFirst.mockResolvedValue({ id: 'vehicle-1', status: 'UNDER_MAINTENANCE' });
     prisma.$transaction.mockImplementation(async (callback) => callback(prisma));
+    prisma.$queryRaw.mockResolvedValue([{ logNumber: 'MLG-20261109-0001' }]);
     service = new MaintenanceSchedulesService(prisma as unknown as PrismaService);
   });
 
@@ -133,11 +146,51 @@ describe('submission through MaintenanceSchedulesService', () => {
   });
 
   it('persists Done only after every assigned item is complete', async () => {
-    const result = await service.updateProgress(schedule.id, { action: 'SUBMIT', executionItems: checked }, actor);
+    const result = await service.updateProgress(schedule.id, {
+      action: 'SUBMIT', executionItems: checked, maintenanceClass: 'PREVENTIVE',
+      maintenanceRemarks: 'Completed oil and brake checks.', serviceOdometerReading: 12345,
+      laborCost: 300, totalCost: 1,
+      partDetails: { oil: { partsUsed: 'Oil filter', quantity: 2, materialCost: 125 } },
+    }, actor);
     expect(result.status).toBe(MaintenanceStatus.DONE);
     expect(prisma.maintenanceSchedule.update).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({ id: schedule.id, updatedAt: schedule.updatedAt }),
       data: expect.objectContaining({ status: MaintenanceStatus.DONE }),
     }));
+    expect(prisma.maintenanceSchedule.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ logNumber: 'MLG-20261109-0001' }),
+    }));
+    expect(prisma.maintenanceSchedule.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ odometerReading: 12345, partsCost: 125, laborCost: 300, totalCost: 425 }),
+    }));
+    expect(result.logNumber).toBe('MLG-20261109-0001');
+  });
+
+  it('does not generate a second log number when a rejected work order is resubmitted', async () => {
+    prisma.maintenanceSchedule.findFirst.mockResolvedValue({ ...schedule, logNumber: 'MLG-20261101-0012' });
+    prisma.maintenanceSchedule.update.mockImplementation(async ({ data }) => ({ ...schedule, ...data, logNumber: 'MLG-20261101-0012' }));
+    const result = await service.updateProgress(schedule.id, {
+      action: 'SUBMIT', executionItems: checked, maintenanceClass: 'REPAIR',
+      maintenanceRemarks: 'Replaced brake components.', serviceOdometerReading: 12345, laborCost: 500,
+    }, actor);
+    expect(prisma.$queryRaw).not.toHaveBeenCalled();
+    expect(prisma.maintenanceSchedule.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.not.objectContaining({ logNumber: expect.anything() }),
+    }));
+    expect(result.logNumber).toBe('MLG-20261101-0012');
+  });
+
+  it.each([
+    ['odometer', { serviceOdometerReading: undefined }, 'Enter a valid odometer reading'],
+    ['maintenance type', { maintenanceClass: undefined }, 'Select Repair or Preventive'],
+    ['description', { maintenanceRemarks: '  ' }, 'Describe the work performed'],
+    ['labor cost', { laborCost: undefined }, 'Enter a valid labor cost'],
+  ])('rejects a missing or invalid %s before writing', async (_field, override, expected) => {
+    await expect(service.updateProgress(schedule.id, {
+      action: 'SUBMIT', executionItems: checked, maintenanceClass: 'PREVENTIVE',
+      maintenanceRemarks: 'Work done', serviceOdometerReading: 12345, laborCost: 100,
+      ...override,
+    }, actor)).rejects.toThrow(expected);
+    expect(prisma.maintenanceSchedule.update).not.toHaveBeenCalled();
   });
 });

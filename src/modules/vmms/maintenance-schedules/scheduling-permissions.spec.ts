@@ -17,7 +17,7 @@ describe('scheduling HTTP permissions', () => {
   const secret = 'schedule-permissions-test-only';
   const jwt = new JwtService({ secret });
   const prisma = { user: { findFirst: jest.fn() } };
-  const service = { create: jest.fn(), update: jest.fn(), cancel: jest.fn(), findAll: jest.fn(), updateProgress: jest.fn() };
+  const service = { create: jest.fn(), update: jest.fn(), cancel: jest.fn(), reviewCancellationRequest: jest.fn(), reviewMaintenanceLogUnlock: jest.fn(), updateOdometerThreshold: jest.fn(), remove: jest.fn(), cancelMaintenanceLog: jest.fn(), voidMaintenanceLog: jest.fn(), unlockMaintenanceLog: jest.fn(), updateMaintenanceLog: jest.fn(), findAll: jest.fn(), updateProgress: jest.fn() };
   const writes: ['post' | 'put', string, 'create' | 'update' | 'cancel'][] = [
     ['post', '/maintenance-schedules', 'create'],
     ['put', '/maintenance-schedules/schedule-1', 'update'],
@@ -57,6 +57,105 @@ describe('scheduling HTTP permissions', () => {
       .set('Authorization', `Bearer ${token([vmms(UserRole.OPERATIONS)])}`).send(body)
       .expect(method === 'post' ? 201 : 200);
     expect(service[handler]).toHaveBeenCalledTimes(1);
+  });
+  it('allows only Admin to review a schedule cancellation request', async () => {
+    const path = '/maintenance-schedules/00000000-0000-4000-8000-000000000001/cancellation-requests/00000000-0000-4000-8000-000000000002/review';
+    const body = { decision: 'APPROVE' };
+
+    await request(app.getHttpServer()).post(path)
+      .set('Authorization', `Bearer ${token([vmms(UserRole.OPERATIONS)])}`).send(body).expect(403);
+    expect(service.reviewCancellationRequest).not.toHaveBeenCalled();
+
+    setUser([vmms(UserRole.ADMIN)]);
+    await request(app.getHttpServer()).post(path)
+      .set('Authorization', `Bearer ${token([vmms(UserRole.ADMIN)])}`).send(body).expect(201);
+    expect(service.reviewCancellationRequest).toHaveBeenCalledWith(
+      '00000000-0000-4000-8000-000000000001',
+      '00000000-0000-4000-8000-000000000002',
+      'APPROVE',
+      undefined,
+      expect.objectContaining({ roles: [vmms(UserRole.ADMIN)] }),
+    );
+  });
+  it('restricts direct schedule deactivation to Admin so Operations must use the request workflow', async () => {
+    const id = '00000000-0000-4000-8000-000000000001';
+    const path = `/maintenance-schedules/${id}`;
+    await request(app.getHttpServer()).delete(path)
+      .set('Authorization', `Bearer ${token([vmms(UserRole.OPERATIONS)])}`).expect(403);
+    expect(service.remove).not.toHaveBeenCalled();
+
+    setUser([vmms(UserRole.ADMIN)]);
+    await request(app.getHttpServer()).delete(path)
+      .set('Authorization', `Bearer ${token([vmms(UserRole.ADMIN)])}`).expect(200);
+    expect(service.remove).toHaveBeenCalledWith(id, expect.objectContaining({ roles: [vmms(UserRole.ADMIN)] }));
+  });
+  it('allows only Admin to update an odometer maintenance threshold', async () => {
+    const id = '00000000-0000-4000-8000-000000000001';
+    const path = `/maintenance-schedules/${id}/odometer-threshold`;
+    const body = { thresholdKm: 25000, reason: 'Update service target' };
+
+    await request(app.getHttpServer()).patch(path)
+      .set('Authorization', `Bearer ${token([vmms(UserRole.OPERATIONS)])}`).send(body).expect(403);
+    expect(service.updateOdometerThreshold).not.toHaveBeenCalled();
+
+    setUser([vmms(UserRole.ADMIN)]);
+    await request(app.getHttpServer()).patch(path)
+      .set('Authorization', `Bearer ${token([vmms(UserRole.ADMIN)])}`).send(body).expect(200);
+    expect(service.updateOdometerThreshold).toHaveBeenCalledWith(
+      id, body.thresholdKm, body.reason, expect.objectContaining({ roles: [vmms(UserRole.ADMIN)] }),
+    );
+  });
+  it('allows only Admin to use the all-stage maintenance-log cancellation endpoint', async () => {
+    const path = '/maintenance-schedules/00000000-0000-4000-8000-000000000001/cancel-log';
+    const body = { reason: 'Duplicate sample record' };
+
+    await request(app.getHttpServer()).post(path)
+      .set('Authorization', `Bearer ${token([vmms(UserRole.OPERATIONS)])}`).send(body).expect(403);
+    expect(service.cancelMaintenanceLog).not.toHaveBeenCalled();
+
+    setUser([vmms(UserRole.ADMIN)]);
+    await request(app.getHttpServer()).post(path)
+      .set('Authorization', `Bearer ${token([vmms(UserRole.ADMIN)])}`).send(body).expect(201);
+    expect(service.cancelMaintenanceLog).toHaveBeenCalledWith(
+      '00000000-0000-4000-8000-000000000001', body.reason,
+      expect.objectContaining({ sub: 'user-1', roles: [vmms(UserRole.ADMIN)] }),
+    );
+  });
+  it('requires Operations to request log unlock and Admin to review before Operations edits', async () => {
+    const id = '00000000-0000-4000-8000-000000000002';
+    const unlockPath = `/maintenance-schedules/${id}/unlock-log`;
+    const editPath = `/maintenance-schedules/${id}/log-edit`;
+    const reason = 'Correct sample entry';
+    const body = { maintenanceRemarks: 'Corrected sample description.' };
+
+    await request(app.getHttpServer()).post(unlockPath)
+      .set('Authorization', `Bearer ${token([vmms(UserRole.OPERATIONS)])}`).send({ reason }).expect(201);
+    expect(service.unlockMaintenanceLog).toHaveBeenCalledWith(id, reason, expect.objectContaining({ roles: [vmms(UserRole.OPERATIONS)] }));
+    setUser([vmms(UserRole.ADMIN)]);
+    await request(app.getHttpServer()).post(`/maintenance-schedules/${id}/unlock-requests/00000000-0000-4000-8000-000000000003/review`)
+      .set('Authorization', `Bearer ${token([vmms(UserRole.ADMIN)])}`).send({ decision: 'APPROVE' }).expect(201);
+    expect(service.reviewMaintenanceLogUnlock).toHaveBeenCalled();
+
+    setUser([vmms(UserRole.OPERATIONS)]);
+    await request(app.getHttpServer()).patch(editPath)
+      .set('Authorization', `Bearer ${token([vmms(UserRole.OPERATIONS)])}`).send(body).expect(200);
+    expect(service.updateMaintenanceLog).toHaveBeenCalledWith(id, expect.objectContaining(body), expect.objectContaining({ roles: [vmms(UserRole.OPERATIONS)] }));
+
+    setUser([vmms(UserRole.ADMIN)]);
+    await request(app.getHttpServer()).patch(editPath)
+      .set('Authorization', `Bearer ${token([vmms(UserRole.ADMIN)])}`).send(body).expect(403);
+  });
+  it('allows Operations to request a reasoned log void but denies Admin on the Operations void endpoint', async () => {
+    const id = '00000000-0000-4000-8000-000000000003';
+    const path = `/maintenance-schedules/${id}/void-log`;
+    const reason = 'Duplicate sample record';
+    await request(app.getHttpServer()).post(path)
+      .set('Authorization', `Bearer ${token([vmms(UserRole.OPERATIONS)])}`).send({ reason }).expect(201);
+    expect(service.voidMaintenanceLog).toHaveBeenCalledWith(id, reason, expect.objectContaining({ roles: [vmms(UserRole.OPERATIONS)] }));
+
+    setUser([vmms(UserRole.ADMIN)]);
+    await request(app.getHttpServer()).post(path)
+      .set('Authorization', `Bearer ${token([vmms(UserRole.ADMIN)])}`).send({ reason }).expect(403);
   });
   describe.each([UserRole.ADMIN, UserRole.CHIEF_MECHANIC, UserRole.MECHANIC])('%s scheduling writes', (role) => {
     it.each(writes)('denies %s %s', async (method, path, handler) => {

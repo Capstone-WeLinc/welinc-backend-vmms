@@ -40,6 +40,10 @@ export class CreateMaintenanceScheduleDto {
   startDate?: string;
 
   @IsString()
+  @IsOptional()
+  targetDueDate?: string;
+
+  @IsString()
   @IsNotEmpty()
   vehicleId!: string;
 

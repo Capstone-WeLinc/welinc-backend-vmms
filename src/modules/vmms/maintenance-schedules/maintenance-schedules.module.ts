@@ -4,10 +4,11 @@ import { MaintenanceSchedulesController } from './maintenance-schedules.controll
 import { MaintenanceSchedulesService } from './maintenance-schedules.service';
 import { MaintenanceNotificationsService } from './maintenance-notifications.service';
 import { MaintenanceNotificationsController } from './maintenance-notifications.controller';
+import { MaintenanceOverdueService } from './maintenance-overdue.service';
 
 @Module({
   imports: [SharedModule],
   controllers: [MaintenanceNotificationsController, MaintenanceSchedulesController],
-  providers: [MaintenanceSchedulesService, MaintenanceNotificationsService],
+  providers: [MaintenanceSchedulesService, MaintenanceNotificationsService, MaintenanceOverdueService],
 })
 export class MaintenanceSchedulesModule {}

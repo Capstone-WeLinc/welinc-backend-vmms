@@ -62,6 +62,13 @@ enum MaintenanceApprovalStatus {
   FOR_REPAIR
 }
 
+enum MaintenanceCancellationReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  LEGACY
+}
+
 enum MaintenanceTriggerType {
   MANUAL
   ODOMETER
@@ -344,6 +351,7 @@ model ChecklistItem {
 model MaintenanceSchedule {
   id                         String                    @id @default(uuid()) @db.Uuid
   workOrderNumber            String                    @unique @default(dbgenerated("('WO-'::text || to_char(CURRENT_DATE, 'YYYYMMDD'::text) || '-'::text || lpad(nextval('maintenance_schedule_work_order_number_seq'::regclass)::text, 6, '0'::text))")) @map("work_order_number") @db.VarChar(32)
+  logNumber                  String?                   @unique @map("log_number") @db.VarChar(32)
   vehicleId                  String                    @db.VarChar(50)
   title                      String                    @db.VarChar(100)
   garageId                   String?                   @map("garage_id") @db.VarChar(50)
@@ -366,6 +374,7 @@ model MaintenanceSchedule {
   timeIntervalUnit           String?                   @map("time_interval_unit") @db.VarChar(6)
   startReferenceDate         DateTime?                 @map("start_reference_date") @db.Timestamptz(6)
   startDate                  DateTime?                 @map("start_date") @db.Date
+  targetDueDate              DateTime?                 @map("target_due_date") @db.Date
   previousScheduleId         String?                   @unique @map("previous_schedule_id") @db.Uuid
   workOrderProgress          Json?                     @map("work_order_progress")
   partsCost                  Decimal?                  @map("parts_cost") @db.Decimal(10, 2)
@@ -376,13 +385,15 @@ model MaintenanceSchedule {
   createdAt                  DateTime                  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt                  DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  chiefMechanicUser    User?                             @relation("ScheduleChiefMechanic", fields: [chiefMechanicId], references: [id], onDelete: SetNull)
-  assignedMechanicUser User?                             @relation("ScheduleMechanic", fields: [assignedMechanicId], references: [id], onDelete: SetNull)
-  notifications        MaintenanceNotification[]
-  cancellations        MaintenanceScheduleCancellation[]
-  checklistTemplate    ChecklistTemplate?                @relation(fields: [checklistTemplateId], references: [id], onDelete: SetNull)
-  previousSchedule     MaintenanceSchedule?              @relation("MaintenanceScheduleRecurrence", fields: [previousScheduleId], references: [id], onDelete: SetNull)
-  nextSchedule         MaintenanceSchedule?              @relation("MaintenanceScheduleRecurrence")
+  chiefMechanicUser         User?                             @relation("ScheduleChiefMechanic", fields: [chiefMechanicId], references: [id], onDelete: SetNull)
+  assignedMechanicUser      User?                             @relation("ScheduleMechanic", fields: [assignedMechanicId], references: [id], onDelete: SetNull)
+  notifications             MaintenanceNotification[]
+  cancellations             MaintenanceScheduleCancellation[]
+  maintenanceLogEditUnlocks MaintenanceLogEditUnlock[]
+  maintenanceLogEditAudits  MaintenanceLogEditAudit[]
+  checklistTemplate         ChecklistTemplate?                @relation(fields: [checklistTemplateId], references: [id], onDelete: SetNull)
+  previousSchedule          MaintenanceSchedule?              @relation("MaintenanceScheduleRecurrence", fields: [previousScheduleId], references: [id], onDelete: SetNull)
+  nextSchedule              MaintenanceSchedule?              @relation("MaintenanceScheduleRecurrence")
 
   @@index([chiefMechanicId])
   @@index([assignedMechanicId])
@@ -426,11 +437,62 @@ model MaintenanceScheduleCancellation {
   actorEmail     String              @map("actor_email") @db.VarChar(255)
   reason         String              @db.Text
   previousStatus MaintenanceStatus   @map("previous_status")
+  reviewStatus   MaintenanceCancellationReviewStatus @default(APPROVED) @map("review_status")
+  reviewedById   String?             @map("reviewed_by_id") @db.Uuid
+  reviewedByName String?             @map("reviewed_by_name") @db.VarChar(100)
+  reviewedByEmail String?            @map("reviewed_by_email") @db.VarChar(255)
+  reviewReason   String?             @map("review_reason") @db.Text
+  reviewedAt     DateTime?           @map("reviewed_at") @db.Timestamptz(6)
   createdAt      DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
   schedule       MaintenanceSchedule @relation(fields: [scheduleId], references: [id], onDelete: Restrict)
 
   @@index([scheduleId, createdAt])
+  @@index([reviewStatus, createdAt])
   @@map("maintenance_schedule_cancellations")
+}
+
+model MaintenanceLogEditUnlock {
+  id         String                    @id @default(uuid()) @db.Uuid
+  scheduleId String                    @map("schedule_id") @db.Uuid
+  actorId    String                    @map("actor_id") @db.Uuid
+  actorName  String                    @map("actor_name") @db.VarChar(100)
+  actorEmail String                    @map("actor_email") @db.VarChar(255)
+  reason     String                    @db.Text
+  reviewStatus MaintenanceCancellationReviewStatus @default(PENDING) @map("review_status")
+  reviewedById String?                  @map("reviewed_by_id") @db.Uuid
+  reviewedByName String?                @map("reviewed_by_name") @db.VarChar(100)
+  reviewedByEmail String?               @map("reviewed_by_email") @db.VarChar(255)
+  reviewReason String?                  @map("review_reason") @db.Text
+  reviewedAt DateTime?                  @map("reviewed_at") @db.Timestamptz(6)
+  activatedAt DateTime?                 @map("activated_at") @db.Timestamptz(6)
+  createdAt  DateTime                  @default(now()) @map("created_at") @db.Timestamptz(6)
+  consumedAt DateTime?                 @map("consumed_at") @db.Timestamptz(6)
+  schedule   MaintenanceSchedule       @relation(fields: [scheduleId], references: [id], onDelete: Restrict)
+  audits     MaintenanceLogEditAudit[]
+
+  @@index([scheduleId, createdAt])
+  @@index([reviewStatus, createdAt])
+  @@map("maintenance_log_edit_unlocks")
+}
+
+model MaintenanceLogEditAudit {
+  id            String                   @id @default(uuid()) @db.Uuid
+  scheduleId    String                   @map("schedule_id") @db.Uuid
+  unlockId      String                   @map("unlock_id") @db.Uuid
+  actorId       String                   @map("actor_id") @db.Uuid
+  actorName     String                   @map("actor_name") @db.VarChar(100)
+  actorEmail    String                   @map("actor_email") @db.VarChar(255)
+  unlockReason  String                   @map("unlock_reason") @db.Text
+  fieldName     String                   @map("field_name") @db.VarChar(80)
+  previousValue String?                  @map("previous_value") @db.Text
+  newValue      String?                  @map("new_value") @db.Text
+  changedAt     DateTime                 @default(now()) @map("changed_at") @db.Timestamptz(6)
+  schedule      MaintenanceSchedule      @relation(fields: [scheduleId], references: [id], onDelete: Restrict)
+  unlock        MaintenanceLogEditUnlock @relation(fields: [unlockId], references: [id], onDelete: Restrict)
+
+  @@index([scheduleId, changedAt])
+  @@index([actorId, changedAt])
+  @@map("maintenance_log_edit_audits")
 }
 
 model LoginActivity {

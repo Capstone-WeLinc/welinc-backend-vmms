@@ -41,6 +41,7 @@ export function applyWorkOrderWorkflow(schedule: MaintenanceSchedule, incoming: 
   if (!chief && !mechanic) throw new ForbiddenException('Only the assigned mechanic or chief mechanic may progress this work order.');
   if (['COMPLETED', 'CANCELLED'].includes(schedule.status)) throw new BadRequestException('This work order is closed.');
   const progress = { ...prior };
+  const overdueInProgress = schedule.status === MaintenanceStatus.OVERDUE && progress.overdueFromStatus === 'IN_PROGRESS';
   let status = schedule.status;
   const intent = action ?? 'SAVE';
   if (!['SAVE', 'START', 'SUBMIT', 'APPROVE', 'REJECT', 'REPAIR'].includes(intent as string)) throw new BadRequestException('Invalid workflow action.');
@@ -77,6 +78,7 @@ export function applyWorkOrderWorkflow(schedule: MaintenanceSchedule, incoming: 
       if (startDateError) throw new BadRequestException(startDateError);
       if (!['PENDING', 'DUE', 'OVERDUE'].includes(schedule.status) && prior.workflowStatus !== 'Rejected') throw new BadRequestException('This work order has already started.');
       status = MaintenanceStatus.IN_PROGRESS;
+        delete progress.overdueFromStatus;
       progress.workflowStatus = 'In Progress';
       progress.approvalStatus = 'Unverified';
       progress.mechanicSubmitted = false;
@@ -84,8 +86,8 @@ export function applyWorkOrderWorkflow(schedule: MaintenanceSchedule, incoming: 
       if (prior.workflowStatus === 'Rejected' && !progress.rejectionRemarks && typeof prior.inspectorRemarks === 'string') progress.rejectionRemarks = prior.inspectorRemarks;
       progress.inspectorRemarks = '';
     } else {
-      if (status !== MaintenanceStatus.IN_PROGRESS || prior.workflowStatus === 'Rejected') throw new BadRequestException('Start work before updating the checklist.');
-      for (const key of ['executionItems', 'partDetails', 'chiefMechanic']) if (incoming[key] !== undefined) progress[key] = incoming[key];
+      if ((status !== MaintenanceStatus.IN_PROGRESS && !overdueInProgress) || prior.workflowStatus === 'Rejected') throw new BadRequestException('Start work before updating the checklist.');
+      for (const key of ['executionItems', 'partDetails', 'chiefMechanic', 'maintenanceClass', 'laborCost', 'serviceOdometerReading']) if (incoming[key] !== undefined) progress[key] = incoming[key];
       if (incoming.maintenanceRemarks !== undefined) {
         if (typeof incoming.maintenanceRemarks !== 'string') throw new BadRequestException('Maintenance remarks must be text.');
         progress.maintenanceRemarks = incoming.maintenanceRemarks;
@@ -102,6 +104,7 @@ export function applyWorkOrderWorkflow(schedule: MaintenanceSchedule, incoming: 
         progress.mechanicSubmitted = true;
         progress.inspectionItems = items.map((item) => ({ id: item.id, label: item.label, status: 'pending', note: '' }));
         status = MaintenanceStatus.DONE;
+        delete progress.overdueFromStatus;
       }
     }
   }

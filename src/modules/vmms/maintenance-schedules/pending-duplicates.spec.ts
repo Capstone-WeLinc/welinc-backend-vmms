@@ -4,8 +4,8 @@ import { PrismaService } from '../../../shared/prisma.service';
 import { MaintenanceSchedulesService } from './maintenance-schedules.service';
 
 describe('Pending schedule uniqueness', () => {
-  const input = { vehicleId: ' ABC123 ', title: ' Engine Oil Change ', assignedMechanic: 'Mechanic', startDate: '2099-01-01' };
-  const previous = { ...input, startDate: new Date('2099-01-01T00:00:00Z'), id: '00000000-0000-4000-8000-000000000001', status: 'PENDING', createdAt: new Date(), deletedAt: null };
+  const input = { vehicleId: ' ABC123 ', title: ' Engine Oil Change ', assignedMechanic: 'Mechanic', startDate: '2099-01-01', targetDueDate: '2099-02-01' };
+  const previous = { ...input, startDate: new Date('2099-01-01T00:00:00Z'), targetDueDate: new Date('2099-02-01T00:00:00Z'), id: '00000000-0000-4000-8000-000000000001', status: 'PENDING', createdAt: new Date(), deletedAt: null };
   let prisma: any;
   let service: MaintenanceSchedulesService;
   const uniqueError = () => new Prisma.PrismaClientKnownRequestError('Unique constraint failed', { code: 'P2002', clientVersion: '7' });

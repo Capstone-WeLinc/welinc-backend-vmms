@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import {
   AccountType,
+  MaintenanceCancellationReviewStatus,
   MaintenanceSchedule,
   MaintenancePriority,
   MaintenanceStatus,
@@ -13,10 +14,12 @@ import { applyWorkOrderWorkflow, AssignedChecklistItem } from './work-order-work
 import { progressForClient, stateForStorage } from './work-order-state';
 import { scheduleScope, ScheduleActor } from './schedule-access';
 import { CreateMaintenanceScheduleDto } from './dto/create-maintenance-schedule.dto';
+import { UpdateMaintenanceLogDto } from './dto/update-maintenance-log.dto';
 import { scheduleDue } from './schedule-due';
 import { validateStartDate } from './schedule-start-date';
 import { validateScheduleMileage } from './schedule-mileage';
-import { validateTimeSchedule, getTimeInterval } from './time-interval';
+import { validateTimeSchedule, getTimeInterval, addTimeInterval } from './time-interval';
+import { validateTargetDueDate } from './schedule-target-date';
 import { createReadStream } from 'node:fs';
 import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -51,6 +54,20 @@ export class MaintenanceSchedulesService {
     }
   }
 
+  private assertScheduleOpen(schedule: Pick<MaintenanceSchedule, 'status' | 'workOrderProgress'>) {
+    const progress = this.asProgressRecord(schedule.workOrderProgress);
+    const isCancelledMaintenanceLog = schedule.status === MaintenanceStatus.CANCELLED && progress.maintenanceLogLocked === true;
+    if (schedule.status === MaintenanceStatus.COMPLETED || isCancelledMaintenanceLog) {
+      throw new ForbiddenException('Completed and Cancelled work orders are locked. An Admin must unlock the maintenance log before editing.');
+    }
+  }
+
+  private assertAttachmentWritable(schedule: MaintenanceSchedule) {
+    if (schedule.status === MaintenanceStatus.COMPLETED || schedule.status === MaintenanceStatus.CANCELLED) {
+      throw new ForbiddenException('Completed and Cancelled work orders are locked.');
+    }
+  }
+
   private canViewMaintenanceCosts(actor?: ScheduleActor): boolean {
     if (!actor) return true;
     return actor.roles.some(({ role, system }) =>
@@ -62,6 +79,7 @@ export class MaintenanceSchedulesService {
     if (!file) throw new BadRequestException('Choose a supported file no larger than 5 MB.');
     if (!itemId?.trim()) throw new BadRequestException('A checklist item is required.');
     const schedule = await this.getAttachmentSchedule(id, actor);
+    this.assertAttachmentWritable(schedule);
     this.assertAssignedMechanic(schedule, actor);
     const progress = this.asProgressRecord(schedule.workOrderProgress);
     const execution = Array.isArray(progress.executionItems) ? progress.executionItems : [];
@@ -144,6 +162,7 @@ export class MaintenanceSchedulesService {
 
   async deleteAttachment(id: string, attachmentId: string, actor: ScheduleActor) {
     const schedule = await this.getAttachmentSchedule(id, actor);
+    this.assertAttachmentWritable(schedule);
     this.assertAssignedMechanic(schedule, actor);
     const progress = this.asProgressRecord(schedule.workOrderProgress);
     const partDetails = progress.partDetails && typeof progress.partDetails === 'object'
@@ -254,7 +273,16 @@ export class MaintenanceSchedulesService {
       const schedules = await this.prisma.maintenanceSchedule.findMany({
         where: { deletedAt: null, ...scope },
         orderBy: { createdAt: 'desc' },
-        include: { cancellations: { orderBy: { createdAt: 'desc' } } },
+        include: {
+          cancellations: { orderBy: { createdAt: 'desc' } },
+          maintenanceLogEditUnlocks: {
+            orderBy: { createdAt: 'desc' },
+            select: {
+              id: true, actorId: true, actorName: true, reason: true, reviewStatus: true,
+              reviewedAt: true, activatedAt: true, consumedAt: true,
+            },
+          },
+        },
       });
 
       return schedules.map((schedule) => {
@@ -267,14 +295,17 @@ export class MaintenanceSchedulesService {
         return {
           id: schedule.id,
           workOrderNumber: schedule.workOrderNumber,
+          logNumber: schedule.logNumber,
           vehicleId: schedule.vehicleId,
           title: schedule.title,
           status: schedule.status,
           priority: schedule.priority,
           cancellations: schedule.cancellations ?? [],
+          maintenanceLogUnlockRequests: schedule.maintenanceLogEditUnlocks ?? [],
           ...scheduleDue(schedule),
           date: this.formatDateOnly(schedule.createdAt),
           startDate: this.formatDateOnly(schedule.startDate),
+          targetDueDate: this.formatDateOnly(schedule.targetDueDate),
           assignedMechanic: schedule.assignedMechanic,
           assignedMechanicId: schedule.assignedMechanicId,
           assignedDriver: schedule.assignedMechanic,
@@ -314,11 +345,13 @@ export class MaintenanceSchedulesService {
       type RawScheduleRow = {
         id: string;
         work_order_number?: string | null;
+        log_number?: string | null;
         vehicleId: string | null;
         title: string | null;
         status: string | null;
         created_at: Date | string | null;
         start_date?: Date | string | null;
+        target_due_date?: Date | string | null;
         scheduled_date?: Date | string | null;
         assigned_mechanic: string | null;
         account_type: string | null;
@@ -350,7 +383,7 @@ export class MaintenanceSchedulesService {
       const dateOrder = createdDateColumn ?? 'id';
       const whereClause = columns.has('deleted_at') ? 'WHERE deleted_at IS NULL' : '';
       const rows = await this.prisma.$queryRawUnsafe<RawScheduleRow[]>(
-        `SELECT id, ${optionalColumn('work_order_number')} AS work_order_number, ${optionalColumn('vehicle_id')} AS vehicleId, title, status, ${optionalColumn('priority')} AS priority, ${optionalColumn('created_at')} AS created_at, ${optionalColumn('start_date')} AS start_date, ${optionalColumn('scheduled_date')} AS scheduled_date, assigned_mechanic, account_type, checklist_template_id, ${optionalColumn('garage_id')} AS garage_id, odometer_reading, trigger_type, ${optionalColumn('interval_km')} AS interval_km, ${optionalColumn('buffer_distance_km')} AS buffer_distance_km, ${optionalColumn('starting_reference_reading_km')} AS starting_reference_reading_km, ${optionalColumn('interval_type')} AS interval_type, ${optionalColumn('start_reference_date')} AS start_reference_date, ${optionalColumn('previous_schedule_id')} AS previous_schedule_id, ${optionalColumn('work_order_progress')} AS work_order_progress, ${optionalColumn('approval_status')} AS approval_status, ${optionalColumn('parts_cost')} AS parts_cost, ${optionalColumn('labor_cost')} AS labor_cost, ${optionalColumn('total_cost')} AS total_cost FROM maintenance_schedules ${whereClause} ORDER BY ${dateOrder} DESC`,
+        `SELECT id, ${optionalColumn('work_order_number')} AS work_order_number, ${optionalColumn('log_number')} AS log_number, ${optionalColumn('vehicle_id')} AS vehicleId, title, status, ${optionalColumn('priority')} AS priority, ${optionalColumn('created_at')} AS created_at, ${optionalColumn('start_date')} AS start_date, ${optionalColumn('target_due_date')} AS target_due_date, ${optionalColumn('scheduled_date')} AS scheduled_date, assigned_mechanic, account_type, checklist_template_id, ${optionalColumn('garage_id')} AS garage_id, odometer_reading, trigger_type, ${optionalColumn('interval_km')} AS interval_km, ${optionalColumn('buffer_distance_km')} AS buffer_distance_km, ${optionalColumn('starting_reference_reading_km')} AS starting_reference_reading_km, ${optionalColumn('interval_type')} AS interval_type, ${optionalColumn('start_reference_date')} AS start_reference_date, ${optionalColumn('previous_schedule_id')} AS previous_schedule_id, ${optionalColumn('work_order_progress')} AS work_order_progress, ${optionalColumn('approval_status')} AS approval_status, ${optionalColumn('parts_cost')} AS parts_cost, ${optionalColumn('labor_cost')} AS labor_cost, ${optionalColumn('total_cost')} AS total_cost FROM maintenance_schedules ${whereClause} ORDER BY ${dateOrder} DESC`,
       );
 
       return rows.map((r) => {
@@ -363,12 +396,15 @@ export class MaintenanceSchedulesService {
         return {
           id: String(r.id),
           workOrderNumber: r.work_order_number ?? null,
+          logNumber: r.log_number ?? null,
           vehicleId: r.vehicleId ?? '',
           title: r.title ?? '',
           status: r.status ?? MaintenanceStatus.PENDING,
           priority: r.priority ?? MaintenancePriority.MEDIUM,
           date: this.formatDateOnly(r.created_at ?? r.scheduled_date ?? null),
           startDate: this.formatDateOnly(r.start_date ?? null),
+          targetDueDate: this.formatDateOnly(r.target_due_date ?? null),
+          dueDate: this.formatDateOnly(r.target_due_date ?? null),
           assignedMechanic: r.assigned_mechanic ?? null,
           assignedDriver: r.assigned_mechanic ?? null,
           chiefMechanicId: (r as any).chief_mechanic_id ?? null,
@@ -406,6 +442,11 @@ export class MaintenanceSchedulesService {
     if (data.status === 'COMPLETED' || data.status === 'DONE' || data.status === 'IN_PROGRESS' || data.workOrderProgress != null || data.work_order_progress != null) throw new ForbiddenException('Use the assigned work order workflow to start, submit or complete work.');
     const startDate = validateStartDate(data.startDate);
     const time = validateTimeSchedule(data);
+    const targetDueDate = validateTargetDueDate(data.targetDueDate, startDate) ??
+      (time.startReferenceDate && getTimeInterval(time)
+        ? addTimeInterval(time.startReferenceDate, getTimeInterval(time)!)
+        : null);
+    if (!targetDueDate) throw new BadRequestException('A target due date is required for every maintenance schedule.');
     await this.assertNoPendingDuplicate(this.prisma, data);
     const checklist = await this.resolveChecklistTemplate(this.prisma, data);
     const workOrderProgress = this.normalizeWorkOrderProgress(
@@ -424,6 +465,7 @@ export class MaintenanceSchedulesService {
       data: {
         vehicleId: data.vehicleId,
         startDate,
+        targetDueDate,
         status: data.status ?? MaintenanceStatus.PENDING,
         priority: data.priority ?? MaintenancePriority.MEDIUM,
         ...await this.resolveAssignedMechanic(data),
@@ -457,6 +499,7 @@ export class MaintenanceSchedulesService {
 
     return {
       id: schedule.id,
+          logNumber: schedule.logNumber ?? null,
       workOrderNumber: schedule.workOrderNumber,
       vehicleId: schedule.vehicleId,
       title: schedule.title,
@@ -464,6 +507,7 @@ export class MaintenanceSchedulesService {
       priority: schedule.priority,
       date: schedule.createdAt.toISOString().slice(0, 10),
       startDate: this.formatDateOnly(schedule.startDate),
+      targetDueDate: this.formatDateOnly(schedule.targetDueDate),
       assignedMechanic: schedule.assignedMechanic,
           assignedMechanicId: schedule.assignedMechanicId,
       assignedDriver: schedule.assignedMechanic,
@@ -511,25 +555,31 @@ export class MaintenanceSchedulesService {
         where: { id },
       });
 
-      if (previous.status === 'COMPLETED') throw new ForbiddenException('Completed work orders are closed.');
+      this.assertScheduleOpen(previous);
       if (['IN_PROGRESS', 'DONE'].includes(previous.status) && data.status !== previous.status) {
         throw new BadRequestException('Started work cannot return to pending scheduling. Use the assigned work order workflow.');
       }
       if (workOrderProgress !== undefined && JSON.stringify(workOrderProgress) !== JSON.stringify(previous.workOrderProgress)) throw new ForbiddenException('Use the assigned work order progress endpoint.');
       if (data.status === 'IN_PROGRESS' && previous.status !== 'IN_PROGRESS') throw new ForbiddenException('Only the assigned mechanic can start work.');
       const startDate = validateStartDate(data.startDate, previous.startDate);
+      const time = validateTimeSchedule(data, previous);
+      const targetDueDate = validateTargetDueDate(data.targetDueDate, startDate, previous.targetDueDate) ??
+        (time.startReferenceDate && getTimeInterval(time)
+          ? addTimeInterval(time.startReferenceDate, getTimeInterval(time)!)
+          : null);
+      if (!targetDueDate) throw new BadRequestException('A target due date is required for every maintenance schedule.');
       if (['IN_PROGRESS', 'DONE'].includes(previous.status) && startDate.getTime() !== previous.startDate?.getTime()) {
         throw new BadRequestException('The schedule start date cannot change after work has started.');
       }
       await this.assertNoPendingDuplicate(tx, data, id);
       const checklist = await this.resolveChecklistTemplate(tx, data, previous);
       const mileage = await this.resolveMileage(tx, data, previous);
-      const time = validateTimeSchedule(data, previous);
       const updated = await tx.maintenanceSchedule.update({
         where: { id, status: previous.status, updatedAt: previous.updatedAt },
         data: {
           vehicleId: data.vehicleId,
           startDate,
+          targetDueDate,
           status: data.status ?? MaintenanceStatus.PENDING,
           priority: data.priority ?? previous.priority,
           ...await this.resolveAssignedMechanic(data),
@@ -583,6 +633,7 @@ export class MaintenanceSchedulesService {
       priority: schedule.priority,
       date: this.formatDateOnly(schedule.createdAt),
       startDate: this.formatDateOnly(schedule.startDate),
+      targetDueDate: this.formatDateOnly(schedule.targetDueDate),
       assignedMechanic: schedule.assignedMechanic,
           assignedMechanicId: schedule.assignedMechanicId,
       assignedDriver: schedule.assignedMechanic,
@@ -632,6 +683,120 @@ export class MaintenanceSchedulesService {
     });
   }
 
+  async updateOdometerThreshold(id: string, thresholdKm: number, reason: unknown, actor: ScheduleActor) {
+    if (!actor?.sub || !actor.roles?.some((role) => role.system === 'VMMS' && role.role === 'ADMIN')) {
+      throw new ForbiddenException('Only Admin can change a truck schedule odometer threshold.');
+    }
+    if (!Number.isSafeInteger(thresholdKm) || thresholdKm <= 0 || thresholdKm > 2_147_483_647) {
+      throw new BadRequestException('Odometer threshold must be a positive whole number within the supported range.');
+    }
+    if (typeof reason !== 'string' || !reason.trim() || reason.trim().length > 2000) {
+      throw new BadRequestException('A reason of 1 to 2000 characters is required to change the odometer threshold.');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM maintenance_schedules WHERE id = ${id}::uuid FOR UPDATE`;
+      const admin = await tx.user.findFirst({
+        where: { id: actor.sub, isActive: true, deletedAt: null, roles: { some: { role: 'ADMIN', system: 'VMMS' } } },
+        select: { id: true, email: true },
+      });
+      if (!admin) throw new ForbiddenException('An active VMMS Admin account is required.');
+
+      const schedule = await tx.maintenanceSchedule.findFirst({ where: { id, deletedAt: null } });
+      if (!schedule) throw new NotFoundException('Maintenance schedule not found.');
+      if (schedule.triggerType !== MaintenanceTriggerType.ODOMETER) {
+        throw new BadRequestException('Only odometer-based schedules have an odometer threshold.');
+      }
+      if (!([MaintenanceStatus.PENDING, MaintenanceStatus.DUE, MaintenanceStatus.OVERDUE] as MaintenanceStatus[]).includes(schedule.status)) {
+        throw new BadRequestException('The odometer threshold cannot be changed after work has started or the work order is closed.');
+      }
+
+      const pendingCancellation = await tx.maintenanceScheduleCancellation.findFirst({
+        where: { scheduleId: id, reviewStatus: MaintenanceCancellationReviewStatus.PENDING },
+        select: { id: true },
+      });
+      if (pendingCancellation) throw new ConflictException('Resolve the pending cancellation or void request before changing this schedule threshold.');
+
+      const vehicle = await tx.vehicle.findFirst({
+        where: { plateNumber: { equals: schedule.vehicleId.trim(), mode: 'insensitive' }, deletedAt: null, isActive: true },
+        select: { id: true, odometer: true },
+      });
+      if (!vehicle || !Number.isInteger(vehicle.odometer) || vehicle.odometer < 0) {
+        throw new BadRequestException('Select an active truck with a recorded odometer reading.');
+      }
+      const currentOdometer = Math.max(vehicle.odometer, schedule.odometerReading ?? 0);
+      if (thresholdKm <= currentOdometer) {
+        throw new BadRequestException(
+          `The target must be in the future. This truck is at ${currentOdometer.toLocaleString()} km; choose a higher odometer threshold or schedule its maintenance immediately.`,
+        );
+      }
+
+      const previousReference = schedule.startingReferenceReadingKm ?? schedule.odometerReading ?? currentOdometer;
+      const previousThreshold = schedule.intervalKm == null ? null : previousReference + schedule.intervalKm;
+      const intervalKm = thresholdKm - currentOdometer;
+      if (!Number.isSafeInteger(intervalKm) || intervalKm <= 0) {
+        throw new BadRequestException('The odometer interval must be a positive whole number.');
+      }
+      if (previousThreshold === thresholdKm && schedule.odometerReading === currentOdometer && schedule.startingReferenceReadingKm === currentOdometer) {
+        return {
+          id: schedule.id,
+          status: schedule.status,
+          odometerReading: String(currentOdometer),
+          startingReferenceReadingKm: String(currentOdometer),
+          intervalKm: String(intervalKm),
+          bufferDistanceKm: String(schedule.bufferDistanceKm ?? 0),
+          dueOdometer: thresholdKm,
+        };
+      }
+
+      const bufferDistanceKm = schedule.bufferDistanceKm ?? 0;
+      const activationOdometer = Math.max(currentOdometer, thresholdKm - bufferDistanceKm);
+      const nextStatus = currentOdometer < activationOdometer ? MaintenanceStatus.PENDING : MaintenanceStatus.DUE;
+      const changed = await tx.maintenanceSchedule.updateMany({
+        where: { id, status: schedule.status, updatedAt: schedule.updatedAt, deletedAt: null },
+        data: {
+          odometerReading: currentOdometer,
+          startingReferenceReadingKm: currentOdometer,
+          intervalKm,
+          status: nextStatus,
+        },
+      });
+      if (changed.count !== 1) throw new ConflictException('The schedule changed. Refresh before editing its threshold.');
+
+      const scheduleKey = `${schedule.workOrderNumber}:dueOdometer`;
+      await tx.vehicleAuditLog.createMany({ data: [
+        {
+          vehicleId: vehicle.id,
+          userId: admin.id,
+          email: admin.email,
+          action: 'SCHEDULE_ODOMETER_THRESHOLD_UPDATED',
+          fieldName: scheduleKey,
+          previousValue: previousThreshold == null ? null : String(previousThreshold),
+          newValue: String(thresholdKm),
+        },
+        {
+          vehicleId: vehicle.id,
+          userId: admin.id,
+          email: admin.email,
+          action: 'SCHEDULE_ODOMETER_THRESHOLD_UPDATED',
+          fieldName: `${schedule.workOrderNumber}:reason`,
+          previousValue: null,
+          newValue: reason.trim(),
+        },
+      ] });
+
+      return {
+        id: schedule.id,
+        status: nextStatus,
+        odometerReading: String(currentOdometer),
+        startingReferenceReadingKm: String(currentOdometer),
+        intervalKm: String(intervalKm),
+        bufferDistanceKm: String(bufferDistanceKm),
+        dueOdometer: thresholdKm,
+      };
+    });
+  }
+
   async cancel(id: string, reason: unknown, actor: ScheduleActor) {
     if (!actor?.sub || !actor.roles?.some((role) => role.system === 'VMMS' && role.role === 'OPERATIONS')) {
       throw new ForbiddenException('Only Operations can cancel a maintenance schedule.');
@@ -639,34 +804,394 @@ export class MaintenanceSchedulesService {
     if (typeof reason !== 'string' || !reason.trim() || reason.trim().length > 2000) {
       throw new BadRequestException('A cancellation reason of 1 to 2000 characters is required.');
     }
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const user = await tx.user.findFirst({
+          where: { id: actor.sub, isActive: true, deletedAt: null, roles: { some: { role: 'OPERATIONS', system: 'VMMS' } } },
+          select: { id: true, name: true, email: true },
+        });
+        if (!user) throw new ForbiddenException('An active VMMS Operations account is required.');
+        const schedule = await tx.maintenanceSchedule.findFirst({ where: { id, deletedAt: null } });
+        if (!schedule) throw new NotFoundException('Maintenance schedule not found.');
+        if (['IN_PROGRESS', 'DONE', 'COMPLETED'].includes(schedule.status)) {
+          throw new BadRequestException('Schedule cannot be cancelled once work has started. Use ‘Extension’ instead.');
+        }
+        if (!['PENDING', 'DUE', 'OVERDUE'].includes(schedule.status)) {
+          throw new BadRequestException('This schedule has already been cancelled.');
+        }
+        const pendingRequest = await tx.maintenanceScheduleCancellation.findFirst({
+          where: { scheduleId: id, reviewStatus: MaintenanceCancellationReviewStatus.PENDING },
+          select: { id: true },
+        });
+        if (pendingRequest) throw new ConflictException('A cancellation request is already awaiting Admin review.');
+
+        await tx.maintenanceScheduleCancellation.create({ data: {
+          scheduleId: id, actorId: user.id, actorName: user.name, actorEmail: user.email,
+          reason: reason.trim(), previousStatus: schedule.status,
+          reviewStatus: MaintenanceCancellationReviewStatus.PENDING,
+        } });
+        return {
+          id, status: schedule.status,
+          cancellations: await tx.maintenanceScheduleCancellation.findMany({ where: { scheduleId: id }, orderBy: { createdAt: 'desc' } }),
+        };
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException('A cancellation request is already awaiting Admin review.');
+      }
+      throw error;
+    }
+  }
+
+  async reviewCancellationRequest(
+    id: string,
+    requestId: string,
+    decision: 'APPROVE' | 'REJECT',
+    reason: unknown,
+    actor: ScheduleActor,
+  ) {
+    if (!actor?.sub || !actor.roles?.some((role) => role.system === 'VMMS' && role.role === 'ADMIN')) {
+      throw new ForbiddenException('Only Admin can review schedule cancellation requests.');
+    }
+    if (decision === 'REJECT' && (typeof reason !== 'string' || !reason.trim() || reason.trim().length > 2000)) {
+      throw new BadRequestException('A rejection reason of 1 to 2000 characters is required.');
+    }
+    if (decision !== 'APPROVE' && decision !== 'REJECT') {
+      throw new BadRequestException('A valid cancellation decision is required.');
+    }
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const admin = await tx.user.findFirst({
+        where: { id: actor.sub, isActive: true, deletedAt: null, roles: { some: { role: 'ADMIN', system: 'VMMS' } } },
+        select: { id: true, name: true, email: true },
+      });
+      if (!admin) throw new ForbiddenException('An active VMMS Admin account is required.');
+      const schedule = await tx.maintenanceSchedule.findFirst({ where: { id, deletedAt: null } });
+      if (!schedule) throw new NotFoundException('Maintenance schedule not found.');
+      const request = await tx.maintenanceScheduleCancellation.findFirst({
+        where: { id: requestId, scheduleId: id, reviewStatus: MaintenanceCancellationReviewStatus.PENDING },
+        select: { id: true },
+      });
+      if (!request) throw new NotFoundException('Pending cancellation request not found.');
+      const isMaintenanceLogVoid = Boolean(schedule.logNumber);
+
+      if (decision === 'APPROVE') {
+        if (isMaintenanceLogVoid && schedule.status !== MaintenanceStatus.COMPLETED) {
+          throw new ConflictException('This maintenance log changed and can no longer be voided.');
+        }
+        if (isMaintenanceLogVoid) {
+          await tx.maintenanceLogEditUnlock.updateMany({
+            where: { scheduleId: id, consumedAt: null },
+            data: { consumedAt: new Date() },
+          });
+        }
+        const changed = await tx.maintenanceSchedule.updateMany({
+          where: isMaintenanceLogVoid
+            ? { id, status: schedule.status, updatedAt: schedule.updatedAt, deletedAt: null }
+            : { id, status: { in: [MaintenanceStatus.PENDING, MaintenanceStatus.DUE, MaintenanceStatus.OVERDUE] }, deletedAt: null },
+          data: isMaintenanceLogVoid
+            ? {
+                status: MaintenanceStatus.CANCELLED,
+                workOrderProgress: { ...this.asProgressRecord(schedule.workOrderProgress), maintenanceLogLocked: true } as Prisma.InputJsonObject,
+              }
+            : { status: MaintenanceStatus.CANCELLED },
+        });
+        if (changed.count !== 1) {
+          throw new ConflictException(isMaintenanceLogVoid
+            ? 'The maintenance log changed. Refresh before approving the void request.'
+            : 'The schedule can no longer be cancelled because its status changed or work has started.');
+        }
+      }
+
+      const reviewed = await tx.maintenanceScheduleCancellation.updateMany({
+        where: { id: requestId, scheduleId: id, reviewStatus: MaintenanceCancellationReviewStatus.PENDING },
+        data: {
+          reviewStatus: decision === 'APPROVE'
+            ? MaintenanceCancellationReviewStatus.APPROVED
+            : MaintenanceCancellationReviewStatus.REJECTED,
+          reviewedById: admin.id,
+          reviewedByName: admin.name,
+          reviewedByEmail: admin.email,
+          reviewReason: decision === 'REJECT' ? (reason as string).trim() : null,
+          reviewedAt: new Date(),
+        },
+      });
+      if (reviewed.count !== 1) throw new ConflictException('This cancellation request has already been reviewed.');
+
+      return {
+        id,
+        vehicleId: isMaintenanceLogVoid && decision === 'APPROVE' ? schedule.vehicleId : null,
+        status: decision === 'APPROVE' ? MaintenanceStatus.CANCELLED : schedule.status,
+        cancellations: await tx.maintenanceScheduleCancellation.findMany({ where: { scheduleId: id }, orderBy: { createdAt: 'desc' } }),
+      };
+    });
+    if (result.vehicleId) await this.syncVehicleStatus(result.vehicleId, MaintenanceStatus.CANCELLED);
+    const { vehicleId: _vehicleId, ...response } = result;
+    return response;
+  }
+
+  async cancelMaintenanceLog(id: string, reason: unknown, actor: ScheduleActor) {
+    if (!actor?.sub || !actor.roles?.some((role) => role.system === 'VMMS' && role.role === 'ADMIN')) {
+      throw new ForbiddenException('Only Admin can cancel a maintenance log.');
+    }
+    if (typeof reason !== 'string' || !reason.trim() || reason.trim().length > 2000) {
+      throw new BadRequestException('A cancellation reason of 1 to 2000 characters is required.');
+    }
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.findFirst({
+        where: { id: actor.sub, isActive: true, deletedAt: null, roles: { some: { role: 'ADMIN', system: 'VMMS' } } },
+        select: { id: true, name: true, email: true },
+      });
+      if (!user) throw new ForbiddenException('An active VMMS Admin account is required.');
+      const schedule = await tx.maintenanceSchedule.findFirst({ where: { id, deletedAt: null } });
+      if (!schedule) throw new NotFoundException('Maintenance log not found.');
+      if (schedule.status === MaintenanceStatus.CANCELLED) {
+        throw new BadRequestException('This maintenance log has already been cancelled.');
+      }
+      await tx.maintenanceLogEditUnlock.updateMany({
+        where: { scheduleId: id, consumedAt: null },
+        data: { consumedAt: new Date() },
+      });
+
+      const changed = await tx.maintenanceSchedule.updateMany({
+        where: { id, status: schedule.status, updatedAt: schedule.updatedAt, deletedAt: null },
+        data: {
+          status: MaintenanceStatus.CANCELLED,
+          workOrderProgress: { ...this.asProgressRecord(schedule.workOrderProgress), maintenanceLogLocked: true } as Prisma.InputJsonObject,
+        },
+      });
+      if (changed.count !== 1) throw new ConflictException('The work order changed. Refresh before cancelling.');
+      await tx.maintenanceScheduleCancellation.create({ data: {
+        scheduleId: id, actorId: user.id, actorName: user.name, actorEmail: user.email,
+        reason: reason.trim(), previousStatus: schedule.status,
+      } });
+      return {
+        id, vehicleId: schedule.vehicleId, status: MaintenanceStatus.CANCELLED,
+        cancellations: await tx.maintenanceScheduleCancellation.findMany({ where: { scheduleId: id }, orderBy: { createdAt: 'desc' } }),
+      };
+    });
+    await this.syncVehicleStatus(result.vehicleId, MaintenanceStatus.CANCELLED);
+    const { vehicleId: _vehicleId, ...response } = result;
+    return response;
+  }
+
+  async unlockMaintenanceLog(id: string, reason: unknown, actor: ScheduleActor) {
+    if (!actor?.sub || !actor.roles?.some((role) => role.system === 'VMMS' && role.role === 'OPERATIONS')) {
+      throw new ForbiddenException('Only Operations can request a maintenance-log unlock.');
+    }
+    if (typeof reason !== 'string' || !reason.trim() || reason.trim().length > 2000) {
+      throw new BadRequestException('An unlock reason of 1 to 2000 characters is required.');
+    }
+
     return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM maintenance_schedules WHERE id = ${id}::uuid FOR UPDATE`;
+      const user = await tx.user.findFirst({
+        where: { id: actor.sub, isActive: true, deletedAt: null, roles: { some: { role: 'OPERATIONS', system: 'VMMS' } } },
+        select: { id: true, name: true, email: true },
+      });
+      if (!user) throw new ForbiddenException('An active VMMS Admin account is required.');
+      const schedule = await tx.maintenanceSchedule.findFirst({ where: { id, deletedAt: null } });
+      if (!schedule) throw new NotFoundException('Maintenance log not found.');
+      this.assertMaintenanceLogClosed(schedule);
+      const activeUnlock = await tx.maintenanceLogEditUnlock.findFirst({ where: {
+        scheduleId: id, consumedAt: null,
+        OR: [
+          { reviewStatus: MaintenanceCancellationReviewStatus.PENDING },
+          { reviewStatus: MaintenanceCancellationReviewStatus.APPROVED, activatedAt: { gte: new Date(Date.now() - 15 * 60 * 1000) } },
+        ],
+      } });
+      if (activeUnlock) throw new ConflictException('This maintenance log already has a pending request or active unlock.');
+      const unlock = await tx.maintenanceLogEditUnlock.create({ data: {
+        scheduleId: id, actorId: user.id, actorName: user.name, actorEmail: user.email, reason: reason.trim(),
+        reviewStatus: MaintenanceCancellationReviewStatus.PENDING,
+      } });
+      return {
+        id: unlock.id, scheduleId: unlock.scheduleId, reviewStatus: unlock.reviewStatus,
+        createdAt: unlock.createdAt, actorId: unlock.actorId, actorName: unlock.actorName,
+        reason: unlock.reason, reviewedAt: unlock.reviewedAt, activatedAt: unlock.activatedAt,
+        consumedAt: unlock.consumedAt,
+      };
+    });
+  }
+
+  async reviewMaintenanceLogUnlock(id: string, requestId: string, decision: 'APPROVE' | 'REJECT', reason: unknown, actor: ScheduleActor) {
+    if (!actor?.sub || !actor.roles?.some((role) => role.system === 'VMMS' && role.role === 'ADMIN')) {
+      throw new ForbiddenException('Only Admin can review maintenance-log unlock requests.');
+    }
+    if (decision !== 'APPROVE' && decision !== 'REJECT') throw new BadRequestException('A valid unlock decision is required.');
+    if (decision === 'REJECT' && (typeof reason !== 'string' || !reason.trim() || reason.trim().length > 2000)) {
+      throw new BadRequestException('A rejection reason of 1 to 2000 characters is required.');
+    }
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM maintenance_schedules WHERE id = ${id}::uuid FOR UPDATE`;
+      const admin = await tx.user.findFirst({
+        where: { id: actor.sub, isActive: true, deletedAt: null, roles: { some: { role: 'ADMIN', system: 'VMMS' } } },
+        select: { id: true, name: true, email: true },
+      });
+      if (!admin) throw new ForbiddenException('An active VMMS Admin account is required.');
+      const schedule = await tx.maintenanceSchedule.findFirst({ where: { id, deletedAt: null } });
+      if (!schedule) throw new NotFoundException('Maintenance log not found.');
+      this.assertMaintenanceLogClosed(schedule);
+      const pending = await tx.maintenanceLogEditUnlock.findFirst({
+        where: { id: requestId, scheduleId: id, reviewStatus: MaintenanceCancellationReviewStatus.PENDING, consumedAt: null },
+      });
+      if (!pending) throw new NotFoundException('Pending maintenance-log unlock request not found.');
+      const reviewedAt = new Date();
+      const updated = await tx.maintenanceLogEditUnlock.updateMany({
+        where: { id: requestId, scheduleId: id, reviewStatus: MaintenanceCancellationReviewStatus.PENDING, consumedAt: null },
+        data: {
+          reviewStatus: decision === 'APPROVE' ? MaintenanceCancellationReviewStatus.APPROVED : MaintenanceCancellationReviewStatus.REJECTED,
+          reviewedById: admin.id, reviewedByName: admin.name, reviewedByEmail: admin.email,
+          reviewReason: decision === 'REJECT' ? (reason as string).trim() : null,
+          reviewedAt, activatedAt: decision === 'APPROVE' ? reviewedAt : null,
+        },
+      });
+      if (updated.count !== 1) throw new ConflictException('This unlock request has already been reviewed.');
+      return { id: requestId, scheduleId: id, reviewStatus: decision === 'APPROVE' ? MaintenanceCancellationReviewStatus.APPROVED : MaintenanceCancellationReviewStatus.REJECTED, activatedAt: decision === 'APPROVE' ? reviewedAt : null };
+    });
+  }
+
+  async updateMaintenanceLog(id: string, data: UpdateMaintenanceLogDto, actor: ScheduleActor) {
+    if (!actor?.sub || !actor.roles?.some((role) => role.system === 'VMMS' && role.role === 'OPERATIONS')) {
+      throw new ForbiddenException('Only Operations can save an Admin-authorized maintenance-log edit.');
+    }
+    if (!data || Object.keys(data).length === 0) throw new BadRequestException('Provide at least one maintenance-log field to update.');
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM maintenance_schedules WHERE id = ${id}::uuid FOR UPDATE`;
       const user = await tx.user.findFirst({
         where: { id: actor.sub, isActive: true, deletedAt: null, roles: { some: { role: 'OPERATIONS', system: 'VMMS' } } },
         select: { id: true, name: true, email: true },
       });
       if (!user) throw new ForbiddenException('An active VMMS Operations account is required.');
       const schedule = await tx.maintenanceSchedule.findFirst({ where: { id, deletedAt: null } });
-      if (!schedule) throw new NotFoundException('Maintenance schedule not found.');
-      if (['IN_PROGRESS', 'DONE', 'COMPLETED'].includes(schedule.status)) {
-        throw new BadRequestException('Schedule cannot be cancelled once work has started. Use ‘Extension’ instead.');
-      }
-      if (!['PENDING', 'DUE', 'OVERDUE'].includes(schedule.status)) {
-        throw new BadRequestException('This schedule has already been cancelled.');
-      }
-      const changed = await tx.maintenanceSchedule.updateMany({
-        where: { id, status: schedule.status, updatedAt: schedule.updatedAt, deletedAt: null },
-        data: { status: MaintenanceStatus.CANCELLED },
+      if (!schedule) throw new NotFoundException('Maintenance log not found.');
+      this.assertMaintenanceLogClosed(schedule);
+
+      const now = new Date();
+      const unlock = await tx.maintenanceLogEditUnlock.findFirst({
+        where: { scheduleId: id, consumedAt: null, reviewStatus: MaintenanceCancellationReviewStatus.APPROVED, activatedAt: { gte: new Date(now.getTime() - 15 * 60 * 1000) } },
+        orderBy: { activatedAt: 'desc' },
       });
-      if (changed.count !== 1) throw new ConflictException('The schedule changed. Refresh before cancelling.');
-      await tx.maintenanceScheduleCancellation.create({ data: {
-        scheduleId: id, actorId: user.id, actorName: user.name, actorEmail: user.email,
-        reason: reason.trim(), previousStatus: schedule.status,
-      } });
+      if (!unlock) throw new ForbiddenException('An active Admin unlock with a reason is required before editing this maintenance log.');
+
+      const progress = this.asProgressRecord(schedule.workOrderProgress);
+      const currentPartDetails = progress.partDetails && typeof progress.partDetails === 'object'
+        ? progress.partDetails as Record<string, unknown> : {};
+      const nextPartDetails = data.partDetails ?? currentPartDetails;
+      const nextClass = data.maintenanceClass ?? progress.maintenanceClass;
+      const nextRemarks = data.maintenanceRemarks ?? progress.maintenanceRemarks;
+      const nextOdometer = data.serviceOdometerReading ?? progress.serviceOdometerReading ?? schedule.odometerReading;
+      const nextLaborCost = data.laborCost ?? this.normalizeCostValue(progress.laborCost) ?? this.normalizeCostValue(schedule.laborCost);
+
+      if (data.maintenanceClass !== undefined && !['REPAIR', 'PREVENTIVE'].includes(data.maintenanceClass)) throw new BadRequestException('Maintenance type must be Repair or Preventive.');
+      if (data.maintenanceRemarks !== undefined && (typeof data.maintenanceRemarks !== 'string' || !data.maintenanceRemarks.trim())) throw new BadRequestException('Work description cannot be empty.');
+      if (data.serviceOdometerReading !== undefined && (!Number.isSafeInteger(data.serviceOdometerReading) || data.serviceOdometerReading <= 0)) throw new BadRequestException('Service odometer must be a positive whole number.');
+      if (data.laborCost !== undefined && (!Number.isFinite(data.laborCost) || data.laborCost < 0)) throw new BadRequestException('Labor cost must be zero or greater.');
+
+      const hasItemizedPartDetails = data.partDetails !== undefined || Boolean(progress.partDetails && typeof progress.partDetails === 'object');
+      const partsCost = hasItemizedPartDetails
+        ? this.calculateItemizedPartsCost(nextPartDetails)
+        : this.normalizeCostValue(schedule.partsCost) ?? 0;
+      const labor = this.normalizeCostValue(nextLaborCost);
+      if (labor == null) throw new BadRequestException('A labor cost is required to compute the total maintenance cost.');
+      const totalCost = Number((partsCost + labor).toFixed(2));
+
+      const before: Record<string, unknown> = {
+        maintenanceClass: progress.maintenanceClass ?? null,
+        maintenanceRemarks: progress.maintenanceRemarks ?? null,
+        serviceOdometerReading: progress.serviceOdometerReading ?? schedule.odometerReading ?? null,
+        laborCost: this.normalizeCostValue(progress.laborCost) ?? this.normalizeCostValue(schedule.laborCost),
+        partDetails: currentPartDetails,
+        partsCost: this.normalizeCostValue(schedule.partsCost),
+        totalCost: this.normalizeCostValue(schedule.totalCost),
+      };
+      const after: Record<string, unknown> = {
+        maintenanceClass: nextClass ?? null,
+        maintenanceRemarks: nextRemarks ?? null,
+        serviceOdometerReading: nextOdometer ?? null,
+        laborCost: labor,
+        partDetails: nextPartDetails,
+        partsCost,
+        totalCost,
+      };
+      const changedFieldSet = new Set(Object.keys(data));
+      for (const field of ['partsCost', 'totalCost']) {
+        if (JSON.stringify(before[field]) !== JSON.stringify(after[field])) changedFieldSet.add(field);
+      }
+      const changedFields = [...changedFieldSet].filter((field) => JSON.stringify(before[field]) !== JSON.stringify(after[field]));
+
+      const consumed = await tx.maintenanceLogEditUnlock.updateMany({
+        where: { id: unlock.id, consumedAt: null, createdAt: { gte: new Date(now.getTime() - 15 * 60 * 1000) } },
+        data: { consumedAt: now },
+      });
+      if (consumed.count !== 1) throw new ConflictException('The Admin unlock expired or was already consumed. Request a new unlock.');
+
+      if (changedFields.length) {
+        const nextProgress = {
+          ...progress,
+          maintenanceClass: nextClass,
+          maintenanceRemarks: nextRemarks,
+          serviceOdometerReading: nextOdometer,
+          laborCost: labor,
+          partDetails: nextPartDetails,
+          ...(schedule.status === MaintenanceStatus.CANCELLED ? { maintenanceLogLocked: true } : {}),
+        } as Prisma.InputJsonObject;
+        const changed = await tx.maintenanceSchedule.updateMany({
+          where: { id, status: schedule.status, updatedAt: schedule.updatedAt, deletedAt: null },
+          data: {
+            workOrderProgress: nextProgress,
+            odometerReading: Number(nextOdometer),
+            partsCost,
+            laborCost: labor,
+            totalCost,
+          },
+        });
+        if (changed.count !== 1) throw new ConflictException('The maintenance log changed while saving. Request a new unlock and try again.');
+        await tx.maintenanceLogEditAudit.createMany({ data: changedFields.map((fieldName) => ({
+          scheduleId: id,
+          unlockId: unlock.id,
+          actorId: user.id,
+          actorName: user.name,
+          actorEmail: user.email,
+          unlockReason: unlock.reason,
+          fieldName,
+          previousValue: before[fieldName] == null ? null : JSON.stringify(before[fieldName]),
+          newValue: after[fieldName] == null ? null : JSON.stringify(after[fieldName]),
+        })) });
+      }
+
+      const updated = await tx.maintenanceSchedule.findFirst({ where: { id, deletedAt: null } });
+      if (!updated) throw new NotFoundException('Maintenance log not found after save.');
       return {
-        id, status: MaintenanceStatus.CANCELLED,
-        cancellations: await tx.maintenanceScheduleCancellation.findMany({ where: { scheduleId: id }, orderBy: { createdAt: 'desc' } }),
+        id: updated.id,
+        status: updated.status,
+        workOrderProgress: progressForClient(updated),
+        partsCost,
+        laborCost: labor,
+        totalCost,
+        relocked: true,
       };
     });
+  }
+
+  private assertMaintenanceLogClosed(schedule: Pick<MaintenanceSchedule, 'status' | 'workOrderProgress'>) {
+    const progress = this.asProgressRecord(schedule.workOrderProgress);
+    if (schedule.status !== MaintenanceStatus.COMPLETED &&
+      !(schedule.status === MaintenanceStatus.CANCELLED && progress.maintenanceLogLocked === true)) {
+      throw new BadRequestException('Only Completed or Admin-cancelled maintenance logs can be unlocked and edited.');
+    }
+  }
+
+  private calculateItemizedPartsCost(partDetails: unknown): number {
+    if (!partDetails || typeof partDetails !== 'object' || Array.isArray(partDetails)) return 0;
+    return Number(Object.values(partDetails as Record<string, { partsUsed?: unknown; materialCost?: unknown }>).reduce((sum, part) => {
+      if (typeof part.partsUsed !== 'string' || !part.partsUsed.trim()) return sum;
+      const amount = this.normalizeCostValue(part.materialCost);
+      if (amount == null || amount < 0) throw new BadRequestException('Every recorded part needs a valid non-negative material cost.');
+      return sum + amount;
+    }, 0).toFixed(2));
   }
 
   async updateProgress(id: string, progress: any, actor: ScheduleActor) {
@@ -730,20 +1255,52 @@ export class MaintenanceSchedulesService {
     }
     const workflow = applyWorkOrderWorkflow(accessible, input as Record<string, any>, progress.action, actor, assignedItems);
     const normalizedProgress = workflow.progress as Prisma.InputJsonObject;
-    const normalizedCosts = this.normalizeCostPayload({
-      partsCost: progress.partsCost ?? progress.parts_cost,
-      laborCost: progress.laborCost ?? progress.labor_cost,
-      totalCost: progress.totalCost ?? progress.total_cost,
-    });
+    const progressRecord = workflow.progress as Record<string, any>;
+    const serviceOdometer = progressRecord.serviceOdometerReading;
+    if (progress.action === 'SUBMIT') {
+      if (typeof accessible.vehicleId !== 'string' || !accessible.vehicleId.trim()) throw new BadRequestException('A truck plate is required before submitting the maintenance log.');
+      if (!Number.isSafeInteger(serviceOdometer) || serviceOdometer <= 0) throw new BadRequestException('Enter a valid odometer reading at time of service.');
+      if (typeof accessible.assignedMechanic !== 'string' || !accessible.assignedMechanic.trim()) throw new BadRequestException('An assigned mechanic is required before submitting the maintenance log.');
+      if (!['REPAIR', 'PREVENTIVE'].includes(progressRecord.maintenanceClass)) throw new BadRequestException('Select Repair or Preventive as the maintenance type.');
+      if (typeof progressRecord.maintenanceRemarks !== 'string' || !progressRecord.maintenanceRemarks.trim()) throw new BadRequestException('Describe the work performed before submitting the maintenance log.');
+      const labor = progressRecord.laborCost;
+      if (labor == null || labor === '' || !Number.isFinite(Number(labor)) || Number(labor) < 0) throw new BadRequestException('Enter a valid labor cost of zero or more before submitting the maintenance log.');
+    }
+    const laborCost = this.normalizeCostValue(progressRecord.laborCost ?? accessible.laborCost);
+    const partDetails = progressRecord.partDetails && typeof progressRecord.partDetails === 'object'
+      ? Object.values(progressRecord.partDetails as Record<string, { partsUsed?: unknown; materialCost?: unknown }>)
+      : [];
+    const partsCost = partDetails.reduce((sum, part) => {
+      if (typeof part.partsUsed !== 'string' || !part.partsUsed.trim()) return sum;
+      const amount = this.normalizeCostValue(part.materialCost);
+      return amount != null && amount >= 0 ? sum + amount : sum;
+    }, 0);
+    const normalizedCosts = {
+      partsCost: progress.action === 'SUBMIT' || partDetails.length
+        ? Number(partsCost.toFixed(2))
+        : this.normalizeCostValue(accessible.partsCost),
+      laborCost,
+      totalCost: laborCost == null ? this.normalizeCostValue(accessible.totalCost) : Number((partsCost + laborCost).toFixed(2)),
+    };
 
     const payload: Record<string, any> = {
       status: workflow.status,
       ...stateForStorage(workflow.progress, workflow.status),
       ...(workflow.status === MaintenanceStatus.COMPLETED ? { completedAt: new Date() } : {}),
+      ...(progress.action === 'SUBMIT' ? { odometerReading: serviceOdometer } : {}),
       partsCost: normalizedCosts.partsCost ?? undefined,
       laborCost: normalizedCosts.laborCost ?? undefined,
       totalCost: normalizedCosts.totalCost ?? undefined,
     };
+
+    if (progress.action === 'SUBMIT' && !accessible.logNumber) {
+      const [generatedLog] = await this.prisma.$queryRaw<Array<{ logNumber: string }>>`
+        SELECT 'MLG-' || TO_CHAR(CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Manila', 'YYYYMMDD') || '-' ||
+          LPAD(NEXTVAL('maintenance_log_number_seq')::TEXT, 4, '0') AS "logNumber"
+      `;
+      if (!generatedLog?.logNumber) throw new BadRequestException('Could not generate the maintenance log number. Please retry.');
+      payload.logNumber = generatedLog.logNumber;
+    }
 
     if (normalizedProgress !== undefined) {
       payload.workOrderProgress = {
@@ -776,6 +1333,7 @@ export class MaintenanceSchedulesService {
 
     return {
       id: schedule.id,
+      logNumber: schedule.logNumber,
       status: schedule.status,
       nextSchedule: nextSchedule ? { id: nextSchedule.id, ...scheduleDue(nextSchedule) } : null,
       approvalStatus: schedule.approvalStatus,
@@ -820,12 +1378,81 @@ export class MaintenanceSchedulesService {
     return undefined;
   }
 
-  async remove(id: string) {
+  async remove(id: string, actor: ScheduleActor) {
+    const schedule = await this.prisma.maintenanceSchedule.findFirst({ where: { id, deletedAt: null } });
+    if (!schedule) throw new NotFoundException('Maintenance schedule not found.');
+    const progress = this.asProgressRecord(schedule.workOrderProgress);
+    const isMaintenanceLog = Boolean(schedule.logNumber) || schedule.status === MaintenanceStatus.COMPLETED || progress.maintenanceLogLocked === true;
+    if (!actor?.sub || !actor.roles?.some((role) => role.system === 'VMMS' && role.role === 'ADMIN')) {
+      throw new ForbiddenException(isMaintenanceLog
+        ? 'Deletion is restricted to Admin only. You may void this record instead.'
+        : 'Only Admin can deactivate a schedule. Operations must submit a cancellation request.');
+    }
+    const admin = await this.prisma.user.findFirst({
+      where: { id: actor.sub, isActive: true, deletedAt: null, roles: { some: { role: 'ADMIN', system: 'VMMS' } } },
+      select: { id: true },
+    });
+    if (!admin) throw new ForbiddenException(isMaintenanceLog
+      ? 'An active VMMS Admin account is required to delete a maintenance log.'
+      : 'An active VMMS Admin account is required to deactivate a schedule.');
     await this.prisma.maintenanceSchedule.update({
-      where: { id },
+      where: { id, deletedAt: null },
       data: { deletedAt: new Date() },
     });
     return { success: true };
+  }
+
+  async voidMaintenanceLog(id: string, reason: unknown, actor: ScheduleActor) {
+    if (!actor?.sub || !actor.roles?.some((role) => role.system === 'VMMS' && role.role === 'OPERATIONS')) {
+      throw new ForbiddenException('Only Operations can void a maintenance log.');
+    }
+    if (typeof reason !== 'string' || !reason.trim() || reason.trim().length > 2000) {
+      throw new BadRequestException('A void reason of 1 to 2000 characters is required.');
+    }
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM maintenance_schedules WHERE id = ${id}::uuid FOR UPDATE`;
+        const user = await tx.user.findFirst({
+          where: { id: actor.sub, isActive: true, deletedAt: null, roles: { some: { role: 'OPERATIONS', system: 'VMMS' } } },
+          select: { id: true, name: true, email: true },
+        });
+        if (!user) throw new ForbiddenException('An active VMMS Operations account is required.');
+        const schedule = await tx.maintenanceSchedule.findFirst({ where: { id, deletedAt: null } });
+        if (!schedule) throw new NotFoundException('Maintenance log not found.');
+        if (!schedule.logNumber) throw new BadRequestException('Only a persisted maintenance log can be voided.');
+        if (schedule.status !== MaintenanceStatus.COMPLETED) {
+          throw new BadRequestException('Only a completed maintenance log can be submitted for void approval.');
+        }
+        const pendingRequest = await tx.maintenanceScheduleCancellation.findFirst({
+          where: { scheduleId: id, reviewStatus: MaintenanceCancellationReviewStatus.PENDING },
+          select: { id: true },
+        });
+        if (pendingRequest) throw new ConflictException('A cancellation or void request is already awaiting Admin review.');
+
+        // Prevent any previously authorized edit from being used while the Admin
+        // decides whether this completed log should be voided.
+        await tx.maintenanceLogEditUnlock.updateMany({
+          where: { scheduleId: id, consumedAt: null },
+          data: { consumedAt: new Date() },
+        });
+        // The log remains Completed until the Admin approves this request.
+        await tx.maintenanceScheduleCancellation.create({ data: {
+          scheduleId: id, actorId: user.id, actorName: user.name, actorEmail: user.email,
+          reason: reason.trim(), previousStatus: schedule.status,
+          reviewStatus: MaintenanceCancellationReviewStatus.PENDING,
+        } });
+        return {
+          id,
+          status: schedule.status,
+          cancellations: await tx.maintenanceScheduleCancellation.findMany({ where: { scheduleId: id }, orderBy: { createdAt: 'desc' } }),
+        };
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException('A cancellation or void request is already awaiting Admin review.');
+      }
+      throw error;
+    }
   }
 
   // ── Private helper: sync Vehicle.status based on maintenance schedule status ──
@@ -960,9 +1587,11 @@ export class MaintenanceSchedulesService {
   }): { partsCost: number | null; laborCost: number | null; totalCost: number | null } {
     const partsCost = this.normalizeCostValue(values.partsCost);
     const laborCost = this.normalizeCostValue(values.laborCost);
-    const totalCost =
-      this.normalizeCostValue(values.totalCost) ??
-      (partsCost != null && laborCost != null ? partsCost + laborCost : null);
+    // Total is derived exclusively from its components. Never accept a client
+    // supplied/stale total as authoritative.
+    const totalCost = partsCost != null && laborCost != null
+      ? Number((partsCost + laborCost).toFixed(2))
+      : null;
 
     return { partsCost, laborCost, totalCost };
   }

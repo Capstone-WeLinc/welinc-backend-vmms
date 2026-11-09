@@ -8,7 +8,7 @@ describe('Odometer schedule validation', () => {
     expect(validateScheduleMileage(input, undefined, 14000)).toMatchObject({ odometerReading: 14000, intervalKm: 5000, startingReferenceReadingKm: 10000 });
   });
   it.each([15000, 15001])('rejects a threshold at or behind vehicle mileage %s despite a stale submitted reading', (reading) => {
-    expect(() => validateScheduleMileage(input, undefined, reading)).toThrow("Odometer threshold must be greater than the truck's current odometer reading.");
+    expect(() => validateScheduleMileage(input, undefined, reading)).toThrow("Odometer threshold must be greater than the truck's current odometer reading. It is the next future service trigger; if service is due now, use the existing due work order instead.");
   });
   it('also compares against a newer submitted reading', () => {
     expect(() => validateScheduleMileage({ ...input, odometerReading: '16000' }, undefined, 12000)).toThrow('must be greater');

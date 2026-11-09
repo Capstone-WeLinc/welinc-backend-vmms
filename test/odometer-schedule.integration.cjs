@@ -19,7 +19,7 @@ const { MaintenanceSchedulesService } = require('../dist/src/modules/vmms/mainte
       const service = new MaintenanceSchedulesService({ ...tx, $queryRaw: tx.$queryRaw.bind(tx), $transaction: (callback) => callback(tx) });
       service.syncVehicleStatus = async () => {};
       const input = { vehicleId: plate, title: template.type, checklistTemplateId: template.id, assignedDriver: mechanic.name, assignedMechanicId: mechanic.id,
-        triggerType: 'ODOMETER', startDate: '2099-01-01', odometerReading: '10000', startingReferenceReadingKm: '10000', intervalKm: '5000', bufferDistanceKm: '500' };
+        triggerType: 'ODOMETER', startDate: '2099-01-01', targetDueDate: '2099-02-01', odometerReading: '10000', startingReferenceReadingKm: '10000', intervalKm: '5000', bufferDistanceKm: '500' };
       await assert.rejects(() => service.create(input), /must be greater than the truck's current/);
       for (const intervalKm of ['0', '-5', '5000.5', '5000abc', '2147483648']) {
         await assert.rejects(() => service.create({ ...input, intervalKm }), (error) => error.getStatus() === 400);

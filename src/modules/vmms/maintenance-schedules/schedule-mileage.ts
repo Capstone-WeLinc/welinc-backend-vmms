@@ -41,7 +41,7 @@ export function validateScheduleMileage(data: CreateMaintenanceScheduleDto, prev
   // Recording that an existing threshold has been reached is valid. Only new or
   // reconfigured thresholds must be ahead of the current recorded reading.
   if (changesThreshold && threshold <= current) {
-    throw new BadRequestException("Odometer threshold must be greater than the truck's current odometer reading.");
+    throw new BadRequestException("Odometer threshold must be greater than the truck's current odometer reading. It is the next future service trigger; if service is due now, use the existing due work order instead.");
   }
   return { ...supplied, odometerReading: current, intervalKm: interval, startingReferenceReadingKm: reference,
     bufferDistanceKm: supplied.bufferDistanceKm ?? previous?.bufferDistanceKm ?? 0 };

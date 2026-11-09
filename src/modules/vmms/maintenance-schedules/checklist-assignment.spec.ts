@@ -2,12 +2,12 @@ import { MaintenanceSchedulesService } from './maintenance-schedules.service';
 
 describe('Schedule checklist assignment', () => {
   const template = { id: 'template-a', type: 'Oil Change', items: [{ id: 'oil' }] };
-  const input = { vehicleId: 'ABC123', title: 'Oil Change', assignedDriver: 'Mechanic', checklistTemplateId: template.id, startDate: '2099-01-01' };
+  const input = { vehicleId: 'ABC123', title: 'Oil Change', assignedDriver: 'Mechanic', checklistTemplateId: template.id, startDate: '2099-01-01', targetDueDate: '2099-02-01' };
   let service: MaintenanceSchedulesService;
   let db: any;
   let previous: any;
   beforeEach(() => {
-    previous = { ...input, startDate: new Date('2099-01-01T00:00:00Z'), id: 'schedule', status: 'PENDING', assignedMechanicId: 'mechanic', createdAt: new Date(), updatedAt: new Date() };
+    previous = { ...input, startDate: new Date('2099-01-01T00:00:00Z'), targetDueDate: new Date('2099-02-01T00:00:00Z'), id: 'schedule', status: 'PENDING', assignedMechanicId: 'mechanic', createdAt: new Date(), updatedAt: new Date() };
     db = {
       $queryRaw: jest.fn().mockResolvedValue([]),
       checklistTemplate: { findMany: jest.fn().mockResolvedValue([template]) },

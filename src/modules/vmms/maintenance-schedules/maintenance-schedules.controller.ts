@@ -27,6 +27,9 @@ import { MaintenanceSchedulesService } from './maintenance-schedules.service';
 import { CreateMaintenanceScheduleDto } from './dto/create-maintenance-schedule.dto';
 import { CancelMaintenanceScheduleDto } from './dto/cancel-maintenance-schedule.dto';
 import { UpdateWorkOrderPriorityDto } from './dto/update-work-order-priority.dto';
+import { UpdateMaintenanceLogDto } from './dto/update-maintenance-log.dto';
+import { ReviewMaintenanceCancellationDto } from './dto/review-maintenance-cancellation.dto';
+import { UpdateMaintenanceOdometerThresholdDto } from './dto/update-maintenance-odometer-threshold.dto';
 
 type WorkOrderUploadFile = { originalname: string; mimetype: string; size: number; buffer: Buffer };
 
@@ -75,10 +78,68 @@ export class MaintenanceSchedulesController {
     return this.maintenanceSchedulesService.updatePriority(id, body.priority, req.user);
   }
 
+  @Roles(UserRole.ADMIN)
+  @Patch(':id/odometer-threshold')
+  async updateOdometerThreshold(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: UpdateMaintenanceOdometerThresholdDto,
+    @Req() req: { user: ScheduleActor },
+  ) {
+    return this.maintenanceSchedulesService.updateOdometerThreshold(id, body.thresholdKm, body.reason, req.user);
+  }
+
   @Roles(UserRole.OPERATIONS)
   @Post(':id/cancel')
   async cancel(@Param('id', ParseUUIDPipe) id: string, @Body() body: CancelMaintenanceScheduleDto, @Req() req: { user: ScheduleActor }) {
     return this.maintenanceSchedulesService.cancel(id, body.reason, req.user);
+  }
+
+  @Roles(UserRole.ADMIN)
+  @Post(':id/cancellation-requests/:requestId/review')
+  async reviewCancellationRequest(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('requestId', ParseUUIDPipe) requestId: string,
+    @Body() body: ReviewMaintenanceCancellationDto,
+    @Req() req: { user: ScheduleActor },
+  ) {
+    return this.maintenanceSchedulesService.reviewCancellationRequest(
+      id, requestId, body.decision, body.reason, req.user,
+    );
+  }
+
+  @Roles(UserRole.ADMIN)
+  @Post(':id/cancel-log')
+  async cancelMaintenanceLog(@Param('id', ParseUUIDPipe) id: string, @Body() body: CancelMaintenanceScheduleDto, @Req() req: { user: ScheduleActor }) {
+    return this.maintenanceSchedulesService.cancelMaintenanceLog(id, body.reason, req.user);
+  }
+
+  @Roles(UserRole.OPERATIONS)
+  @Post(':id/unlock-log')
+  async unlockMaintenanceLog(@Param('id', ParseUUIDPipe) id: string, @Body() body: CancelMaintenanceScheduleDto, @Req() req: { user: ScheduleActor }) {
+    return this.maintenanceSchedulesService.unlockMaintenanceLog(id, body.reason, req.user);
+  }
+
+  @Roles(UserRole.ADMIN)
+  @Post(':id/unlock-requests/:requestId/review')
+  async reviewMaintenanceLogUnlock(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('requestId', ParseUUIDPipe) requestId: string,
+    @Body() body: ReviewMaintenanceCancellationDto,
+    @Req() req: { user: ScheduleActor },
+  ) {
+    return this.maintenanceSchedulesService.reviewMaintenanceLogUnlock(id, requestId, body.decision, body.reason, req.user);
+  }
+
+  @Roles(UserRole.OPERATIONS)
+  @Patch(':id/log-edit')
+  async updateMaintenanceLog(@Param('id', ParseUUIDPipe) id: string, @Body() body: UpdateMaintenanceLogDto, @Req() req: { user: ScheduleActor }) {
+    return this.maintenanceSchedulesService.updateMaintenanceLog(id, body, req.user);
+  }
+
+  @Roles(UserRole.OPERATIONS)
+  @Post(':id/void-log')
+  async voidMaintenanceLog(@Param('id', ParseUUIDPipe) id: string, @Body() body: CancelMaintenanceScheduleDto, @Req() req: { user: ScheduleActor }) {
+    return this.maintenanceSchedulesService.voidMaintenanceLog(id, body.reason, req.user);
   }
 
   @Roles(UserRole.ADMIN, UserRole.OPERATIONS, UserRole.CHIEF_MECHANIC, UserRole.MECHANIC)
@@ -132,9 +193,9 @@ export class MaintenanceSchedulesController {
     return this.maintenanceSchedulesService.deleteAttachment(id, attachmentId, req.user);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.OPERATIONS, UserRole.CHIEF_MECHANIC)
+  @Roles(UserRole.ADMIN)
   @Delete(':id')
-  async remove(@Param('id') id: string) {
-    return this.maintenanceSchedulesService.remove(id);
+  async remove(@Param('id') id: string, @Req() req: { user: ScheduleActor }) {
+    return this.maintenanceSchedulesService.remove(id, req.user);
   }
 }
