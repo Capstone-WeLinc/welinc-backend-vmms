@@ -12,22 +12,25 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../../auth/guards/roles.guard';
-import { Roles } from '../../../auth/decorators/roles.decorator';
-import { UserRole } from '@prisma/client';
+import { RoleSystem, Roles } from '../../../auth/decorators/roles.decorator';
+import { SystemType, UserRole } from '@prisma/client';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
 
 @Controller('users')
 @UseGuards(JwtAuthGuard, RolesGuard)
+@RoleSystem(SystemType.VMMS)
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
   @Get()
+  @Roles(UserRole.ADMIN)
   async list() {
     return this.usersService.findAll();
   }
 
   @Get(':id')
+  @Roles(UserRole.ADMIN)
   async get(@Param('id') id: string) {
     return this.usersService.findOne(id);
   }
@@ -40,7 +43,7 @@ export class UsersController {
   }
 
   @Patch(':id/role')
-  @Roles(UserRole.ADMIN, UserRole.OPERATIONS)
+  @Roles(UserRole.ADMIN)
   async setRole(
     @Param('id') id: string,
     @Body() body: { role: string },
@@ -56,7 +59,7 @@ export class UsersController {
   }
 
   @Patch(':id/status')
-  @Roles(UserRole.ADMIN, UserRole.OPERATIONS)
+  @Roles(UserRole.ADMIN)
   async setStatus(
     @Param('id') id: string,
     @Body() body: { status: string },
@@ -72,6 +75,7 @@ export class UsersController {
   }
 
   @Patch(':id/last-active')
+  @Roles(UserRole.ADMIN, UserRole.OPERATIONS, UserRole.CHIEF_MECHANIC, UserRole.MECHANIC)
   async setLastActive(@Param('id') id: string, @Req() req) {
     const currentUserId = req.user?.sub;
     if (currentUserId !== id) {

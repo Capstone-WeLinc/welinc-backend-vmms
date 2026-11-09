@@ -81,15 +81,21 @@ describe('scheduling HTTP permissions', () => {
   it.each([UserRole.ADMIN, UserRole.OPERATIONS, UserRole.CHIEF_MECHANIC, UserRole.MECHANIC])(
     'preserves scoped read requests for %s', async (role) => {
       setUser([vmms(role)]);
-      await request(app.getHttpServer()).get('/maintenance-schedules')
+      const req = request(app.getHttpServer()).get('/maintenance-schedules')
         .set('Authorization', `Bearer ${token([vmms(role)])}`).expect(200);
+      if (role === UserRole.CHIEF_MECHANIC || role === UserRole.MECHANIC) {
+        req.set('X-VMMS-Client', 'mobile');
+      }
+      await req;
       expect(service.findAll).toHaveBeenCalledWith(expect.objectContaining({ sub: 'user-1', roles: [vmms(role)] }));
     },
   );
   it.each([UserRole.MECHANIC, UserRole.CHIEF_MECHANIC])('preserves the %s execution/review endpoint', async (role) => {
     setUser([vmms(role)]);
     await request(app.getHttpServer()).patch('/maintenance-schedules/schedule-1/progress')
-      .set('Authorization', `Bearer ${token([vmms(role)])}`).send({ action: role === UserRole.MECHANIC ? 'SUBMIT' : 'APPROVE' }).expect(200);
+      .set('Authorization', `Bearer ${token([vmms(role)])}`)
+      .set('X-VMMS-Client', 'mobile')
+      .send({ action: role === UserRole.MECHANIC ? 'SUBMIT' : 'APPROVE' }).expect(200);
     expect(service.updateProgress).toHaveBeenCalledWith('schedule-1', expect.any(Object), expect.objectContaining({ roles: [vmms(role)] }));
   });
 });

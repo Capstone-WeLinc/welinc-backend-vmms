@@ -7,6 +7,7 @@ import { ChecklistsModule } from './checklists/checklists.module';
 import { MaintenanceSchedulesModule } from './maintenance-schedules/maintenance-schedules.module';
 import { VehiclesModule } from './vehicles/vehicles.module';
 import { LocationsModule } from './locations/locations.module';
+import { MaintenanceCostingModule } from './maintenance-costing/maintenance-costing.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { LocationsModule } from './locations/locations.module';
     ChecklistsModule,
     VehiclesModule,
     LocationsModule,
+    MaintenanceCostingModule,
   ],
   controllers: [VmmsConfigController],
   providers: [VmmsConfigService],

@@ -90,11 +90,26 @@ describe('checklist HTTP permissions', () => {
   describe.each([UserRole.ADMIN, UserRole.OPERATIONS, UserRole.CHIEF_MECHANIC, UserRole.MECHANIC])('%s reads', (role) => {
     it.each(reads)('preserves %s %s', async (method, path, handler) => {
       setUser([vmmsRole(role)]);
-      await request(app.getHttpServer())[method](path)
+      const req = request(app.getHttpServer())[method](path)
         .set('Authorization', `Bearer ${token([vmmsRole(role)])}`).expect(200);
+      if (role === UserRole.CHIEF_MECHANIC || role === UserRole.MECHANIC) {
+        req.set('X-VMMS-Client', 'mobile');
+      }
+      await req;
       expect(service[handler]).toHaveBeenCalledTimes(1);
     });
   });
+
+  it.each([UserRole.CHIEF_MECHANIC, UserRole.MECHANIC])(
+    'rejects %s checklist reads from the web client',
+    async (role) => {
+      setUser([vmmsRole(role)]);
+      await request(app.getHttpServer()).get('/checklists')
+        .set('Authorization', `Bearer ${token([vmmsRole(role)])}`)
+        .expect(403);
+      expectNoServiceCalls();
+    },
+  );
 
   describe.each([SystemType.VRMS, SystemType.BMS])('%s Admin cannot substitute for VMMS Admin', (system) => {
     it.each(writes)('denies %s %s with another subsystem token and spoofed context', async (method, path) => {
