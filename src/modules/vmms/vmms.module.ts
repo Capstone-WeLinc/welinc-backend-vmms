@@ -8,6 +8,7 @@ import { MaintenanceSchedulesModule } from './maintenance-schedules/maintenance-
 import { VehiclesModule } from './vehicles/vehicles.module';
 import { LocationsModule } from './locations/locations.module';
 import { MaintenanceCostingModule } from './maintenance-costing/maintenance-costing.module';
+import { FuelModule } from './fuel/fuel.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { MaintenanceCostingModule } from './maintenance-costing/maintenance-cost
     VehiclesModule,
     LocationsModule,
     MaintenanceCostingModule,
+    FuelModule,
   ],
   controllers: [VmmsConfigController],
   providers: [VmmsConfigService],

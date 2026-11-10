@@ -164,6 +164,8 @@ model Vehicle {
   createdAt         DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt         DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
   auditLogs         VehicleAuditLog[]
+  fuelFillUps       FuelFillUp[]
+  fuelAnomalies    FuelAnomaly[]
   garage            Garage?           @relation(fields: [garageId], references: [id], onDelete: Restrict)
 
   @@index([deletedAt])
@@ -182,6 +184,125 @@ model Garage {
 
   @@index([deletedAt])
   @@map("garages")
+}
+
+model FuelStation {
+  id        String        @id @default(uuid()) @db.Uuid
+  name      String        @unique @db.VarChar(100)
+  isActive  Boolean       @default(true) @map("is_active")
+  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+  fillUps   FuelFillUp[]
+
+  @@map("fuel_stations")
+}
+
+model FuelAnomalySetting {
+  id              String   @id @default("default") @db.VarChar(40)
+  thresholdPercent Decimal  @default(20) @map("threshold_percent") @db.Decimal(5, 2)
+  updatedById     String?  @map("updated_by_id") @db.Uuid
+  updatedByEmail  String?  @map("updated_by_email") @db.VarChar(255)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("fuel_anomaly_settings")
+}
+
+model FuelAnomalyThresholdAudit {
+  id                 String   @id @default(uuid()) @db.Uuid
+  actorId            String   @map("actor_id") @db.Uuid
+  actorEmail         String   @map("actor_email") @db.VarChar(255)
+  previousThreshold  Decimal? @map("previous_threshold") @db.Decimal(5, 2)
+  newThreshold       Decimal  @map("new_threshold") @db.Decimal(5, 2)
+  changedAt          DateTime @default(now()) @map("changed_at") @db.Timestamptz(6)
+
+  @@index([changedAt])
+  @@index([actorId, changedAt])
+  @@map("fuel_anomaly_threshold_audits")
+}
+
+model FuelFillUp {
+  id              String          @id @default(uuid()) @db.Uuid
+  vehicleId       String          @map("vehicle_id") @db.Uuid
+  stationId       String          @map("station_id") @db.Uuid
+  filledBy        String          @map("filled_by") @db.VarChar(100)
+  enteredById     String          @map("entered_by_id") @db.Uuid
+  entryDate       DateTime        @map("entry_date") @db.Date
+  liters          Decimal         @db.Decimal(10, 2)
+  pricePerLiter   Decimal         @map("price_per_liter") @db.Decimal(10, 2)
+  totalCost       Decimal         @map("total_cost") @db.Decimal(12, 2)
+  odometer        Int
+  isFullTank      Boolean         @default(false) @map("is_full_tank")
+  isVoided        Boolean         @default(false) @map("is_voided")
+  voidReason      String?         @map("void_reason") @db.Text
+  voidedById      String?         @map("voided_by_id") @db.Uuid
+  voidedAt        DateTime?       @map("voided_at") @db.Timestamptz(6)
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+  vehicle         Vehicle         @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  station         FuelStation     @relation(fields: [stationId], references: [id], onDelete: Restrict)
+  anomaly         FuelAnomaly?
+  audits          FuelAuditLog[]
+
+  @@index([vehicleId, entryDate, createdAt])
+  @@index([isVoided, entryDate])
+  @@map("fuel_fill_ups")
+}
+
+model FuelAnomaly {
+  id              String          @id @default(uuid()) @db.Uuid
+  fillUpId        String          @unique @map("fill_up_id") @db.Uuid
+  vehicleId       String          @map("vehicle_id") @db.Uuid
+  efficiency      Decimal         @db.Decimal(10, 2)
+  rollingAverage  Decimal         @map("rolling_average") @db.Decimal(10, 2)
+  status          String          @default("OPEN") @db.VarChar(20)
+  note            String?         @db.Text
+  notedAt         DateTime?       @map("noted_at") @db.Timestamptz(6)
+  notedById       String?         @map("noted_by_id") @db.Uuid
+  acknowledgedAt DateTime?       @map("acknowledged_at") @db.Timestamptz(6)
+  acknowledgedById String?        @map("acknowledged_by_id") @db.Uuid
+  acknowledgment  String?         @db.Text
+  attachments     FuelAnomalyAttachment[]
+  resolvedAt      DateTime?       @map("resolved_at") @db.Timestamptz(6)
+  resolvedById    String?         @map("resolved_by_id") @db.Uuid
+  notifiedDay1At  DateTime?       @map("notified_day_1_at") @db.Timestamptz(6)
+  notifiedDay3At  DateTime?       @map("notified_day_3_at") @db.Timestamptz(6)
+  notifiedDay7At  DateTime?       @map("notified_day_7_at") @db.Timestamptz(6)
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  fillUp          FuelFillUp      @relation(fields: [fillUpId], references: [id], onDelete: Restrict)
+  vehicle         Vehicle         @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+
+  @@index([status, createdAt])
+  @@map("fuel_anomalies")
+}
+
+model FuelAnomalyAttachment {
+  id           String      @id @default(uuid()) @db.Uuid
+  anomalyId    String      @map("anomaly_id") @db.Uuid
+  name         String      @db.VarChar(255)
+  storageName  String      @map("storage_name") @db.VarChar(255)
+  contentType  String      @map("content_type") @db.VarChar(100)
+  uploadedById String      @map("uploaded_by_id") @db.Uuid
+  createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  anomaly      FuelAnomaly @relation(fields: [anomalyId], references: [id], onDelete: Cascade)
+
+  @@index([anomalyId, createdAt])
+  @@map("fuel_anomaly_attachments")
+}
+
+model FuelAuditLog {
+  id           String      @id @default(uuid()) @db.Uuid
+  fillUpId     String?     @map("fill_up_id") @db.Uuid
+  actorId      String      @map("actor_id") @db.Uuid
+  actorEmail   String      @map("actor_email") @db.VarChar(255)
+  action       String      @db.VarChar(40)
+  reason       String?     @db.Text
+  details      Json?
+  createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  fillUp       FuelFillUp? @relation(fields: [fillUpId], references: [id], onDelete: Restrict)
+
+  @@index([fillUpId, createdAt])
+  @@index([actorId, createdAt])
+  @@map("fuel_audit_logs")
 }
 
 model Mechanic {

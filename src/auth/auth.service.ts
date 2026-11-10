@@ -439,7 +439,7 @@ export class AuthService {
   }
 
   async getAuditLogs(source = 'all') {
-    const supportedSources = ['all', 'login', 'vehicle', 'work-order', 'schedule'];
+    const supportedSources = ['all', 'login', 'vehicle', 'work-order', 'schedule', 'fuel'];
     if (!supportedSources.includes(source)) {
       throw new BadRequestException(`Source must be one of: ${supportedSources.join(', ')}.`);
     }
@@ -484,6 +484,25 @@ export class AuthService {
         id: `schedule:${row.id}`, source: 'schedule', actor: row.actorName || row.actorEmail,
         action: 'SCHEDULE_CANCELLED', entity: row.schedule.id, details: row.reason,
         previousValue: row.previousStatus, newValue: 'CANCELLED', createdAt: row.createdAt,
+      }))));
+    }
+    if (source === 'all' || source === 'fuel') {
+      requests.push(this.prisma.fuelAuditLog.findMany({
+        orderBy: { createdAt: 'desc' }, take,
+        select: { id: true, actorEmail: true, action: true, reason: true, details: true, createdAt: true, fillUp: { select: { vehicle: { select: { plateNumber: true } } } } },
+      }).then((rows) => rows.map((row) => ({
+        id: `fuel:${row.id}`, source: 'fuel', actor: row.actorEmail, action: row.action,
+        entity: row.fillUp?.vehicle.plateNumber ?? 'Fuel report', details: row.reason ?? (row.details ? JSON.stringify(row.details) : null),
+        previousValue: null, newValue: null, createdAt: row.createdAt,
+      }))));
+      requests.push(this.prisma.fuelAnomalyThresholdAudit.findMany({
+        orderBy: { changedAt: 'desc' }, take,
+        select: { id: true, actorEmail: true, previousThreshold: true, newThreshold: true, changedAt: true },
+      }).then((rows) => rows.map((row) => ({
+        id: `fuel-threshold:${row.id}`, source: 'fuel', actor: row.actorEmail,
+        action: 'FUEL_ANOMALY_THRESHOLD_CHANGED', entity: 'Fuel anomaly threshold',
+        details: 'Deviation below rolling average', previousValue: row.previousThreshold == null ? null : `${row.previousThreshold}%`,
+        newValue: `${row.newThreshold}%`, createdAt: row.changedAt,
       }))));
     }
 

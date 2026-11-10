@@ -17,6 +17,9 @@ const prisma = new PrismaClient({ adapter });
 
 async function cleanDatabase(prisma: PrismaClient) {
   console.log('Cleaning database...');
+  await prisma.fuelAuditLog.deleteMany({});
+  await prisma.fuelAnomaly.deleteMany({});
+  await prisma.fuelFillUp.deleteMany({});
   await prisma.auditLog.deleteMany({});
   await prisma.shopChangeLog.deleteMany({});
   await prisma.repairPart.deleteMany({});
