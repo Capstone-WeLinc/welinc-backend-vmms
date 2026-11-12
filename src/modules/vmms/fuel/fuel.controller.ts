@@ -6,6 +6,7 @@ import { JwtAuthGuard } from '../../../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../../auth/guards/roles.guard';
 import { RoleSystem, Roles } from '../../../auth/decorators/roles.decorator';
 import { FuelActor, FuelService } from './fuel.service';
+import { MAX_FUEL_ANOMALY_ATTACHMENT_BYTES } from './fuel.constants';
 import { FuelAcknowledgmentDto, FuelAnomalyNoteDto, FuelExportDto, FuelFillUpDto, FuelStationDto, UpdateFuelAnomalyThresholdDto, VoidFuelDto } from './fuel.dto';
 
 @Controller('fuel')
@@ -42,7 +43,7 @@ export class FuelController {
   updateAnomaly(@Param('id', ParseUUIDPipe) id: string, @Body() body: FuelAnomalyNoteDto, @Req() req: { user: FuelActor }) { return this.fuel.updateAnomaly(id, body, req.user); }
   @Roles(UserRole.OPERATIONS)
   @Post('anomalies/:id/attachments')
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 }, fileFilter: (_req, file, callback) => { const ext = file.originalname.toLowerCase().slice(file.originalname.lastIndexOf('.')); callback(null, ['.pdf', '.jpg', '.jpeg', '.png'].includes(ext)); } }))
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_FUEL_ANOMALY_ATTACHMENT_BYTES + 1 }, fileFilter: (_req, file, callback) => { const ext = file.originalname.toLowerCase().slice(file.originalname.lastIndexOf('.')); callback(null, ['.pdf', '.jpg', '.jpeg', '.png'].includes(ext)); } }))
   uploadAttachment(@Param('id', ParseUUIDPipe) id: string, @UploadedFile() file: { originalname: string; mimetype: string; buffer: Buffer } | undefined, @Req() req: { user: FuelActor }) { return this.fuel.uploadAnomalyAttachment(id, file, req.user); }
   @Roles(UserRole.ADMIN, UserRole.OPERATIONS, UserRole.CHIEF_MECHANIC)
   @Get('anomalies/:id/attachments/:attachmentId')

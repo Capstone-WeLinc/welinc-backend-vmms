@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, PayloadTooLargeException } from '@nestjs/common';
 import { createReadStream } from 'node:fs';
 import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { extname, join, resolve } from 'node:path';
@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../../../shared/prisma.service';
 import type { FuelFillUpDto } from './fuel.dto';
 import { computeFuelEfficiency, isFuelEfficiencyAnomaly } from './fuel-math';
+import { MAX_FUEL_ANOMALY_ATTACHMENT_BYTES } from './fuel.constants';
 
 export type FuelActor = { sub: string; email: string; roles: Array<{ system: string; role: string }> };
 const includeFuel = { vehicle: { select: { id: true, plateNumber: true, model: true } }, station: true, anomaly: true } as const;
@@ -181,6 +182,7 @@ export class FuelService {
   async uploadAnomalyAttachment(id: string, file: { originalname: string; mimetype: string; buffer: Buffer } | undefined, actor: FuelActor) {
     this.require(actor, 'OPERATIONS');
     if (!file) throw new BadRequestException('Select a file to attach.');
+    if (file.buffer.length > MAX_FUEL_ANOMALY_ATTACHMENT_BYTES) throw new PayloadTooLargeException('Fuel anomaly reports cannot exceed 10 MB.');
     const anomaly = await this.prisma.fuelAnomaly.findUnique({ where: { id } });
     if (!anomaly || anomaly.status !== 'OPEN') throw new NotFoundException('Open fuel anomaly not found.');
     if (Date.now() - anomaly.createdAt.getTime() < 3 * 86400000) throw new BadRequestException('Formal report attachments are available from Day 3.');
