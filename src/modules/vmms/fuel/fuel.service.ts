@@ -139,23 +139,43 @@ export class FuelService {
     const critical = Date.now() - anomaly.createdAt.getTime() >= 7 * 86400000;
     if (input.note !== undefined) {
       const note = input.note.trim();
-      const updated = await this.prisma.fuelAnomaly.update({ where: { id }, data: { note, notedAt: new Date(), notedById: actor.sub } });
-      await this.prisma.fuelAuditLog.create({ data: { fillUpId: anomaly.fillUpId, actorId: actor.sub, actorEmail: actor.email, action: 'ANOMALY_NOTE', details: { anomalyId: id, note } } });
-      return updated;
+      return this.prisma.$transaction(async (tx) => {
+        const saved = await tx.fuelAnomaly.updateMany({ where: { id, status: 'OPEN' }, data: { note, notedAt: new Date(), notedById: actor.sub } });
+        if (!saved.count) throw new NotFoundException('Open fuel anomaly not found.');
+        await tx.fuelAuditLog.create({ data: { fillUpId: anomaly.fillUpId, actorId: actor.sub, actorEmail: actor.email, action: 'ANOMALY_NOTE', details: { anomalyId: id, note } } });
+        return tx.fuelAnomaly.findUniqueOrThrow({ where: { id } });
+      });
     }
     if (critical && !anomaly.acknowledgedAt) throw new BadRequestException('Critical anomalies require Chief Mechanic or Admin acknowledgment before resolution.');
-    const updated = await this.prisma.fuelAnomaly.update({ where: { id }, data: { status: 'RESOLVED', resolvedAt: new Date(), resolvedById: actor.sub } });
-    await this.prisma.fuelAuditLog.create({ data: { fillUpId: anomaly.fillUpId, actorId: actor.sub, actorEmail: actor.email, action: 'ANOMALY_RESOLVED' } });
-    return updated;
+    return this.prisma.$transaction(async (tx) => {
+      const resolved = await tx.fuelAnomaly.updateMany({
+        where: { id, status: 'OPEN', ...(critical ? { acknowledgedAt: { not: null } } : {}) },
+        data: { status: 'RESOLVED', resolvedAt: new Date(), resolvedById: actor.sub },
+      });
+      if (!resolved.count) {
+        const current = await tx.fuelAnomaly.findUnique({ where: { id } });
+        if (!current || current.status !== 'OPEN') throw new NotFoundException('Open fuel anomaly not found.');
+        throw new BadRequestException('Critical anomalies require Chief Mechanic or Admin acknowledgment before resolution.');
+      }
+      await tx.fuelAuditLog.create({ data: { fillUpId: anomaly.fillUpId, actorId: actor.sub, actorEmail: actor.email, action: 'ANOMALY_RESOLVED' } });
+      return tx.fuelAnomaly.findUniqueOrThrow({ where: { id } });
+    });
   }
 
   async acknowledgeAnomaly(id: string, remark: string | undefined, actor: FuelActor) {
     this.require(actor, 'CHIEF_MECHANIC', 'ADMIN');
     const anomaly = await this.prisma.fuelAnomaly.findUnique({ where: { id } });
-    if (!anomaly || anomaly.status !== 'OPEN' || Date.now() - anomaly.createdAt.getTime() < 7 * 86400000) throw new BadRequestException('Only an open Critical anomaly can be acknowledged.');
-    const updated = await this.prisma.fuelAnomaly.update({ where: { id }, data: { acknowledgedAt: new Date(), acknowledgedById: actor.sub, acknowledgment: remark?.trim() || null } });
-    await this.prisma.fuelAuditLog.create({ data: { fillUpId: anomaly.fillUpId, actorId: actor.sub, actorEmail: actor.email, action: 'ANOMALY_ACKNOWLEDGED', details: { anomalyId: id, remark: remark?.trim() ?? '' } } });
-    return updated;
+    if (!anomaly || anomaly.status !== 'OPEN' || anomaly.acknowledgedAt || Date.now() - anomaly.createdAt.getTime() < 7 * 86400000) throw new BadRequestException('Only an unacknowledged open Critical anomaly can be acknowledged.');
+    const acknowledgment = remark?.trim() || null;
+    return this.prisma.$transaction(async (tx) => {
+      const acknowledged = await tx.fuelAnomaly.updateMany({
+        where: { id, status: 'OPEN', acknowledgedAt: null, createdAt: { lte: new Date(Date.now() - 7 * 86400000) } },
+        data: { acknowledgedAt: new Date(), acknowledgedById: actor.sub, acknowledgment },
+      });
+      if (!acknowledged.count) throw new BadRequestException('Only an unacknowledged open Critical anomaly can be acknowledged.');
+      await tx.fuelAuditLog.create({ data: { fillUpId: anomaly.fillUpId, actorId: actor.sub, actorEmail: actor.email, action: 'ANOMALY_ACKNOWLEDGED', details: { anomalyId: id, remark: acknowledgment ?? '' } } });
+      return tx.fuelAnomaly.findUniqueOrThrow({ where: { id } });
+    });
   }
 
   async uploadAnomalyAttachment(id: string, file: { originalname: string; mimetype: string; buffer: Buffer } | undefined, actor: FuelActor) {
