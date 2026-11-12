@@ -21,6 +21,7 @@ describe('Fuel baseline and void API behavior', () => {
   const secret = 'fuel-baseline-void-test-only';
   const jwt = new JwtService({ secret });
   const fillUps: any[] = [];
+  const anomalies: any[] = [];
   const auditRows: any[] = [];
   let nextId = 1;
 
@@ -65,13 +66,29 @@ describe('Fuel baseline and void API behavior', () => {
       findUnique: jest.fn(({ where }: any) => Promise.resolve(fillUps.find((row) => row.id === where.id) ?? null)),
       findUniqueOrThrow: jest.fn(({ where }: any) => Promise.resolve(fillUps.find((row) => row.id === where.id))),
     },
-    fuelAnomaly: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+    fuelAnomaly: {
+      findMany: jest.fn().mockResolvedValue([]),
+      findUnique: jest.fn(({ where }: any) => Promise.resolve(anomalies.find((anomaly) => anomaly.id === where.id) ?? null)),
+      updateMany: jest.fn(({ where, data }: any) => {
+        const anomaly = anomalies.find((item) => item.id === where.id && item.status === where.status && (!where.acknowledgedAt || item.acknowledgedAt === where.acknowledgedAt));
+        if (anomaly) Object.assign(anomaly, data);
+        return Promise.resolve({ count: anomaly ? 1 : 0 });
+      }),
+      findUniqueOrThrow: jest.fn(({ where }: any) => Promise.resolve(anomalies.find((anomaly) => anomaly.id === where.id))),
+    },
     fuelAuditLog: { create: jest.fn(({ data }: any) => { auditRows.push(data); return Promise.resolve(data); }) },
     $transaction: jest.fn((callback: (tx: any) => unknown) => callback(prisma)),
   };
 
-  const token = () => jwt.sign({ sub: actor.id, email: actor.email, roles: actor.roles, system: SystemType.VMMS, clientPlatform: 'web' });
-  const auth = (method: 'get' | 'post', path: string) => request(app.getHttpServer())[method](path).set('Authorization', `Bearer ${token()}`);
+  const token = () => jwt.sign({ sub: actor.id, email: actor.email, roles: actor.roles, system: SystemType.VMMS, clientPlatform: actor.roles.some(({ role }) => role === UserRole.MECHANIC || role === UserRole.CHIEF_MECHANIC) ? 'mobile' : 'web' });
+  const auth = (method: 'get' | 'post' | 'patch', path: string) => request(app.getHttpServer())[method](path)
+    .set('Authorization', `Bearer ${token()}`)
+    .set('x-vmms-client', actor.roles.some(({ role }) => role === UserRole.MECHANIC || role === UserRole.CHIEF_MECHANIC) ? 'mobile' : 'web');
+  const asRole = (role: UserRole) => {
+    actor.id = `${role.toLowerCase()}-user`;
+    actor.email = `${role.toLowerCase()}@example.test`;
+    actor.roles = [{ role, system: SystemType.VMMS }];
+  };
   const todayInManila = () => {
     const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
     const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
@@ -95,7 +112,11 @@ describe('Fuel baseline and void API behavior', () => {
   });
 
   beforeEach(() => {
+    actor.id = 'ops-user';
+    actor.email = 'ops@example.test';
+    actor.roles = vmmsOperations;
     fillUps.length = 0;
+    anomalies.length = 0;
     auditRows.length = 0;
     nextId = 1;
     jest.clearAllMocks();
@@ -137,5 +158,69 @@ describe('Fuel baseline and void API behavior', () => {
     const report = await auth('get', '/fuel/report').expect(200);
     expect(report.body.totals).toMatchObject({ totalFillUps: 3, totalLiters: 300, totalCost: 18000 });
     expect(report.body.entries.some((row: any) => row.id === voidedFillUpId)).toBe(false);
+  });
+
+  it('enforces the fuel role matrix at the API boundary', async () => {
+    const validFillUp = {
+      vehicleId, stationId, date: todayInManila(), liters: 10, pricePerLiter: 60,
+      odometer: 1000, isFullTank: false, filledBy: 'Test operator',
+    };
+
+    asRole(UserRole.ADMIN);
+    await auth('get', '/fuel').expect(200);
+    await auth('get', '/fuel/anomaly-threshold').expect(200);
+    await auth('post', '/fuel').send(validFillUp).expect(403);
+    await auth('post', '/fuel/stations').send({ name: 'New station' }).expect(403);
+    await auth('patch', `/fuel/stations/${stationId}`).send({ isActive: false }).expect(403);
+    await auth('post', `/fuel/${voidedFillUpId}/void`).send({ reason: 'Duplicate' }).expect(403);
+    await auth('patch', `/fuel/anomalies/${voidedFillUpId}`).send({ note: 'Resolved' }).expect(403);
+    await auth('post', `/fuel/anomalies/${voidedFillUpId}/attachments`).expect(403);
+    await auth('post', `/fuel/anomalies/${voidedFillUpId}/acknowledge`).send({ remark: 'Reviewed' }).expect(400);
+
+    asRole(UserRole.OPERATIONS);
+    await auth('get', '/fuel/anomaly-threshold').expect(200);
+    await auth('patch', '/fuel/anomaly-threshold').send({ thresholdPercent: 15 }).expect(403);
+    await auth('post', `/fuel/anomalies/${voidedFillUpId}/acknowledge`).send({ remark: 'Reviewed' }).expect(403);
+
+    asRole(UserRole.CHIEF_MECHANIC);
+    await auth('get', '/fuel/anomalies').expect(200);
+    await auth('post', `/fuel/anomalies/${voidedFillUpId}/acknowledge`).send({ remark: 'Reviewed' }).expect(400);
+    await auth('get', '/fuel/stations').expect(403);
+    await auth('post', '/fuel').send(validFillUp).expect(403);
+    await auth('post', `/fuel/${voidedFillUpId}/void`).send({ reason: 'Duplicate' }).expect(403);
+    await auth('post', `/fuel/anomalies/${voidedFillUpId}/attachments`).expect(403);
+
+    asRole(UserRole.MECHANIC);
+    await auth('get', '/fuel/anomalies').expect(403);
+  });
+
+  it('lets Chief Mechanic acknowledge a critical anomaly and records the actor in the audit log', async () => {
+    const anomaly = {
+      id: voidedFillUpId,
+      status: 'OPEN',
+      createdAt: dateFor(8),
+      acknowledgedAt: null,
+      fillUpId: voidedFillUpId,
+    };
+    anomalies.push(anomaly);
+    asRole(UserRole.CHIEF_MECHANIC);
+
+    const response = await auth('post', `/fuel/anomalies/${voidedFillUpId}/acknowledge`)
+      .send({ remark: 'Reviewed fuel receipt and vehicle history.' })
+      .expect(201);
+
+    expect(response.body).toMatchObject({
+      id: voidedFillUpId,
+      acknowledgedById: actor.id,
+      acknowledgment: 'Reviewed fuel receipt and vehicle history.',
+    });
+    expect(response.body.acknowledgedAt).toBeTruthy();
+    expect(auditRows).toContainEqual(expect.objectContaining({
+      fillUpId: voidedFillUpId,
+      actorId: actor.id,
+      actorEmail: actor.email,
+      action: 'ANOMALY_ACKNOWLEDGED',
+      details: { anomalyId: voidedFillUpId, remark: 'Reviewed fuel receipt and vehicle history.' },
+    }));
   });
 });
