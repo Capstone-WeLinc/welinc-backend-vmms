@@ -6,6 +6,8 @@ describe('AuthService.getAuditLogs', () => {
   const prisma = {
     loginActivity: { findMany: jest.fn() },
     vehicleAuditLog: { findMany: jest.fn() },
+    fuelAuditLog: { findMany: jest.fn() },
+    fuelAnomalyThresholdAudit: { findMany: jest.fn() },
     auditLog: { findMany: jest.fn() },
     maintenanceScheduleCancellation: { findMany: jest.fn() },
   };
@@ -19,6 +21,8 @@ describe('AuthService.getAuditLogs', () => {
     prisma.vehicleAuditLog.findMany.mockResolvedValue([
       { id: 'vehicle-id', email: 'ops@example.com', action: 'FIELD_UPDATED', fieldName: 'model', previousValue: 'A', newValue: 'B', createdAt: new Date(date.getTime() + 1000), vehicle: { plateNumber: 'ABC-123' } },
     ]);
+    prisma.fuelAuditLog.findMany.mockResolvedValue([]);
+    prisma.fuelAnomalyThresholdAudit.findMany.mockResolvedValue([]);
     prisma.auditLog.findMany.mockResolvedValue([]);
     prisma.maintenanceScheduleCancellation.findMany.mockResolvedValue([]);
   });

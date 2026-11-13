@@ -1,11 +1,12 @@
 import { BadRequestException } from '@nestjs/common';
+import * as XLSX from 'xlsx';
 import { PrismaService } from '../../../shared/prisma.service';
 import { VehiclesService } from './vehicles.service';
 
 describe('VehiclesService garage branch assignment', () => {
   const prisma = {
     $transaction: jest.fn(),
-    garage: { findFirst: jest.fn() },
+    garage: { findFirst: jest.fn(), findMany: jest.fn() },
     maintenanceSchedule: { findMany: jest.fn() },
     vehicleAuditLog: { createMany: jest.fn(), findMany: jest.fn() },
     vehicle: {
@@ -209,5 +210,78 @@ describe('VehiclesService garage branch assignment', () => {
         createdAt: true,
       },
     });
+  });
+
+  it('previews valid spreadsheet rows and reports duplicates without saving vehicles', async () => {
+    const data = [[
+      'Plate Number', 'Make', 'Model', 'Year', 'Engine Type', 'Truck Size/Category', 'Garage Branch', 'Odometer Baseline',
+    ]];
+    data.push(['EXISTING', 'Isuzu', 'NKR', '2022', 'Diesel', 'Medium', 'Marikina', '100']);
+    data.push(['TRUCK-1', 'Isuzu', 'NKR', '2022', 'Diesel', 'Medium', 'Sta. Rosa', '100']);
+    for (let index = 2; index <= 8; index += 1) {
+      data.push([`TRUCK-${index}`, 'Isuzu', 'NKR', '2022', 'Diesel', 'Medium', 'Pulilan', String(index * 100)]);
+    }
+    data.push(['TRUCK-1', 'Isuzu', 'NKR', '2022', 'Diesel', 'Medium', 'Marikina', '200']);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(data), 'Vehicles');
+    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+    prisma.garage.findMany.mockResolvedValue([
+      { id: 'marikina', name: 'Marikina' },
+      { id: 'sta-rosa', name: 'Sta. Rosa' },
+      { id: 'pulilan', name: 'Pulilan' },
+    ]);
+    prisma.vehicle.findMany.mockResolvedValue([{ plateNumber: 'EXISTING' }]);
+    prisma.vehicle.create.mockResolvedValue({ id: 'created' });
+
+    const preview = await service.previewExcel(buffer);
+    expect(preview.imported).toBe(0);
+    expect(preview.rows).toHaveLength(10);
+    expect(preview.rows[0]).toMatchObject({ row: 2, plateNumber: 'EXISTING' });
+    expect(preview.rows[0].errors[0]).toContain('already registered');
+    expect(preview.rows[1]).toMatchObject({ row: 3, plateNumber: 'TRUCK-1', errors: [] });
+    expect(preview.rows[9]).toMatchObject({ row: 11, plateNumber: 'TRUCK-1' });
+    expect(preview.rows[9].errors[0]).toContain('duplicated');
+    expect(prisma.vehicle.create).not.toHaveBeenCalled();
+
+    preview.rows[1].make = 'Hino';
+    await expect(service.saveImportRows(preview.rows)).resolves.toMatchObject({
+      imported: 8,
+      rows: [
+        { row: 2, plateNumber: 'EXISTING', errors: [expect.stringContaining('already registered')] },
+        { row: 11, plateNumber: 'TRUCK-1', errors: [expect.stringContaining('already registered')] },
+      ],
+    });
+    expect(prisma.vehicle.create).toHaveBeenCalledTimes(8);
+    expect(prisma.vehicle.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      plateNumber: 'TRUCK-1', garageId: 'sta-rosa', status: 'AVAILABLE', odometer: 100,
+    }) });
+    expect(prisma.vehicle.create).toHaveBeenCalledWith({ data: expect.objectContaining({ plateNumber: 'TRUCK-1', make: 'Hino' }) });
+  });
+
+  it('previews missing values and unregistered garage branches without writing', async () => {
+    const workbook = XLSX.utils.book_new();
+    const sheet = XLSX.utils.aoa_to_sheet([
+      ['Plate Number', 'Make', 'Model', 'Year', 'Engine Type', 'Truck Size/Category', 'Garage Branch', 'Odometer Baseline'],
+      ['MISSING', '', 'NKR', '2022', 'Diesel', 'Medium', 'Marikina', '100'],
+      ['BAD-BRANCH', 'Isuzu', 'NKR', '2022', 'Diesel', 'Medium', 'Nowhere', '100'],
+    ]);
+    XLSX.utils.book_append_sheet(workbook, sheet, 'Vehicles');
+    prisma.garage.findMany.mockResolvedValue([{ id: 'marikina', name: 'Marikina' }]);
+    prisma.vehicle.findMany.mockResolvedValue([]);
+    prisma.vehicle.create.mockResolvedValue({ id: 'created' });
+
+    await expect(service.previewExcel(XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer))
+      .resolves.toMatchObject({ imported: 0, rows: [
+        { row: 2, errors: [expect.stringContaining('make')] },
+        { row: 3, errors: [expect.stringContaining('registered branch')] },
+      ] });
+    expect(prisma.vehicle.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects workbooks without all expected columns', async () => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['Plate Number', 'Make']]), 'Vehicles');
+    await expect(service.previewExcel(XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer))
+      .rejects.toThrow('Missing required columns');
   });
 });

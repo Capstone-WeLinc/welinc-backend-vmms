@@ -20,6 +20,7 @@ test('VMMS seed preserves fixtures without duplicate pending recurrence', async 
     mechanic: { findMany: async () => ['Juan dela Cruz', 'Pedro Santos', 'Rommel Cruz', 'Isabel Reyes', 'Carl Santos'].map((name, i) => ({
       name, userId: `user-${i}`, isOutsourced: false,
     })) },
+    user: { findMany: async () => [{ id: 'chief-user', name: 'Chief Mechanic', email: 'chief@example.test' }] },
     checklistTemplate: {
       findUnique: async () => null,
       upsert: async args => {
@@ -40,6 +41,7 @@ test('VMMS seed preserves fixtures without duplicate pending recurrence', async 
         return row;
       },
     },
+    $queryRaw: async () => [{ logNumber: 'MLG-20260101-0001' }],
   };
 
   await seedVmms(prisma);

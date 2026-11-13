@@ -4,6 +4,7 @@ import { JwtService } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
 import { SystemType, UserRole } from '@prisma/client';
 import request from 'supertest';
+import * as XLSX from 'xlsx';
 import { JwtStrategy } from '../../../auth/strategies/jwt.strategy';
 import { PrismaService } from '../../../shared/prisma.service';
 import { VehiclesController } from './vehicles.controller';
@@ -18,7 +19,7 @@ describe('vehicle HTTP permissions', () => {
   let app: INestApplication;
   const jwt = new JwtService({ secret });
   const prisma = { user: { findFirst: jest.fn() } };
-  const service = { create: jest.fn(), update: jest.fn(), delete: jest.fn(), findAll: jest.fn(), findAuditHistory: jest.fn() };
+  const service = { create: jest.fn(), update: jest.fn(), delete: jest.fn(), findAll: jest.fn(), findAuditHistory: jest.fn(), previewExcel: jest.fn(), saveImportRows: jest.fn() };
   const writes: ['post' | 'patch' | 'delete', string, keyof typeof service][] = [
     ['post', '/vehicles', 'create'],
     ['patch', `/vehicles/${vehicleId}`, 'update'],
@@ -73,6 +74,42 @@ describe('vehicle HTTP permissions', () => {
         garageId: '8da72728-b06e-4475-945e-2cf3c99a996e',
       }).expect(method === 'post' ? 201 : 200);
     expect(service[handler]).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows Operations to preview an XLSX workbook without saving vehicles', async () => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['Plate Number']]), 'Vehicles');
+    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+    service.previewExcel.mockResolvedValue({ imported: 0, rows: [] });
+
+    await request(app.getHttpServer()).post('/vehicles/import/preview')
+      .set('Authorization', `Bearer ${token([roleFor(UserRole.OPERATIONS)])}`)
+      .attach('file', buffer, {
+        filename: 'vehicles.xlsx',
+        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      })
+      .expect(201, { imported: 0, rows: [] });
+    expect(service.previewExcel).toHaveBeenCalledWith(expect.any(Buffer));
+    expect(service.saveImportRows).not.toHaveBeenCalled();
+  });
+
+  it('saves only when Operations explicitly submits the reviewed rows', async () => {
+    service.saveImportRows.mockResolvedValue({ imported: 1, rows: [] });
+    await request(app.getHttpServer()).post('/vehicles/import')
+      .set('Authorization', `Bearer ${token([roleFor(UserRole.OPERATIONS)])}`)
+      .send({ rows: [{ row: 2, plateNumber: 'ABC-123', make: 'Isuzu', model: 'NKR', year: '2022', engineType: 'Diesel', truckSizeCategory: 'Medium', garageBranch: 'Marikina', odometerBaseline: '100' }] })
+      .expect(201, { imported: 1, rows: [] });
+    expect(service.saveImportRows).toHaveBeenCalledWith(expect.any(Array));
+  });
+
+  it('denies Admin access to vehicle import', async () => {
+    setUser([roleFor(UserRole.ADMIN)]);
+    await request(app.getHttpServer()).post('/vehicles/import/preview')
+      .set('Authorization', `Bearer ${token([roleFor(UserRole.ADMIN)])}`)
+      .attach('file', Buffer.from('file'), 'vehicles.xlsx')
+      .expect(403);
+    expect(service.previewExcel).not.toHaveBeenCalled();
+    expect(service.saveImportRows).not.toHaveBeenCalled();
   });
 
   it('passes the authenticated editor identity to the vehicle update service', async () => {

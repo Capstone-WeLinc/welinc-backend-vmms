@@ -1,10 +1,41 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../shared/prisma.service';
+import * as XLSX from 'xlsx';
 import { CreateVehicleDto } from './dto/create-vehicle.dto';
 import { UpdateVehicleDto } from './dto/update-vehicle.dto';
 
 export type VehicleAuditActor = { sub: string; email: string };
+
+export type VehicleImportRow = {
+  row: number;
+  plateNumber: string;
+  make: string;
+  model: string;
+  year: string;
+  engineType: string;
+  truckSizeCategory: string;
+  garageBranch: string;
+  odometerBaseline: string;
+  errors: string[];
+};
+export type VehicleImportResult = { imported: number; rows: VehicleImportRow[] };
+
+const importColumns = [
+  'plate number', 'make', 'model', 'year', 'engine type', 'truck size/category', 'garage branch', 'odometer baseline',
+] as const;
+
+function normalizeImportHeader(value: unknown): string {
+  return String(value ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function normalizePlate(value: string): string {
+  return value.trim().toUpperCase();
+}
+
+function normalizeBranch(value: string): string {
+  return value.trim().toLowerCase().replace(/^sta\.?\s+/, 'santa ');
+}
 
 function auditValue(value: unknown): string | null {
   if (value === null || value === undefined) return null;
@@ -81,6 +112,160 @@ export class VehiclesService {
     } catch (error) {
       this.throwPlateConflict(error);
     }
+  }
+
+  async previewExcel(buffer: Buffer): Promise<VehicleImportResult> {
+    let rows: unknown[][];
+    try {
+      const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: false });
+      const firstSheet = workbook.SheetNames[0];
+      if (!firstSheet) throw new Error('The workbook has no worksheets.');
+      rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[firstSheet], { header: 1, raw: false, defval: '' });
+    } catch {
+      throw new BadRequestException('The uploaded file is not a readable .xlsx workbook.');
+    }
+
+    if (!rows.length) throw new BadRequestException('The workbook is empty.');
+    const headerIndexes = new Map<string, number>();
+    rows[0].forEach((value, index) => headerIndexes.set(normalizeImportHeader(value), index));
+    const missingColumns = importColumns.filter((column) => !headerIndexes.has(column));
+    if (missingColumns.length) {
+      throw new BadRequestException(`Missing required columns: ${missingColumns.join(', ')}.`);
+    }
+    if (rows.length - 1 > 1000) throw new BadRequestException('Import at most 1,000 vehicle rows per workbook.');
+
+    const candidates = rows.slice(1).flatMap((row, index) => {
+      if (row.every((value) => String(value ?? '').trim() === '')) return [];
+      const cell = (column: string) => String(row[headerIndexes.get(column)!] ?? '').trim();
+      return [{
+        row: index + 2,
+        plateNumber: cell('plate number'),
+        make: cell('make'),
+        model: cell('model'),
+        year: cell('year'),
+        engineType: cell('engine type'),
+        truckSizeCategory: cell('truck size/category'),
+        garageBranch: cell('garage branch'),
+        odometerBaseline: cell('odometer baseline'),
+        errors: [],
+      }];
+    });
+    return this.processImportRows(candidates, false);
+  }
+
+  async saveImportRows(rows: VehicleImportRow[]): Promise<VehicleImportResult> {
+    if (!Array.isArray(rows) || rows.length === 0 || rows.length > 1000) {
+      throw new BadRequestException('Submit between 1 and 1,000 vehicle rows to save.');
+    }
+    return this.processImportRows(rows, true);
+  }
+
+  private async processImportRows(rows: VehicleImportRow[], save: boolean): Promise<VehicleImportResult> {
+    const [garages, existingVehicles] = await Promise.all([
+      this.prisma.garage.findMany({ where: { isActive: true, deletedAt: null }, select: { id: true, name: true } }),
+      this.prisma.vehicle.findMany({ select: { plateNumber: true } }),
+    ]);
+    const garagesByName = new Map(garages.map((garage) => [normalizeBranch(garage.name), garage]));
+    const seenPlates = new Set<string>(existingVehicles.map((vehicle) => normalizePlate(vehicle.plateNumber)));
+    const result: VehicleImportResult = { imported: 0, rows: [] };
+
+    for (const [index, rawRow] of rows.entries()) {
+      const row = rawRow && typeof rawRow === 'object' ? rawRow : {} as VehicleImportRow;
+      const candidate: VehicleImportRow = {
+        ...row,
+        row: Number.isInteger(row.row) && row.row > 1 ? row.row : index + 2,
+        plateNumber: String(row.plateNumber ?? '').trim(),
+        make: String(row.make ?? '').trim(),
+        model: String(row.model ?? '').trim(),
+        year: String(row.year ?? '').trim(),
+        engineType: String(row.engineType ?? '').trim(),
+        truckSizeCategory: String(row.truckSizeCategory ?? '').trim(),
+        garageBranch: String(row.garageBranch ?? '').trim(),
+        odometerBaseline: String(row.odometerBaseline ?? '').trim(),
+        errors: [],
+      };
+      const error = (message: string) => candidate.errors.push(message);
+      const required = [
+        ['plate number', candidate.plateNumber], ['make', candidate.make], ['model', candidate.model],
+        ['year', candidate.year], ['engine type', candidate.engineType],
+        ['truck size/category', candidate.truckSizeCategory], ['garage branch', candidate.garageBranch],
+        ['odometer baseline', candidate.odometerBaseline],
+      ].filter(([, value]) => !value).map(([column]) => column);
+      if (required.length) {
+        error(`Missing required value${required.length > 1 ? 's' : ''}: ${required.join(', ')}.`);
+        result.rows.push(candidate);
+        continue;
+      }
+      const maxLengths: Array<[string, string, number]> = [
+        ['plate number', candidate.plateNumber, 20], ['make', candidate.make, 80], ['model', candidate.model, 100],
+        ['engine type', candidate.engineType, 50], ['truck size/category', candidate.truckSizeCategory, 50],
+      ];
+      const tooLong = maxLengths.filter(([, value, max]) => value.length > max).map(([name, , max]) => `${name} must be ${max} characters or fewer`);
+      if (tooLong.length) {
+        tooLong.forEach(error);
+        result.rows.push(candidate);
+        continue;
+      }
+
+      const normalizedPlate = normalizePlate(candidate.plateNumber);
+      if (seenPlates.has(normalizedPlate)) {
+        error('Plate number is already registered or duplicated in this workbook.');
+        result.rows.push(candidate);
+        continue;
+      }
+
+      const year = Number(candidate.year);
+      const odometer = Number(candidate.odometerBaseline);
+      if (!/^\d{4}$/.test(candidate.year) || !Number.isInteger(year) || year < 1) {
+        error('Year must be a valid four-digit year.');
+        result.rows.push(candidate);
+        continue;
+      }
+      if (!/^\d+$/.test(candidate.odometerBaseline) || !Number.isSafeInteger(odometer) || odometer < 0) {
+        error('Odometer baseline must be a non-negative whole number.');
+        result.rows.push(candidate);
+        continue;
+      }
+
+      const garage = garagesByName.get(normalizeBranch(candidate.garageBranch));
+      if (!garage) {
+        error('Garage branch must match an active registered branch.');
+        result.rows.push(candidate);
+        continue;
+      }
+
+      if (!save) {
+        seenPlates.add(normalizedPlate);
+        result.rows.push(candidate);
+        continue;
+      }
+
+      try {
+        await this.prisma.vehicle.create({ data: {
+          plateNumber: normalizedPlate,
+          make: candidate.make,
+          model: candidate.model,
+          year,
+          engineType: candidate.engineType,
+          truckSizeCategory: candidate.truckSizeCategory,
+          capacity: 0,
+          odometer,
+          garageId: garage.id,
+          status: 'AVAILABLE',
+        } });
+      } catch (createError) {
+        if (typeof createError === 'object' && createError !== null && 'code' in createError && createError.code === 'P2002') {
+          error('Plate number is already registered or duplicated in this workbook.');
+          seenPlates.add(normalizedPlate);
+          result.rows.push(candidate);
+          continue;
+        }
+        throw createError;
+      }
+      seenPlates.add(normalizedPlate);
+      result.imported += 1;
+    }
+    return result;
   }
 
   async update(id: string, dto: UpdateVehicleDto, actor: VehicleAuditActor) {
