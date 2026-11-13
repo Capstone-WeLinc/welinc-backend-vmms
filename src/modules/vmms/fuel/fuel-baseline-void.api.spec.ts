@@ -81,7 +81,7 @@ describe('Fuel baseline and void API behavior', () => {
       findUniqueOrThrow: jest.fn(({ where }: any) => Promise.resolve(fillUps.find((row) => row.id === where.id))),
     },
     fuelAnomaly: {
-      findMany: jest.fn().mockResolvedValue([]),
+      findMany: jest.fn(() => Promise.resolve(anomalies)),
       findUnique: jest.fn(({ where }: any) => Promise.resolve(anomalies.find((anomaly) => anomaly.id === where.id) ?? null)),
       updateMany: jest.fn(({ where, data }: any) => {
         const anomaly = anomalies.find((item) => {
@@ -251,6 +251,68 @@ describe('Fuel baseline and void API behavior', () => {
       action: 'ANOMALY_ACKNOWLEDGED',
       details: { anomalyId: voidedFillUpId, remark: 'Reviewed fuel receipt and vehicle history.' },
     }));
+  });
+
+  it('serves the mobile approval contract and returns the acknowledged anomaly on the next fetch', async () => {
+    const anomaly = {
+      id: voidedFillUpId,
+      status: 'OPEN',
+      createdAt: dateFor(8),
+      acknowledgedAt: null,
+      acknowledgedById: null,
+      acknowledgment: null,
+      fillUpId: voidedFillUpId,
+      efficiency: 2.4,
+      rollingAverage: 6.8,
+      note: 'Operations reviewed the fuel entry.',
+      vehicle: { plateNumber: 'NDG 5821' },
+    };
+    anomalies.push(anomaly);
+    asRole(UserRole.CHIEF_MECHANIC);
+
+    const initial = await auth('get', '/fuel/anomalies').expect(200);
+    expect(initial.body).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: voidedFillUpId,
+        status: 'OPEN',
+        severity: 'CRITICAL',
+        efficiency: 2.4,
+        rollingAverage: 6.8,
+        note: 'Operations reviewed the fuel entry.',
+        acknowledgedAt: null,
+        vehicle: expect.objectContaining({ plateNumber: 'NDG 5821' }),
+      }),
+    ]));
+
+    const acknowledgment = await auth('post', `/fuel/anomalies/${voidedFillUpId}/acknowledge`)
+      .send({ remark: 'Checked against the receipt.' })
+      .expect(201);
+    expect(acknowledgment.body).toMatchObject({
+      id: voidedFillUpId,
+      acknowledgedById: actor.id,
+      acknowledgment: 'Checked against the receipt.',
+    });
+    expect(acknowledgment.body.acknowledgedAt).toBeTruthy();
+
+    const refreshed = await auth('get', '/fuel/anomalies').expect(200);
+    expect(refreshed.body).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: voidedFillUpId,
+        severity: 'CRITICAL',
+        acknowledgedAt: acknowledgment.body.acknowledgedAt,
+        acknowledgedById: actor.id,
+        acknowledgment: 'Checked against the receipt.',
+        vehicle: expect.objectContaining({ plateNumber: 'NDG 5821' }),
+      }),
+    ]));
+  });
+
+  it('denies a mobile Mechanic access to Chief Mechanic fuel approvals before querying anomalies', async () => {
+    asRole(UserRole.MECHANIC);
+
+    await auth('get', '/fuel/anomalies').expect(403);
+
+    expect(prisma.fuelAnomaly.findMany).not.toHaveBeenCalled();
   });
 
   it('lets Operations resolve an acknowledged Critical anomaly and records the resolution actor', async () => {
