@@ -1,13 +1,10 @@
 import { INestApplication } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { PassportModule } from '@nestjs/passport';
-import { JwtService } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
 import { createReadStream } from 'node:fs';
 import * as fsPromises from 'node:fs/promises';
 import { SystemType, UserRole } from '@prisma/client';
 import request from 'supertest';
-import { JwtStrategy } from '../../../auth/strategies/jwt.strategy';
+import { JwtAuthGuard } from '../../../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../../auth/guards/roles.guard';
 import { PrismaService } from '../../../shared/prisma.service';
 import { FuelController } from './fuel.controller';
@@ -31,18 +28,16 @@ const vmmsOperations = [{ role: UserRole.OPERATIONS, system: SystemType.VMMS }];
 
 describe('Fuel baseline and void API behavior', () => {
   let app: INestApplication;
-  const secret = 'fuel-baseline-void-test-only';
-  const jwt = new JwtService({ secret });
   const fillUps: any[] = [];
   const anomalies: any[] = [];
   const attachments: any[] = [];
   const auditRows: any[] = [];
   let nextId = 1;
 
-  const actor = { id: 'ops-user', email: 'ops@example.test', isActive: true, lockedAt: null, roles: vmmsOperations };
+  const actor = { sub: 'ops-user', email: 'ops@example.test', roles: vmmsOperations };
   const dateFor = (daysAgo: number) => new Date(Date.now() - daysAgo * 86400000);
   const makeRow = (id: string, odometer: number, daysAgo: number, isFullTank = true, liters = 100) => ({
-    id, vehicleId, stationId, enteredById: actor.id, filledBy: 'Operations',
+    id, vehicleId, stationId, enteredById: actor.sub, filledBy: 'Operations',
     entryDate: dateFor(daysAgo), createdAt: dateFor(daysAgo),
     liters, pricePerLiter: 60, totalCost: liters * 60, odometer, isFullTank,
     isVoided: false, vehicle: { id: vehicleId, plateNumber: 'NDG 5821', model: 'Test Truck' },
@@ -54,7 +49,7 @@ describe('Fuel baseline and void API behavior', () => {
   };
   const prisma: any = {
     user: {
-      findFirst: jest.fn(({ where }: any) => Promise.resolve(where.id === actor.id ? actor : null)),
+      findFirst: jest.fn(({ where }: any) => Promise.resolve(where.id === actor.sub ? actor : null)),
     },
     vehicle: { findFirst: jest.fn(() => Promise.resolve({ id: vehicleId, plateNumber: 'NDG 5821', model: 'Test Truck', odometer: 0 })) },
     fuelStation: { findFirst: jest.fn(() => Promise.resolve({ id: stationId, name: 'Petron', isActive: true })) },
@@ -105,12 +100,9 @@ describe('Fuel baseline and void API behavior', () => {
     $transaction: jest.fn((callback: (tx: any) => unknown) => callback(prisma)),
   };
 
-  const token = () => jwt.sign({ sub: actor.id, email: actor.email, roles: actor.roles, system: SystemType.VMMS, clientPlatform: actor.roles.some(({ role }) => role === UserRole.MECHANIC || role === UserRole.CHIEF_MECHANIC) ? 'mobile' : 'web' });
-  const auth = (method: 'get' | 'post' | 'patch', path: string) => request(app.getHttpServer())[method](path)
-    .set('Authorization', `Bearer ${token()}`)
-    .set('x-vmms-client', actor.roles.some(({ role }) => role === UserRole.MECHANIC || role === UserRole.CHIEF_MECHANIC) ? 'mobile' : 'web');
+  const auth = (method: 'get' | 'post' | 'patch', path: string) => request(app.getHttpServer())[method](path);
   const asRole = (role: UserRole) => {
-    actor.id = `${role.toLowerCase()}-user`;
+    actor.sub = `${role.toLowerCase()}-user`;
     actor.email = `${role.toLowerCase()}@example.test`;
     actor.roles = [{ role, system: SystemType.VMMS }];
   };
@@ -122,22 +114,21 @@ describe('Fuel baseline and void API behavior', () => {
 
   beforeAll(async () => {
     const module = await Test.createTestingModule({
-      imports: [PassportModule.register({ defaultStrategy: 'jwt' })],
       controllers: [FuelController],
       providers: [
-        JwtStrategy,
         RolesGuard,
         FuelService,
-        { provide: ConfigService, useValue: { getOrThrow: () => secret } },
         { provide: PrismaService, useValue: prisma },
       ],
+    }).overrideGuard(JwtAuthGuard).useValue({
+      canActivate: (context: any) => { context.switchToHttp().getRequest().user = actor; return true; },
     }).compile();
     app = module.createNestApplication();
     await app.init();
   });
 
   beforeEach(() => {
-    actor.id = 'ops-user';
+    actor.sub = 'ops-user';
     actor.email = 'ops@example.test';
     actor.roles = vmmsOperations;
     fillUps.length = 0;
@@ -182,7 +173,7 @@ describe('Fuel baseline and void API behavior', () => {
     const latestEntry = history.body.find((row: any) => row.id === 'full-4');
     expect(voidedEntry).toMatchObject({ isVoided: true, efficiency: null });
     expect(latestEntry.efficiency).toBe(20);
-    expect(auditRows).toContainEqual(expect.objectContaining({ action: 'VOIDED', reason: 'Duplicate receipt', actorId: actor.id }));
+    expect(auditRows).toContainEqual(expect.objectContaining({ action: 'VOIDED', reason: 'Duplicate receipt', actorId: actor.sub }));
 
     const report = await auth('get', '/fuel/report').expect(200);
     expect(report.body.totals).toMatchObject({ totalFillUps: 3, totalLiters: 300, totalCost: 18000 });
@@ -240,13 +231,13 @@ describe('Fuel baseline and void API behavior', () => {
 
     expect(response.body).toMatchObject({
       id: voidedFillUpId,
-      acknowledgedById: actor.id,
+      acknowledgedById: actor.sub,
       acknowledgment: 'Reviewed fuel receipt and vehicle history.',
     });
     expect(response.body.acknowledgedAt).toBeTruthy();
     expect(auditRows).toContainEqual(expect.objectContaining({
       fillUpId: voidedFillUpId,
-      actorId: actor.id,
+      actorId: actor.sub,
       actorEmail: actor.email,
       action: 'ANOMALY_ACKNOWLEDGED',
       details: { anomalyId: voidedFillUpId, remark: 'Reviewed fuel receipt and vehicle history.' },
@@ -289,7 +280,7 @@ describe('Fuel baseline and void API behavior', () => {
       .expect(201);
     expect(acknowledgment.body).toMatchObject({
       id: voidedFillUpId,
-      acknowledgedById: actor.id,
+      acknowledgedById: actor.sub,
       acknowledgment: 'Checked against the receipt.',
     });
     expect(acknowledgment.body.acknowledgedAt).toBeTruthy();
@@ -300,7 +291,7 @@ describe('Fuel baseline and void API behavior', () => {
         id: voidedFillUpId,
         severity: 'CRITICAL',
         acknowledgedAt: acknowledgment.body.acknowledgedAt,
-        acknowledgedById: actor.id,
+        acknowledgedById: actor.sub,
         acknowledgment: 'Checked against the receipt.',
         vehicle: expect.objectContaining({ plateNumber: 'NDG 5821' }),
       }),
@@ -336,12 +327,12 @@ describe('Fuel baseline and void API behavior', () => {
       id: voidedFillUpId,
       status: 'RESOLVED',
       acknowledgedById: 'chief-mechanic-user',
-      resolvedById: actor.id,
+      resolvedById: actor.sub,
     });
     expect(response.body.resolvedAt).toBeTruthy();
     expect(auditRows).toContainEqual(expect.objectContaining({
       fillUpId: voidedFillUpId,
-      actorId: actor.id,
+      actorId: actor.sub,
       actorEmail: actor.email,
       action: 'ANOMALY_RESOLVED',
     }));
@@ -389,11 +380,11 @@ describe('Fuel baseline and void API behavior', () => {
       status: 'OPEN',
       acknowledgedAt: null,
       note: 'Checked the odometer and fuel receipt.',
-      notedById: actor.id,
+      notedById: actor.sub,
     });
     expect(auditRows).toContainEqual(expect.objectContaining({
       fillUpId: voidedFillUpId,
-      actorId: actor.id,
+      actorId: actor.sub,
       actorEmail: actor.email,
       action: 'ANOMALY_NOTE',
       details: { anomalyId: voidedFillUpId, note: 'Checked the odometer and fuel receipt.' },
@@ -444,19 +435,19 @@ describe('Fuel baseline and void API behavior', () => {
       anomalyId: voidedFillUpId,
       name: 'inspection-report.pdf',
       contentType: 'application/pdf',
-      uploadedById: actor.id,
+      uploadedById: actor.sub,
     });
     expect(prisma.fuelAnomalyAttachment.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
         anomalyId: voidedFillUpId,
         name: 'inspection-report.pdf',
         contentType: 'application/pdf',
-        uploadedById: actor.id,
+        uploadedById: actor.sub,
       }),
     }));
     expect(auditRows).toContainEqual(expect.objectContaining({
       fillUpId: voidedFillUpId,
-      actorId: actor.id,
+      actorId: actor.sub,
       actorEmail: actor.email,
       action: 'ANOMALY_ATTACHMENT',
       details: expect.objectContaining({ anomalyId: voidedFillUpId }),
@@ -479,8 +470,8 @@ describe('Fuel baseline and void API behavior', () => {
       .attach('file', Buffer.from('test image report'), { filename, contentType })
       .expect(201);
 
-    expect(response.body).toMatchObject({ anomalyId: voidedFillUpId, name: filename, contentType, uploadedById: actor.id });
-    expect(auditRows).toContainEqual(expect.objectContaining({ actorId: actor.id, action: 'ANOMALY_ATTACHMENT' }));
+    expect(response.body).toMatchObject({ anomalyId: voidedFillUpId, name: filename, contentType, uploadedById: actor.sub });
+    expect(auditRows).toContainEqual(expect.objectContaining({ actorId: actor.sub, action: 'ANOMALY_ATTACHMENT' }));
   });
 
   it.each([
@@ -644,10 +635,11 @@ describe('Fuel baseline and void API behavior', () => {
       anomalyId: stationId,
       name: 'maximum-size-report.pdf',
       contentType: 'application/pdf',
-      uploadedById: actor.id,
+      uploadedById: actor.sub,
     });
     expect(fsPromises.writeFile).toHaveBeenCalledTimes(1);
     expect(prisma.fuelAnomalyAttachment.create).toHaveBeenCalledTimes(1);
-    expect(auditRows).toContainEqual(expect.objectContaining({ actorId: actor.id, action: 'ANOMALY_ATTACHMENT' }));
+    expect(auditRows).toContainEqual(expect.objectContaining({ actorId: actor.sub, action: 'ANOMALY_ATTACHMENT' }));
   });
 });
+

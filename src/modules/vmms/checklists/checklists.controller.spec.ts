@@ -92,9 +92,6 @@ describe('checklist HTTP permissions', () => {
       setUser([vmmsRole(role)]);
       const req = request(app.getHttpServer())[method](path)
         .set('Authorization', `Bearer ${token([vmmsRole(role)])}`).expect(200);
-      if (role === UserRole.CHIEF_MECHANIC || role === UserRole.MECHANIC) {
-        req.set('X-VMMS-Client', 'mobile');
-      }
       await req;
       expect(service[handler]).toHaveBeenCalledTimes(1);
     });

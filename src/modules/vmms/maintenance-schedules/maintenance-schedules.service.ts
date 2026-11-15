@@ -696,12 +696,6 @@ export class MaintenanceSchedulesService {
 
     return this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM maintenance_schedules WHERE id = ${id}::uuid FOR UPDATE`;
-      const admin = await tx.user.findFirst({
-        where: { id: actor.sub, isActive: true, deletedAt: null, roles: { some: { role: 'ADMIN', system: 'VMMS' } } },
-        select: { id: true, email: true },
-      });
-      if (!admin) throw new ForbiddenException('An active VMMS Admin account is required.');
-
       const schedule = await tx.maintenanceSchedule.findFirst({ where: { id, deletedAt: null } });
       if (!schedule) throw new NotFoundException('Maintenance schedule not found.');
       if (schedule.triggerType !== MaintenanceTriggerType.ODOMETER) {
@@ -767,8 +761,8 @@ export class MaintenanceSchedulesService {
       await tx.vehicleAuditLog.createMany({ data: [
         {
           vehicleId: vehicle.id,
-          userId: admin.id,
-          email: admin.email,
+          userId: actor.sub,
+          email: actor.email,
           action: 'SCHEDULE_ODOMETER_THRESHOLD_UPDATED',
           fieldName: scheduleKey,
           previousValue: previousThreshold == null ? null : String(previousThreshold),
@@ -776,8 +770,8 @@ export class MaintenanceSchedulesService {
         },
         {
           vehicleId: vehicle.id,
-          userId: admin.id,
-          email: admin.email,
+          userId: actor.sub,
+          email: actor.email,
           action: 'SCHEDULE_ODOMETER_THRESHOLD_UPDATED',
           fieldName: `${schedule.workOrderNumber}:reason`,
           previousValue: null,
@@ -806,11 +800,6 @@ export class MaintenanceSchedulesService {
     }
     try {
       return await this.prisma.$transaction(async (tx) => {
-        const user = await tx.user.findFirst({
-          where: { id: actor.sub, isActive: true, deletedAt: null, roles: { some: { role: 'OPERATIONS', system: 'VMMS' } } },
-          select: { id: true, name: true, email: true },
-        });
-        if (!user) throw new ForbiddenException('An active VMMS Operations account is required.');
         const schedule = await tx.maintenanceSchedule.findFirst({ where: { id, deletedAt: null } });
         if (!schedule) throw new NotFoundException('Maintenance schedule not found.');
         if (['IN_PROGRESS', 'DONE', 'COMPLETED'].includes(schedule.status)) {
@@ -826,7 +815,7 @@ export class MaintenanceSchedulesService {
         if (pendingRequest) throw new ConflictException('A cancellation request is already awaiting Admin review.');
 
         await tx.maintenanceScheduleCancellation.create({ data: {
-          scheduleId: id, actorId: user.id, actorName: user.name, actorEmail: user.email,
+          scheduleId: id, actorId: actor.sub, actorName: actor.name, actorEmail: actor.email,
           reason: reason.trim(), previousStatus: schedule.status,
           reviewStatus: MaintenanceCancellationReviewStatus.PENDING,
         } });
@@ -861,11 +850,6 @@ export class MaintenanceSchedulesService {
     }
 
     const result = await this.prisma.$transaction(async (tx) => {
-      const admin = await tx.user.findFirst({
-        where: { id: actor.sub, isActive: true, deletedAt: null, roles: { some: { role: 'ADMIN', system: 'VMMS' } } },
-        select: { id: true, name: true, email: true },
-      });
-      if (!admin) throw new ForbiddenException('An active VMMS Admin account is required.');
       const schedule = await tx.maintenanceSchedule.findFirst({ where: { id, deletedAt: null } });
       if (!schedule) throw new NotFoundException('Maintenance schedule not found.');
       const request = await tx.maintenanceScheduleCancellation.findFirst({
@@ -909,9 +893,9 @@ export class MaintenanceSchedulesService {
           reviewStatus: decision === 'APPROVE'
             ? MaintenanceCancellationReviewStatus.APPROVED
             : MaintenanceCancellationReviewStatus.REJECTED,
-          reviewedById: admin.id,
-          reviewedByName: admin.name,
-          reviewedByEmail: admin.email,
+          reviewedById: actor.sub,
+          reviewedByName: actor.name,
+          reviewedByEmail: actor.email,
           reviewReason: decision === 'REJECT' ? (reason as string).trim() : null,
           reviewedAt: new Date(),
         },
@@ -939,11 +923,6 @@ export class MaintenanceSchedulesService {
     }
 
     const result = await this.prisma.$transaction(async (tx) => {
-      const user = await tx.user.findFirst({
-        where: { id: actor.sub, isActive: true, deletedAt: null, roles: { some: { role: 'ADMIN', system: 'VMMS' } } },
-        select: { id: true, name: true, email: true },
-      });
-      if (!user) throw new ForbiddenException('An active VMMS Admin account is required.');
       const schedule = await tx.maintenanceSchedule.findFirst({ where: { id, deletedAt: null } });
       if (!schedule) throw new NotFoundException('Maintenance log not found.');
       if (schedule.status === MaintenanceStatus.CANCELLED) {
@@ -963,7 +942,7 @@ export class MaintenanceSchedulesService {
       });
       if (changed.count !== 1) throw new ConflictException('The work order changed. Refresh before cancelling.');
       await tx.maintenanceScheduleCancellation.create({ data: {
-        scheduleId: id, actorId: user.id, actorName: user.name, actorEmail: user.email,
+        scheduleId: id, actorId: actor.sub, actorName: actor.name, actorEmail: actor.email,
         reason: reason.trim(), previousStatus: schedule.status,
       } });
       return {
@@ -986,11 +965,6 @@ export class MaintenanceSchedulesService {
 
     return this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM maintenance_schedules WHERE id = ${id}::uuid FOR UPDATE`;
-      const user = await tx.user.findFirst({
-        where: { id: actor.sub, isActive: true, deletedAt: null, roles: { some: { role: 'OPERATIONS', system: 'VMMS' } } },
-        select: { id: true, name: true, email: true },
-      });
-      if (!user) throw new ForbiddenException('An active VMMS Admin account is required.');
       const schedule = await tx.maintenanceSchedule.findFirst({ where: { id, deletedAt: null } });
       if (!schedule) throw new NotFoundException('Maintenance log not found.');
       this.assertMaintenanceLogClosed(schedule);
@@ -1003,7 +977,7 @@ export class MaintenanceSchedulesService {
       } });
       if (activeUnlock) throw new ConflictException('This maintenance log already has a pending request or active unlock.');
       const unlock = await tx.maintenanceLogEditUnlock.create({ data: {
-        scheduleId: id, actorId: user.id, actorName: user.name, actorEmail: user.email, reason: reason.trim(),
+        scheduleId: id, actorId: actor.sub, actorName: actor.name, actorEmail: actor.email, reason: reason.trim(),
         reviewStatus: MaintenanceCancellationReviewStatus.PENDING,
       } });
       return {
@@ -1025,11 +999,6 @@ export class MaintenanceSchedulesService {
     }
     return this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM maintenance_schedules WHERE id = ${id}::uuid FOR UPDATE`;
-      const admin = await tx.user.findFirst({
-        where: { id: actor.sub, isActive: true, deletedAt: null, roles: { some: { role: 'ADMIN', system: 'VMMS' } } },
-        select: { id: true, name: true, email: true },
-      });
-      if (!admin) throw new ForbiddenException('An active VMMS Admin account is required.');
       const schedule = await tx.maintenanceSchedule.findFirst({ where: { id, deletedAt: null } });
       if (!schedule) throw new NotFoundException('Maintenance log not found.');
       this.assertMaintenanceLogClosed(schedule);
@@ -1042,7 +1011,7 @@ export class MaintenanceSchedulesService {
         where: { id: requestId, scheduleId: id, reviewStatus: MaintenanceCancellationReviewStatus.PENDING, consumedAt: null },
         data: {
           reviewStatus: decision === 'APPROVE' ? MaintenanceCancellationReviewStatus.APPROVED : MaintenanceCancellationReviewStatus.REJECTED,
-          reviewedById: admin.id, reviewedByName: admin.name, reviewedByEmail: admin.email,
+          reviewedById: actor.sub, reviewedByName: actor.name, reviewedByEmail: actor.email,
           reviewReason: decision === 'REJECT' ? (reason as string).trim() : null,
           reviewedAt, activatedAt: decision === 'APPROVE' ? reviewedAt : null,
         },
@@ -1060,11 +1029,6 @@ export class MaintenanceSchedulesService {
 
     return this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM maintenance_schedules WHERE id = ${id}::uuid FOR UPDATE`;
-      const user = await tx.user.findFirst({
-        where: { id: actor.sub, isActive: true, deletedAt: null, roles: { some: { role: 'OPERATIONS', system: 'VMMS' } } },
-        select: { id: true, name: true, email: true },
-      });
-      if (!user) throw new ForbiddenException('An active VMMS Operations account is required.');
       const schedule = await tx.maintenanceSchedule.findFirst({ where: { id, deletedAt: null } });
       if (!schedule) throw new NotFoundException('Maintenance log not found.');
       this.assertMaintenanceLogClosed(schedule);
@@ -1152,9 +1116,9 @@ export class MaintenanceSchedulesService {
         await tx.maintenanceLogEditAudit.createMany({ data: changedFields.map((fieldName) => ({
           scheduleId: id,
           unlockId: unlock.id,
-          actorId: user.id,
-          actorName: user.name,
-          actorEmail: user.email,
+          actorId: actor.sub,
+          actorName: actor.name,
+          actorEmail: actor.email,
           unlockReason: unlock.reason,
           fieldName,
           previousValue: before[fieldName] == null ? null : JSON.stringify(before[fieldName]),
@@ -1388,13 +1352,6 @@ export class MaintenanceSchedulesService {
         ? 'Deletion is restricted to Admin only. You may void this record instead.'
         : 'Only Admin can deactivate a schedule. Operations must submit a cancellation request.');
     }
-    const admin = await this.prisma.user.findFirst({
-      where: { id: actor.sub, isActive: true, deletedAt: null, roles: { some: { role: 'ADMIN', system: 'VMMS' } } },
-      select: { id: true },
-    });
-    if (!admin) throw new ForbiddenException(isMaintenanceLog
-      ? 'An active VMMS Admin account is required to delete a maintenance log.'
-      : 'An active VMMS Admin account is required to deactivate a schedule.');
     await this.prisma.maintenanceSchedule.update({
       where: { id, deletedAt: null },
       data: { deletedAt: new Date() },
@@ -1412,11 +1369,6 @@ export class MaintenanceSchedulesService {
     try {
       return await this.prisma.$transaction(async (tx) => {
         await tx.$queryRaw`SELECT id FROM maintenance_schedules WHERE id = ${id}::uuid FOR UPDATE`;
-        const user = await tx.user.findFirst({
-          where: { id: actor.sub, isActive: true, deletedAt: null, roles: { some: { role: 'OPERATIONS', system: 'VMMS' } } },
-          select: { id: true, name: true, email: true },
-        });
-        if (!user) throw new ForbiddenException('An active VMMS Operations account is required.');
         const schedule = await tx.maintenanceSchedule.findFirst({ where: { id, deletedAt: null } });
         if (!schedule) throw new NotFoundException('Maintenance log not found.');
         if (!schedule.logNumber) throw new BadRequestException('Only a persisted maintenance log can be voided.');
@@ -1437,7 +1389,7 @@ export class MaintenanceSchedulesService {
         });
         // The log remains Completed until the Admin approves this request.
         await tx.maintenanceScheduleCancellation.create({ data: {
-          scheduleId: id, actorId: user.id, actorName: user.name, actorEmail: user.email,
+          scheduleId: id, actorId: actor.sub, actorName: actor.name, actorEmail: actor.email,
           reason: reason.trim(), previousStatus: schedule.status,
           reviewStatus: MaintenanceCancellationReviewStatus.PENDING,
         } });
@@ -1638,16 +1590,16 @@ export class MaintenanceSchedulesService {
     if ((data.accountType ?? data.account_type) === AccountType.OUTSOURCED) {
       return { assignedMechanic: name, assignedMechanicId: null };
     }
-    const users = await this.prisma.user.findMany({
+    const users = await this.prisma.mechanic.findMany({
       where: {
-        ...(data.assignedMechanicId ? { id: data.assignedMechanicId } : { name: { equals: name, mode: 'insensitive' as const } }),
-        deletedAt: null, isActive: true,
-        roles: { some: { role: 'MECHANIC', system: 'VMMS' } },
+        ...(data.assignedMechanicId ? { userId: data.assignedMechanicId } : { name: { equals: name, mode: 'insensitive' as const } }),
+        isOutsourced: false, isActive: true, role: 'MECHANIC',
       },
-      select: { id: true, name: true }, take: 2,
+      select: { userId: true, name: true, temporaryRoles: true }, take: 2,
     });
-    if (users.length !== 1) throw new BadRequestException('Choose one active VMMS mechanic using assignedMechanicId; the name is missing or ambiguous.');
-    return { assignedMechanic: users[0].name, assignedMechanicId: users[0].id };
+    const eligible = users.filter((user) => !user.temporaryRoles.includes('MECHANIC'));
+    if (eligible.length !== 1 || !eligible[0].userId) throw new BadRequestException('Choose one active VMMS mechanic using assignedMechanicId; the name is missing or ambiguous.');
+    return { assignedMechanic: eligible[0].name, assignedMechanicId: eligible[0].userId };
   }
 
   private getAssignedMechanic(data: CreateMaintenanceScheduleDto): string {
@@ -1759,9 +1711,9 @@ export class MaintenanceSchedulesService {
     const rawName = data.chiefMechanic ?? data.chief_mechanic;
 
     if (rawId && rawId.trim()) {
-      const user = await this.prisma.user.findFirst({
-        where: { id: rawId, deletedAt: null },
-        include: { roles: true },
+      const user = await this.prisma.mechanic.findFirst({
+        where: { userId: rawId, isOutsourced: false },
+        select: { userId: true, name: true, isActive: true, role: true, temporaryRoles: true },
       });
 
       if (!user) {
@@ -1772,9 +1724,7 @@ export class MaintenanceSchedulesService {
         throw new BadRequestException(`Selected Chief Mechanic (${user.name}) is inactive.`);
       }
 
-      const hasChiefMechanicRole = user.roles.some(
-        (r) => (r.role as string) === 'CHIEF_MECHANIC',
-      );
+      const hasChiefMechanicRole = user.role === 'CHIEF_MECHANIC' && !user.temporaryRoles.includes('CHIEF_MECHANIC');
 
       if (!hasChiefMechanicRole) {
         throw new BadRequestException(
@@ -1783,23 +1733,20 @@ export class MaintenanceSchedulesService {
       }
 
       return {
-        chiefMechanicId: user.id,
+        chiefMechanicId: user.userId!,
         chiefMechanic: user.name,
       };
     }
 
     if (rawName && rawName.trim()) {
-      const user = await this.prisma.user.findFirst({
-        where: {
-          OR: [{ name: rawName.trim() }, { email: rawName.trim() }],
-          deletedAt: null,
-        },
-        include: { roles: true },
+      const user = await this.prisma.mechanic.findFirst({
+        where: { isOutsourced: false, OR: [{ name: rawName.trim() }, { email: rawName.trim() }] },
+        select: { userId: true, name: true, role: true, temporaryRoles: true, isActive: true },
       });
 
-      if (user && user.roles.some((r) => (r.role as string) === 'CHIEF_MECHANIC')) {
+      if (user && user.userId && user.isActive && user.role === 'CHIEF_MECHANIC' && !user.temporaryRoles.includes('CHIEF_MECHANIC')) {
         return {
-          chiefMechanicId: user.id,
+          chiefMechanicId: user.userId,
           chiefMechanic: user.name,
         };
       }

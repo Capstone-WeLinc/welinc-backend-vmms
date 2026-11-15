@@ -2,12 +2,12 @@ import { Module } from '@nestjs/common';
 import { NotificationsController } from './notifications.controller';
 import { NotificationsService } from './notifications.service';
 import SharedModule from '../shared/shared.module';
-import { PrismaService } from '../shared/prisma.service';
+import AuthModule from '../auth/auth.module';
 
 @Module({
-  imports: [SharedModule],
+  imports: [SharedModule, AuthModule],
   controllers: [NotificationsController],
-  providers: [PrismaService, NotificationsService],
+  providers: [NotificationsService],
   exports: [NotificationsService],
 })
 export class NotificationsModule {}

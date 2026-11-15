@@ -182,9 +182,6 @@ describe('scheduling HTTP permissions', () => {
       setUser([vmms(role)]);
       const req = request(app.getHttpServer()).get('/maintenance-schedules')
         .set('Authorization', `Bearer ${token([vmms(role)])}`).expect(200);
-      if (role === UserRole.CHIEF_MECHANIC || role === UserRole.MECHANIC) {
-        req.set('X-VMMS-Client', 'mobile');
-      }
       await req;
       expect(service.findAll).toHaveBeenCalledWith(expect.objectContaining({ sub: 'user-1', roles: [vmms(role)] }));
     },
@@ -193,7 +190,6 @@ describe('scheduling HTTP permissions', () => {
     setUser([vmms(role)]);
     await request(app.getHttpServer()).patch('/maintenance-schedules/schedule-1/progress')
       .set('Authorization', `Bearer ${token([vmms(role)])}`)
-      .set('X-VMMS-Client', 'mobile')
       .send({ action: role === UserRole.MECHANIC ? 'SUBMIT' : 'APPROVE' }).expect(200);
     expect(service.updateProgress).toHaveBeenCalledWith('schedule-1', expect.any(Object), expect.objectContaining({ roles: [vmms(role)] }));
   });

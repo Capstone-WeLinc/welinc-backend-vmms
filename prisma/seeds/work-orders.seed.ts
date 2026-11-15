@@ -1,4 +1,5 @@
 import { PrismaClient, WorkOrderStatus } from '@prisma/client';
+import { suiteSeedPeople } from './users.seed';
 
 export async function seedWorkOrders(prisma: PrismaClient) {
   console.log('Creating sample VMMS work orders...');
@@ -13,25 +14,13 @@ export async function seedWorkOrders(prisma: PrismaClient) {
   const unassignedVehicle = vehicles.find((vehicle) => !vehicle.garageId);
   if (unassignedVehicle) throw new Error(`Cannot seed work orders: vehicle "${unassignedVehicle.plateNumber}" has no garage assignment.`);
   
-  const vmmsAdminUser = await prisma.user.findFirstOrThrow({
-    where: { email: 'vmms.admin@welinc.com' }
-  });
-  const opsUser = await prisma.user.findFirstOrThrow({
-    where: { email: 'ops.user@welinc.com' }
-  });
+  const people = suiteSeedPeople();
+  const vmmsAdminUser = people.find((person) => person.email === 'vmms.admin@welinc.com')!;
+  const opsUser = people.find((person) => person.roles.some((role) => role.system === 'VMMS' && role.role === 'OPERATIONS'))!;
+  if (!vmmsAdminUser || !opsUser) throw new Error('Required VMMS seed identities are missing from shared people.json.');
   
   const mechanics = await prisma.mechanic.findMany({
-    where: {
-      user: {
-        roles: {
-          some: {
-            role: 'MECHANIC',
-            system: 'VMMS'
-          }
-        }
-      }
-    },
-    include: { user: { select: { email: true } } },
+    where: { role: 'MECHANIC', isOutsourced: false, isActive: true },
   });
 
   const adminUser = { id: vmmsAdminUser.id, email: vmmsAdminUser.email };
@@ -653,7 +642,12 @@ export async function seedWorkOrders(prisma: PrismaClient) {
   };
 
   const allMechanics = await prisma.mechanic.findMany({
-    include: { user: true }
+    where: {
+      userId: { not: null },
+      email: { not: null },
+      isActive: true,
+      temporaryRoles: { isEmpty: true },
+    },
   });
 
   for (let i = 1; i <= 80; i++) {
@@ -745,7 +739,7 @@ export async function seedWorkOrders(prisma: PrismaClient) {
             ...(status === WorkOrderStatus.FOR_VERIFICATION || isClosed ? [
               {
                 userId: mechanic.userId!,
-                email: mechanic.user!.email,
+                email: mechanic.email!,
                 action: 'STATUS_CHANGE',
                 fieldName: 'status',
                 previousValue: 'IN_PROGRESS',

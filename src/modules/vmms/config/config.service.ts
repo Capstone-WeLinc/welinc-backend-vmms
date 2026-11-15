@@ -36,23 +36,15 @@ export class VmmsConfigService {
     return Object.values(SystemType).map((value) => ({ id: value, name: value }));
   }
 
-  async listUsers() {
-    const users = await this.prisma.user.findMany({
-      where: { isActive: true, deletedAt: null },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        roles: { select: { role: true, system: true } },
-      },
+  async listMechanics() {
+    const rows = await this.prisma.mechanic.findMany({
+      where: { isActive: true, isOutsourced: false, userId: { not: null }, role: { in: ['MECHANIC', 'CHIEF_MECHANIC'] } },
       orderBy: { name: 'asc' },
+      select: { userId: true, name: true, email: true, role: true, temporaryRoles: true },
     });
-
-    return users.map((user) => ({
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      roles: user.roles,
+    return rows.filter((row) => row.userId && row.role && !row.temporaryRoles.includes(row.role)).map((row) => ({
+      id: row.userId!, userId: row.userId!, name: row.name, email: row.email,
+      role: row.role, roles: [{ role: row.role!, system: 'VMMS' }], temporaryRoles: row.temporaryRoles,
     }));
   }
 }

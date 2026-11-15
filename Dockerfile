@@ -35,6 +35,6 @@ node dist/src/main
 EOF
 RUN chmod +x /start.sh
 
-EXPOSE 3000
+EXPOSE 3010
 
 CMD ["/start.sh"]

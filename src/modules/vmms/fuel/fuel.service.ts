@@ -101,8 +101,9 @@ export class FuelService {
           const average = rollingEfficiencies.length ? rollingEfficiencies.reduce((a, b) => a + b, 0) / rollingEfficiencies.length : null;
           if (average != null && isFuelEfficiencyAnomaly(efficiency, average, deviation)) {
             await tx.fuelAnomaly.create({ data: { fillUpId: created.id, vehicleId: vehicle.id, efficiency, rollingAverage: average } });
-            const recipients = await tx.user.findMany({ where: { isActive: true, deletedAt: null, roles: { some: { system: 'VMMS', role: { in: ['ADMIN', 'OPERATIONS'] } } } }, select: { id: true } });
-            if (recipients.length) await tx.notification.createMany({ data: recipients.map((user) => ({ userId: user.id, title: 'Fuel efficiency anomaly', message: `${vehicle.plateNumber} recorded ${efficiency.toFixed(1)} km/L versus its ${average.toFixed(1)} km/L rolling average.`, type: 'warning' })) });
+            const recipients = await tx.vmmsPerson.findMany({ where: { isActive: true, deleted: false, erased: false, roles: { hasSome: ['ADMIN', 'OPERATIONS'] } }, select: { authUserId: true, roles: true, temporaryRoles: true } });
+            const eligible = recipients.filter((person) => person.roles.some((role) => ['ADMIN', 'OPERATIONS'].includes(role) && !person.temporaryRoles.includes(role)));
+            if (eligible.length) await tx.notification.createMany({ data: eligible.map((person) => ({ userId: person.authUserId, title: 'Fuel efficiency anomaly', message: `${vehicle.plateNumber} recorded ${efficiency.toFixed(1)} km/L versus its ${average.toFixed(1)} km/L rolling average.`, type: 'warning' })) });
           }
         }
       }

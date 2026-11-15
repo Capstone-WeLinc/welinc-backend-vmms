@@ -139,9 +139,6 @@ describe('vehicle HTTP permissions', () => {
       setUser([roleFor(role)]);
       const readRequest = request(app.getHttpServer()).get('/vehicles')
         .set('Authorization', `Bearer ${token([roleFor(role)])}`);
-      if (role === UserRole.MECHANIC || role === UserRole.CHIEF_MECHANIC) {
-        readRequest.set('X-VMMS-Client', 'mobile');
-      }
       await readRequest.expect(200);
       expect(service.findAll).toHaveBeenCalledTimes(1);
     },
@@ -158,7 +155,7 @@ describe('vehicle HTTP permissions', () => {
     setUser([roleFor(role)]);
     await request(app.getHttpServer()).get(`/vehicles/${vehicleId}/audit`)
       .set('Authorization', `Bearer ${token([roleFor(role)])}`)
-      .set('X-VMMS-Client', 'mobile').expect(403);
+      .expect(403);
     expect(service.findAuditHistory).not.toHaveBeenCalled();
   });
 
