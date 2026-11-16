@@ -13,6 +13,9 @@ const pool = new pg.Pool({ connectionString: process.env['DATABASE_URL'] });
 const prisma = new PrismaClient({ adapter: new PrismaPg(pool) });
 
 async function main() {
+  if (process.env['NODE_ENV'] === 'production' && process.env['SEED_ALLOW'] !== 'staging') {
+    throw new Error('Production seeding is disabled. Set SEED_ALLOW=staging only for an approved staging seed run.');
+  }
   const [vehicles, schedules, workOrders, garages] = await Promise.all([
     prisma.vehicle.count(), prisma.maintenanceSchedule.count(), prisma.workOrder.count(), prisma.garage.count(),
   ]);

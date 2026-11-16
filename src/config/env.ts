@@ -30,6 +30,9 @@ export const envSchema = z.object({
   SESSION_COOKIE_SECURE: z
     .preprocess(blank, z.enum(['true', 'false']).default('false'))
     .transform((value) => value === 'true'),
+  STORAGE_CONNECTION_STRING: z.preprocess(blank, z.string().trim().optional()),
+  STORAGE_ACCOUNT_URL: z.preprocess(blank, z.string().trim().url().optional()),
+  STORAGE_CONTAINER: z.preprocess(blank, z.string().trim().min(1).default('vmms-uploads')),
 });
 
 export type Env = z.infer<typeof envSchema>;

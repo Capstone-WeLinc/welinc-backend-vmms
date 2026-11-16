@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import {
   AccountType,
   MaintenanceCancellationReviewStatus,
@@ -10,6 +10,7 @@ import {
   VehicleStatus,
 } from '@prisma/client';
 import { PrismaService } from '../../../shared/prisma.service';
+import { BlobStorageService, StorageUnavailableException } from '../../../shared/blob-storage.service';
 import { applyWorkOrderWorkflow, AssignedChecklistItem } from './work-order-workflow';
 import { progressForClient, stateForStorage } from './work-order-state';
 import { scheduleScope, ScheduleActor } from './schedule-access';
@@ -20,10 +21,9 @@ import { validateStartDate } from './schedule-start-date';
 import { validateScheduleMileage } from './schedule-mileage';
 import { validateTimeSchedule, getTimeInterval, addTimeInterval } from './time-interval';
 import { validateTargetDueDate } from './schedule-target-date';
-import { createReadStream } from 'node:fs';
-import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { extname, join, resolve } from 'node:path';
+import { Readable } from 'node:stream';
+import { extname } from 'node:path';
 
 type WorkOrderUploadFile = { originalname: string; mimetype: string; size: number; buffer: Buffer };
 
@@ -31,7 +31,12 @@ type WorkOrderUploadFile = { originalname: string; mimetype: string; size: numbe
 export class MaintenanceSchedulesService {
   private readonly logger = new Logger(MaintenanceSchedulesService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, @Optional() private readonly storage?: BlobStorageService) {}
+
+  private fileStorage(): BlobStorageService {
+    if (!this.storage) throw new StorageUnavailableException();
+    return this.storage;
+  }
 
   private readonly attachmentMimeTypes: Record<string, string> = {
     '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
@@ -93,11 +98,9 @@ export class MaintenanceSchedulesService {
     const contentType = this.attachmentMimeTypes[extension];
     if (!contentType) throw new BadRequestException('Unsupported attachment type.');
     const attachmentId = randomUUID();
-    const storageName = `${attachmentId}${extension}`;
-    const directory = resolve('private-uploads', 'work-orders', id);
-    const filePath = join(directory, storageName);
-    await mkdir(directory, { recursive: true });
-    await writeFile(filePath, file.buffer, { flag: 'wx' });
+    const storageName = `work-orders/${id}/${attachmentId}${extension}`;
+    const fileStorage = this.fileStorage();
+    await fileStorage.put(storageName, file.buffer, contentType);
 
     try {
       const partDetails = progress.partDetails && typeof progress.partDetails === 'object'
@@ -130,7 +133,7 @@ export class MaintenanceSchedulesService {
       });
       return { ...attachment, url: `/maintenance-schedules/${id}/attachments/${attachmentId}` };
     } catch (error) {
-      await unlink(filePath).catch(() => undefined);
+      await fileStorage.delete(storageName).catch(() => undefined);
       throw error;
     }
   }
@@ -148,13 +151,13 @@ export class MaintenanceSchedulesService {
       const attachment = rawAttachment as Record<string, unknown>;
       const storageName = typeof attachment.storageName === 'string' ? attachment.storageName : '';
       const extension = extname(storageName).toLowerCase();
-      if (!storageName || storageName !== `${attachmentId}${extension}` || !this.attachmentMimeTypes[extension]) {
+      if (!storageName || storageName !== `work-orders/${id}/${attachmentId}${extension}` || !this.attachmentMimeTypes[extension]) {
         throw new NotFoundException('Attachment not found.');
       }
       return {
         name: typeof attachment.name === 'string' ? attachment.name : 'attachment',
         contentType: this.attachmentMimeTypes[extension],
-        stream: createReadStream(join(resolve('private-uploads', 'work-orders', id), storageName)),
+        stream: Readable.from([await this.fileStorage().get(storageName)]),
       };
     }
     throw new NotFoundException('Attachment not found.');
@@ -177,16 +180,17 @@ export class MaintenanceSchedulesService {
       nextPartDetails[itemId] = { ...entry, attachments: attachments.filter((candidate) => !candidate || typeof candidate !== 'object' || (candidate as Record<string, unknown>).id !== attachmentId) };
     }
     if (!storageName) throw new NotFoundException('Attachment not found.');
+    const extension = extname(storageName).toLowerCase();
+    const expectedStorageName = `work-orders/${id}/${attachmentId}${extension}`;
+    if (storageName !== expectedStorageName || !this.attachmentMimeTypes[extension]) {
+      throw new NotFoundException('Attachment not found.');
+    }
+    const fileStorage = this.fileStorage();
     await this.prisma.maintenanceSchedule.update({
       where: { id: schedule.id, updatedAt: schedule.updatedAt },
       data: { workOrderProgress: { ...progress, partDetails: nextPartDetails } as Prisma.InputJsonObject },
     });
-    const extension = extname(storageName).toLowerCase();
-    if (storageName === `${attachmentId}${extension}` && this.attachmentMimeTypes[extension]) {
-      await unlink(join(resolve('private-uploads', 'work-orders', id), storageName)).catch((error: NodeJS.ErrnoException) => {
-        if (error.code !== 'ENOENT') throw error;
-      });
-    }
+    await fileStorage.delete(storageName);
     return { success: true };
   }
 

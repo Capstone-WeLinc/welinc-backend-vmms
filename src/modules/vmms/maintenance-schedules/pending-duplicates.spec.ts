@@ -18,7 +18,7 @@ describe('Pending schedule uniqueness', () => {
         findUniqueOrThrow: jest.fn().mockResolvedValue(previous),
         update: jest.fn().mockImplementation(async ({ data }) => ({ ...previous, ...data })),
       },
-      user: { findMany: jest.fn().mockResolvedValue([{ id: 'mechanic', name: 'Mechanic' }]) },
+      mechanic: { findMany: jest.fn().mockResolvedValue([{ userId: 'mechanic', name: 'Mechanic', temporaryRoles: [] }]) },
       $transaction: jest.fn().mockImplementation(async (callback) => callback(prisma)),
     };
     service = new MaintenanceSchedulesService(prisma as PrismaService);

@@ -1,8 +1,8 @@
 import { MaintenanceStatus } from '@prisma/client';
 import { MaintenanceSchedulesService } from './maintenance-schedules.service';
 
-const admin = { sub: 'admin-1', system: 'VMMS', roles: [{ system: 'VMMS', role: 'ADMIN' }] };
-const operations = { sub: 'ops-1', system: 'VMMS', roles: [{ system: 'VMMS', role: 'OPERATIONS' }] };
+const admin = { sub: 'admin-1', name: 'Admin User', email: 'admin@example.invalid', system: 'VMMS', roles: [{ system: 'VMMS', role: 'ADMIN' }] };
+const operations = { sub: 'ops-1', name: 'Operations User', email: 'ops@example.invalid', system: 'VMMS', roles: [{ system: 'VMMS', role: 'OPERATIONS' }] };
 const currentSchedule = {
   id: 'schedule-1', vehicleId: 'ABC123', title: 'Sample service', status: MaintenanceStatus.COMPLETED,
   assignedMechanic: 'Mechanic One', assignedMechanicId: 'mechanic-1', chiefMechanicId: 'chief-1',

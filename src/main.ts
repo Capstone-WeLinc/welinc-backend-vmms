@@ -1,7 +1,6 @@
-import { NestFactory } from '@nestjs/core';
+﻿import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
-import { join } from 'path';
 import type { Request, Response, NextFunction } from 'express';
 import cookieParser from 'cookie-parser';
 import { ConfigService } from '@nestjs/config';
@@ -18,13 +17,6 @@ async function bootstrap() {
   app.set('trust proxy', config.get('TRUST_PROXY_HOPS', { infer: true }));
   app.use(cookieParser());
   app.setGlobalPrefix('vmms');
-
-  app.useStaticAssets(join(__dirname, '..', 'uploads'), {
-    prefix: '/uploads/',
-    setHeaders: (res) => {
-      res.setHeader('Cache-Control', 'public, max-age=86400');
-    },
-  });
 
   app.use((_: Request, res: Response, next: NextFunction) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');

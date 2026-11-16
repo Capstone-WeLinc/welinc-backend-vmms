@@ -1,25 +1,13 @@
-import { INestApplication } from '@nestjs/common';
+﻿import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { createReadStream } from 'node:fs';
-import * as fsPromises from 'node:fs/promises';
 import { SystemType, UserRole } from '@prisma/client';
 import request from 'supertest';
 import { JwtAuthGuard } from '../../../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../../auth/guards/roles.guard';
+import { BlobStorageService } from '../../../shared/blob-storage.service';
 import { PrismaService } from '../../../shared/prisma.service';
 import { FuelController } from './fuel.controller';
 import { FuelService } from './fuel.service';
-
-jest.mock('node:fs/promises', () => ({
-  ...jest.requireActual('node:fs/promises'),
-  mkdir: jest.fn(),
-  unlink: jest.fn(),
-  writeFile: jest.fn(),
-}));
-jest.mock('node:fs', () => ({
-  ...jest.requireActual('node:fs'),
-  createReadStream: jest.fn(() => require('node:stream').Readable.from([Buffer.from('fuel report body')])),
-}));
 
 const vehicleId = '00000000-0000-4000-8000-000000000301';
 const stationId = '00000000-0000-4000-8000-000000000302';
@@ -32,6 +20,12 @@ describe('Fuel baseline and void API behavior', () => {
   const anomalies: any[] = [];
   const attachments: any[] = [];
   const auditRows: any[] = [];
+  const storedBlobs = new Map<string, Buffer>();
+  const blobStorage = {
+    put: jest.fn(async (key: string, body: Buffer) => { storedBlobs.set(key, body); }),
+    get: jest.fn(async (key: string) => storedBlobs.get(key) ?? Buffer.from('fuel report body')),
+    delete: jest.fn(async (key: string) => { storedBlobs.delete(key); }),
+  };
   let nextId = 1;
 
   const actor = { sub: 'ops-user', email: 'ops@example.test', roles: vmmsOperations };
@@ -119,6 +113,7 @@ describe('Fuel baseline and void API behavior', () => {
         RolesGuard,
         FuelService,
         { provide: PrismaService, useValue: prisma },
+        { provide: BlobStorageService, useValue: blobStorage },
       ],
     }).overrideGuard(JwtAuthGuard).useValue({
       canActivate: (context: any) => { context.switchToHttp().getRequest().user = actor; return true; },
@@ -135,6 +130,7 @@ describe('Fuel baseline and void API behavior', () => {
     anomalies.length = 0;
     attachments.length = 0;
     auditRows.length = 0;
+    storedBlobs.clear();
     nextId = 1;
     jest.clearAllMocks();
     prisma.fuelAnomalyAttachment.findFirst.mockResolvedValue(null);
@@ -407,8 +403,7 @@ describe('Fuel baseline and void API behavior', () => {
       .attach('file', Buffer.from('%PDF-1.4 test report'), { filename: 'report.pdf', contentType: 'application/pdf' })
       .expect(400);
 
-    expect(fsPromises.mkdir).not.toHaveBeenCalled();
-    expect(fsPromises.writeFile).not.toHaveBeenCalled();
+    expect(blobStorage.put).not.toHaveBeenCalled();
     expect(prisma.fuelAnomalyAttachment.create).not.toHaveBeenCalled();
     expect(auditRows).toHaveLength(0);
   });
@@ -423,9 +418,6 @@ describe('Fuel baseline and void API behavior', () => {
     };
     anomalies.push(anomaly);
     asRole(UserRole.OPERATIONS);
-    jest.mocked(fsPromises.mkdir).mockResolvedValue(undefined as any);
-    jest.mocked(fsPromises.writeFile).mockResolvedValue(undefined as any);
-    jest.mocked(fsPromises.unlink).mockResolvedValue(undefined as any);
 
     const response = await auth('post', `/fuel/anomalies/${voidedFillUpId}/attachments`)
       .attach('file', Buffer.from('%PDF-1.4 test report'), { filename: 'inspection-report.pdf', contentType: 'application/pdf' })
@@ -452,8 +444,7 @@ describe('Fuel baseline and void API behavior', () => {
       action: 'ANOMALY_ATTACHMENT',
       details: expect.objectContaining({ anomalyId: voidedFillUpId }),
     }));
-    expect(fsPromises.mkdir).toHaveBeenCalledTimes(1);
-    expect(fsPromises.writeFile).toHaveBeenCalledTimes(1);
+    expect(blobStorage.put).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -462,9 +453,6 @@ describe('Fuel baseline and void API behavior', () => {
   ])('accepts %s formal reports from Day 3', async (filename, contentType) => {
     anomalies.push({ id: voidedFillUpId, status: 'OPEN', createdAt: dateFor(4), acknowledgedAt: null, fillUpId: voidedFillUpId });
     asRole(UserRole.OPERATIONS);
-    jest.mocked(fsPromises.mkdir).mockResolvedValue(undefined as any);
-    jest.mocked(fsPromises.writeFile).mockResolvedValue(undefined as any);
-    jest.mocked(fsPromises.unlink).mockResolvedValue(undefined as any);
 
     const response = await auth('post', `/fuel/anomalies/${voidedFillUpId}/attachments`)
       .attach('file', Buffer.from('test image report'), { filename, contentType })
@@ -481,16 +469,12 @@ describe('Fuel baseline and void API behavior', () => {
   ])('rejects invalid anomaly report upload %s (%s) without persisting it', async (filename, contentType) => {
     anomalies.push({ id: voidedFillUpId, status: 'OPEN', createdAt: dateFor(4), acknowledgedAt: null, fillUpId: voidedFillUpId });
     asRole(UserRole.OPERATIONS);
-    jest.mocked(fsPromises.mkdir).mockResolvedValue(undefined as any);
-    jest.mocked(fsPromises.writeFile).mockResolvedValue(undefined as any);
-    jest.mocked(fsPromises.unlink).mockResolvedValue(undefined as any);
 
     await auth('post', `/fuel/anomalies/${voidedFillUpId}/attachments`)
       .attach('file', Buffer.from('invalid report payload'), { filename, contentType })
       .expect(400);
 
-    expect(fsPromises.mkdir).not.toHaveBeenCalled();
-    expect(fsPromises.writeFile).not.toHaveBeenCalled();
+    expect(blobStorage.put).not.toHaveBeenCalled();
     expect(prisma.fuelAnomalyAttachment.create).not.toHaveBeenCalled();
     expect(auditRows).toHaveLength(0);
   });
@@ -500,7 +484,7 @@ describe('Fuel baseline and void API behavior', () => {
       id: voidedFillUpId,
       anomalyId: stationId,
       name: 'formal-report.pdf',
-      storageName: `${voidedFillUpId}.pdf`,
+      storageName: `fuel-anomalies/${stationId}/${voidedFillUpId}.pdf`,
       contentType: 'application/pdf',
       anomaly: { id: stationId },
     });
@@ -514,6 +498,7 @@ describe('Fuel baseline and void API behavior', () => {
       expect(response.headers['x-content-type-options']).toBe('nosniff');
     }
 
+    expect(blobStorage.get).toHaveBeenCalledTimes(3);
     expect(prisma.fuelAnomalyAttachment.findFirst).toHaveBeenCalledTimes(3);
     expect(auditRows).toHaveLength(0);
   });
@@ -535,7 +520,7 @@ describe('Fuel baseline and void API behavior', () => {
     expect(prisma.fuelAnomalyAttachment.findFirst).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: voidedFillUpId, anomalyId: stationId },
     }));
-    expect(jest.mocked(createReadStream)).not.toHaveBeenCalled();
+    expect(blobStorage.get).not.toHaveBeenCalled();
   });
 
   it('rejects a tampered attachment storage path before opening a file', async () => {
@@ -551,16 +536,13 @@ describe('Fuel baseline and void API behavior', () => {
 
     await auth('get', `/fuel/anomalies/${stationId}/attachments/${voidedFillUpId}`).expect(404);
 
-    expect(jest.mocked(createReadStream)).not.toHaveBeenCalled();
+    expect(blobStorage.get).not.toHaveBeenCalled();
     expect(auditRows).toHaveLength(0);
   });
 
   it('preserves multiple reports on one anomaly for independent downloads', async () => {
     anomalies.push({ id: stationId, status: 'OPEN', createdAt: dateFor(4), acknowledgedAt: null, fillUpId: voidedFillUpId });
     asRole(UserRole.OPERATIONS);
-    jest.mocked(fsPromises.mkdir).mockResolvedValue(undefined as any);
-    jest.mocked(fsPromises.writeFile).mockResolvedValue(undefined as any);
-    jest.mocked(fsPromises.unlink).mockResolvedValue(undefined as any);
 
     const firstUpload = await auth('post', `/fuel/anomalies/${stationId}/attachments`)
       .attach('file', Buffer.from('%PDF-1.4 first report'), { filename: 'first-report.pdf', contentType: 'application/pdf' })
@@ -589,18 +571,15 @@ describe('Fuel baseline and void API behavior', () => {
   it('removes a written report when its database insert fails and skips the audit record', async () => {
     anomalies.push({ id: stationId, status: 'OPEN', createdAt: dateFor(4), acknowledgedAt: null, fillUpId: voidedFillUpId });
     asRole(UserRole.OPERATIONS);
-    jest.mocked(fsPromises.mkdir).mockResolvedValue(undefined as any);
-    jest.mocked(fsPromises.writeFile).mockResolvedValue(undefined as any);
-    jest.mocked(fsPromises.unlink).mockResolvedValue(undefined as any);
     prisma.fuelAnomalyAttachment.create.mockRejectedValueOnce(new Error('Database unavailable'));
 
     await auth('post', `/fuel/anomalies/${stationId}/attachments`)
       .attach('file', Buffer.from('%PDF-1.4 report'), { filename: 'failed-report.pdf', contentType: 'application/pdf' })
       .expect(500);
 
-    expect(fsPromises.writeFile).toHaveBeenCalledTimes(1);
-    expect(fsPromises.unlink).toHaveBeenCalledTimes(1);
-    expect(fsPromises.unlink).toHaveBeenCalledWith(jest.mocked(fsPromises.writeFile).mock.calls[0][0]);
+    expect(blobStorage.put).toHaveBeenCalledTimes(1);
+    expect(blobStorage.delete).toHaveBeenCalledTimes(1);
+    expect(blobStorage.delete).toHaveBeenCalledWith(expect.stringContaining('fuel-anomalies/'));
     expect(prisma.fuelAnomalyAttachment.create).toHaveBeenCalledTimes(1);
     expect(auditRows).toHaveLength(0);
   });
@@ -613,8 +592,7 @@ describe('Fuel baseline and void API behavior', () => {
       .attach('file', oversizedReport, { filename: 'oversized-report.pdf', contentType: 'application/pdf' })
       .expect(413);
 
-    expect(fsPromises.mkdir).not.toHaveBeenCalled();
-    expect(fsPromises.writeFile).not.toHaveBeenCalled();
+    expect(blobStorage.put).not.toHaveBeenCalled();
     expect(prisma.fuelAnomalyAttachment.create).not.toHaveBeenCalled();
     expect(auditRows).toHaveLength(0);
   });
@@ -622,9 +600,6 @@ describe('Fuel baseline and void API behavior', () => {
   it('accepts a report exactly 10 MB in size', async () => {
     anomalies.push({ id: stationId, status: 'OPEN', createdAt: dateFor(4), acknowledgedAt: null, fillUpId: voidedFillUpId });
     asRole(UserRole.OPERATIONS);
-    jest.mocked(fsPromises.mkdir).mockResolvedValue(undefined as any);
-    jest.mocked(fsPromises.writeFile).mockResolvedValue(undefined as any);
-    jest.mocked(fsPromises.unlink).mockResolvedValue(undefined as any);
     const boundaryReport = Buffer.alloc(10 * 1024 * 1024, 'x');
 
     const response = await auth('post', `/fuel/anomalies/${stationId}/attachments`)
@@ -637,7 +612,7 @@ describe('Fuel baseline and void API behavior', () => {
       contentType: 'application/pdf',
       uploadedById: actor.sub,
     });
-    expect(fsPromises.writeFile).toHaveBeenCalledTimes(1);
+    expect(blobStorage.put).toHaveBeenCalledTimes(1);
     expect(prisma.fuelAnomalyAttachment.create).toHaveBeenCalledTimes(1);
     expect(auditRows).toContainEqual(expect.objectContaining({ actorId: actor.sub, action: 'ANOMALY_ATTACHMENT' }));
   });

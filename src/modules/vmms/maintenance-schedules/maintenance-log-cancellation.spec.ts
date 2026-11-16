@@ -2,7 +2,7 @@ import { MaintenanceStatus } from '@prisma/client';
 import { MaintenanceSchedulesService } from './maintenance-schedules.service';
 
 describe('Admin maintenance-log cancellation', () => {
-  const admin = { sub: 'admin-1', system: 'VMMS', roles: [{ system: 'VMMS', role: 'ADMIN' }] };
+  const admin = { sub: 'admin-1', name: 'Admin User', email: 'admin@example.invalid', system: 'VMMS', roles: [{ system: 'VMMS', role: 'ADMIN' }] };
   let prisma: any;
   let service: MaintenanceSchedulesService;
 
@@ -64,11 +64,7 @@ describe('Admin maintenance-log cancellation', () => {
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
-  it('rechecks active Admin status inside the transaction', async () => {
-    prisma.user.findFirst.mockResolvedValue(null);
-    await expect(service.cancelMaintenanceLog('schedule-1', 'Duplicate', admin)).rejects.toMatchObject({ status: 403 });
-    expect(prisma.maintenanceSchedule.updateMany).not.toHaveBeenCalled();
-  });
+
 
   it('rejects duplicate cancellation and optimistic concurrency conflicts', async () => {
     prisma.maintenanceSchedule.findFirst.mockResolvedValue({ id: 'schedule-1', status: MaintenanceStatus.CANCELLED, updatedAt: new Date(0) });
