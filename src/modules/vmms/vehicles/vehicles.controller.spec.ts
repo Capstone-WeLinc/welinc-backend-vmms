@@ -17,13 +17,23 @@ const roleFor = (role: UserRole): Role => ({ role, system: SystemType.VMMS });
 describe('vehicle HTTP permissions', () => {
   let app: INestApplication;
   const jwt = new JwtService({ secret });
-  const service = { create: jest.fn(), update: jest.fn(), delete: jest.fn(), findAll: jest.fn(), findAuditHistory: jest.fn(), previewExcel: jest.fn(), saveImportRows: jest.fn() };
-  const writes: ['post' | 'patch' | 'delete', string, keyof typeof service][] = [
-    ['post', '/vehicles', 'create'],
-    ['patch', `/vehicles/${vehicleId}`, 'update'],
-    ['delete', `/vehicles/${vehicleId}`, 'delete'],
-  ];
-  const token = (roles: Role[], system: SystemType = SystemType.VMMS) => jwt.sign({ sub: 'user-id', email: 'test@example.invalid', roles, system });
+  const service = {
+    create: jest.fn(),
+    update: jest.fn(),
+    delete: jest.fn(),
+    findAll: jest.fn(),
+    findAuditHistory: jest.fn(),
+    previewExcel: jest.fn(),
+    saveImportRows: jest.fn(),
+  };
+  const writes: ['post' | 'patch' | 'delete', string, keyof typeof service][] =
+    [
+      ['post', '/vehicles', 'create'],
+      ['patch', `/vehicles/${vehicleId}`, 'update'],
+      ['delete', `/vehicles/${vehicleId}`, 'delete'],
+    ];
+  const token = (roles: Role[], system: SystemType = SystemType.VMMS) =>
+    jwt.sign({ sub: 'user-id', email: 'test@example.invalid', roles, system });
   const expectNoWrites = () => {
     expect(service.create).not.toHaveBeenCalled();
     expect(service.update).not.toHaveBeenCalled();
@@ -33,17 +43,34 @@ describe('vehicle HTTP permissions', () => {
   beforeAll(async () => {
     const module = await Test.createTestingModule({
       controllers: [VehiclesController],
-      providers: [        { provide: VehiclesService, useValue: service },
-      ],
-    }).overrideGuard(JwtAuthGuard).useValue({ canActivate: (ctx: any) => { const auth = ctx.switchToHttp().getRequest().headers.authorization ?? ''; if (!auth.startsWith('Bearer ')) throw new UnauthorizedException(); try { ctx.switchToHttp().getRequest().user = jwt.verify(auth.slice(7)); return true; } catch { throw new UnauthorizedException(); } } }).compile();
+      providers: [{ provide: VehiclesService, useValue: service }],
+    })
+      .overrideGuard(JwtAuthGuard)
+      .useValue({
+        canActivate: (ctx: any) => {
+          const auth =
+            ctx.switchToHttp().getRequest().headers.authorization ?? '';
+          if (!auth.startsWith('Bearer ')) throw new UnauthorizedException();
+          try {
+            ctx.switchToHttp().getRequest().user = jwt.verify(auth.slice(7));
+            return true;
+          } catch {
+            throw new UnauthorizedException();
+          }
+        },
+      })
+      .compile();
     app = module.createNestApplication();
     await app.init();
   });
   beforeEach(() => {
     jest.clearAllMocks();
-    for (const method of Object.values(service)) method.mockResolvedValue({ ok: true });
+    for (const method of Object.values(service))
+      method.mockResolvedValue({ ok: true });
   });
-  afterAll(async () => { await app?.close(); });
+  afterAll(async () => {
+    await app?.close();
+  });
 
   it.each(writes)('rejects anonymous %s %s', async (method, path) => {
     await request(app.getHttpServer())[method](path).expect(401);
@@ -51,7 +78,8 @@ describe('vehicle HTTP permissions', () => {
   });
 
   it.each(writes)('allows Operations %s %s', async (method, path, handler) => {
-    await request(app.getHttpServer())[method](path)
+    await request(app.getHttpServer())
+      [method](path)
       .set('Authorization', `Bearer ${token([roleFor(UserRole.OPERATIONS)])}`)
       .send({
         plateNumber: 'ABC123',
@@ -62,21 +90,31 @@ describe('vehicle HTTP permissions', () => {
         truckSizeCategory: 'Medium Duty',
         odometer: 100,
         garageId: '8da72728-b06e-4475-945e-2cf3c99a996e',
-      }).expect(method === 'post' ? 201 : 200);
+      })
+      .expect(method === 'post' ? 201 : 200);
     expect(service[handler]).toHaveBeenCalledTimes(1);
   });
 
   it('allows Operations to preview an XLSX workbook without saving vehicles', async () => {
     const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['Plate Number']]), 'Vehicles');
-    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+    XLSX.utils.book_append_sheet(
+      workbook,
+      XLSX.utils.aoa_to_sheet([['Plate Number']]),
+      'Vehicles',
+    );
+    const buffer = XLSX.write(workbook, {
+      type: 'buffer',
+      bookType: 'xlsx',
+    }) as Buffer;
     service.previewExcel.mockResolvedValue({ imported: 0, rows: [] });
 
-    await request(app.getHttpServer()).post('/vehicles/import/preview')
+    await request(app.getHttpServer())
+      .post('/vehicles/import/preview')
       .set('Authorization', `Bearer ${token([roleFor(UserRole.OPERATIONS)])}`)
       .attach('file', buffer, {
         filename: 'vehicles.xlsx',
-        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        contentType:
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       })
       .expect(201, { imported: 0, rows: [] });
     expect(service.previewExcel).toHaveBeenCalledWith(expect.any(Buffer));
@@ -85,15 +123,31 @@ describe('vehicle HTTP permissions', () => {
 
   it('saves only when Operations explicitly submits the reviewed rows', async () => {
     service.saveImportRows.mockResolvedValue({ imported: 1, rows: [] });
-    await request(app.getHttpServer()).post('/vehicles/import')
+    await request(app.getHttpServer())
+      .post('/vehicles/import')
       .set('Authorization', `Bearer ${token([roleFor(UserRole.OPERATIONS)])}`)
-      .send({ rows: [{ row: 2, plateNumber: 'ABC-123', make: 'Isuzu', model: 'NKR', year: '2022', engineType: 'Diesel', truckSizeCategory: 'Medium', garageBranch: 'Marikina', odometerBaseline: '100' }] })
+      .send({
+        rows: [
+          {
+            row: 2,
+            plateNumber: 'ABC-123',
+            make: 'Isuzu',
+            model: 'NKR',
+            year: '2022',
+            engineType: 'Diesel',
+            truckSizeCategory: 'Medium',
+            garageBranch: 'Marikina',
+            odometerBaseline: '100',
+          },
+        ],
+      })
       .expect(201, { imported: 1, rows: [] });
     expect(service.saveImportRows).toHaveBeenCalledWith(expect.any(Array));
   });
 
   it('denies Admin access to vehicle import', async () => {
-    await request(app.getHttpServer()).post('/vehicles/import/preview')
+    await request(app.getHttpServer())
+      .post('/vehicles/import/preview')
       .set('Authorization', `Bearer ${token([roleFor(UserRole.ADMIN)])}`)
       .attach('file', Buffer.from('file'), 'vehicles.xlsx')
       .expect(403);
@@ -102,56 +156,92 @@ describe('vehicle HTTP permissions', () => {
   });
 
   it('passes the authenticated editor identity to the vehicle update service', async () => {
-    await request(app.getHttpServer()).patch(`/vehicles/${vehicleId}`)
+    await request(app.getHttpServer())
+      .patch(`/vehicles/${vehicleId}`)
       .set('Authorization', `Bearer ${token([roleFor(UserRole.OPERATIONS)])}`)
-      .send({ make: 'Hino' }).expect(200);
+      .send({ make: 'Hino' })
+      .expect(200);
 
-    expect(service.update).toHaveBeenCalledWith(vehicleId, { make: 'Hino' }, expect.objectContaining({
-      sub: 'user-id', email: 'test@example.invalid', roles: [roleFor(UserRole.OPERATIONS)], system: SystemType.VMMS,
-    }));
+    expect(service.update).toHaveBeenCalledWith(
+      vehicleId,
+      { make: 'Hino' },
+      expect.objectContaining({
+        sub: 'user-id',
+        email: 'test@example.invalid',
+        roles: [roleFor(UserRole.OPERATIONS)],
+        system: SystemType.VMMS,
+      }),
+    );
   });
 
-  describe.each([UserRole.ADMIN, UserRole.MECHANIC, UserRole.CHIEF_MECHANIC])('%s cannot manage vehicles', (role) => {
-    it.each(writes)('denies %s %s', async (method, path) => {
-      await request(app.getHttpServer())[method](path)
-        .set('Authorization', `Bearer ${token([roleFor(role)])}`).send({ isActive: false }).expect(403);
-      expectNoWrites();
-    });
-  });
-
-  it.each([UserRole.ADMIN, UserRole.OPERATIONS, UserRole.MECHANIC, UserRole.CHIEF_MECHANIC])(
-    'preserves vehicle reads for %s', async (role) => {
-      const readRequest = request(app.getHttpServer()).get('/vehicles')
-        .set('Authorization', `Bearer ${token([roleFor(role)])}`);
-      await readRequest.expect(200);
-      expect(service.findAll).toHaveBeenCalledTimes(1);
+  describe.each([UserRole.ADMIN, UserRole.MECHANIC, UserRole.CHIEF_MECHANIC])(
+    '%s cannot manage vehicles',
+    (role) => {
+      it.each(writes)('denies %s %s', async (method, path) => {
+        await request(app.getHttpServer())
+          [method](path)
+          .set('Authorization', `Bearer ${token([roleFor(role)])}`)
+          .send({ isActive: false })
+          .expect(403);
+        expectNoWrites();
+      });
     },
   );
 
-  it.each([UserRole.ADMIN, UserRole.OPERATIONS])('allows %s to read vehicle audit history', async (role) => {
-    await request(app.getHttpServer()).get(`/vehicles/${vehicleId}/audit`)
-      .set('Authorization', `Bearer ${token([roleFor(role)])}`).expect(200);
-    expect(service.findAuditHistory).toHaveBeenCalledWith(vehicleId);
+  it.each([
+    UserRole.ADMIN,
+    UserRole.OPERATIONS,
+    UserRole.MECHANIC,
+    UserRole.CHIEF_MECHANIC,
+  ])('preserves vehicle reads for %s', async (role) => {
+    const readRequest = request(app.getHttpServer())
+      .get('/vehicles')
+      .set('Authorization', `Bearer ${token([roleFor(role)])}`);
+    await readRequest.expect(200);
+    expect(service.findAll).toHaveBeenCalledTimes(1);
   });
 
-  it.each([UserRole.MECHANIC, UserRole.CHIEF_MECHANIC])('denies %s access to vehicle audit history', async (role) => {
-    await request(app.getHttpServer()).get(`/vehicles/${vehicleId}/audit`)
-      .set('Authorization', `Bearer ${token([roleFor(role)])}`)
-      .expect(403);
-    expect(service.findAuditHistory).not.toHaveBeenCalled();
-  });
+  it.each([UserRole.ADMIN, UserRole.OPERATIONS])(
+    'allows %s to read vehicle audit history',
+    async (role) => {
+      await request(app.getHttpServer())
+        .get(`/vehicles/${vehicleId}/audit`)
+        .set('Authorization', `Bearer ${token([roleFor(role)])}`)
+        .expect(200);
+      expect(service.findAuditHistory).toHaveBeenCalledWith(vehicleId);
+    },
+  );
 
-  describe.each([SystemType.VRMS, SystemType.BMS])('%s cannot grant VMMS mutation access', (system) => {
-    it.each(writes)('denies %s %s despite spoofed subsystem context', async (method, path) => {
-      const roles = [roleFor(UserRole.ADMIN), { role: UserRole.OPERATIONS, system }];
-      await request(app.getHttpServer())[method](`${path}?system=${system}`)
-        .set('Authorization', `Bearer ${token(roles, system)}`)
-        .set('Origin', `https://${system.toLowerCase()}.example.invalid`)
-        .send({ roleAssignments: [{ role: UserRole.OPERATIONS, system }] }).expect(403);
-      expectNoWrites();
-    });
-  });
+  it.each([UserRole.MECHANIC, UserRole.CHIEF_MECHANIC])(
+    'denies %s access to vehicle audit history',
+    async (role) => {
+      await request(app.getHttpServer())
+        .get(`/vehicles/${vehicleId}/audit`)
+        .set('Authorization', `Bearer ${token([roleFor(role)])}`)
+        .expect(403);
+      expect(service.findAuditHistory).not.toHaveBeenCalled();
+    },
+  );
 
-
-
+  describe.each([SystemType.VRMS, SystemType.BMS])(
+    '%s cannot grant VMMS mutation access',
+    (system) => {
+      it.each(writes)(
+        'denies %s %s despite spoofed subsystem context',
+        async (method, path) => {
+          const roles = [
+            roleFor(UserRole.ADMIN),
+            { role: UserRole.OPERATIONS, system },
+          ];
+          await request(app.getHttpServer())
+            [method](`${path}?system=${system}`)
+            .set('Authorization', `Bearer ${token(roles, system)}`)
+            .set('Origin', `https://${system.toLowerCase()}.example.invalid`)
+            .send({ roleAssignments: [{ role: UserRole.OPERATIONS, system }] })
+            .expect(403);
+          expectNoWrites();
+        },
+      );
+    },
+  );
 });

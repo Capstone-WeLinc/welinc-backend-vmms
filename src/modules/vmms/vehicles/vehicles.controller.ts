@@ -1,10 +1,29 @@
-import { Controller, Get, Post, Patch, Delete, Body, Param, UseGuards, ParseUUIDPipe, Req, UploadedFile, UseInterceptors, BadRequestException } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Delete,
+  Body,
+  Param,
+  UseGuards,
+  ParseUUIDPipe,
+  Req,
+  UploadedFile,
+  UseInterceptors,
+  BadRequestException,
+  Query,
+} from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../../../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../../auth/guards/roles.guard';
 import { Roles, RoleSystem } from '../../../auth/decorators/roles.decorator';
 import { SystemType, UserRole } from '@prisma/client';
-import { VehiclesService, type VehicleAuditActor, type VehicleImportRow } from './vehicles.service';
+import {
+  VehiclesService,
+  type VehicleAuditActor,
+  type VehicleImportRow,
+} from './vehicles.service';
 import { CreateVehicleDto } from './dto/create-vehicle.dto';
 import { UpdateVehicleDto } from './dto/update-vehicle.dto';
 
@@ -22,8 +41,8 @@ export class VehiclesController {
     UserRole.MECHANIC,
   )
   @Get()
-  async list() {
-    return this.vehiclesService.findAll();
+  async list(@Query('activeOnly') activeOnly?: string) {
+    return this.vehiclesService.findAll(activeOnly === 'true');
   }
 
   @Roles(UserRole.ADMIN, UserRole.OPERATIONS)
@@ -38,12 +57,14 @@ export class VehiclesController {
   }
 
   @Post('import/preview')
-  @UseInterceptors(FileInterceptor('file', {
-    limits: { fileSize: 5 * 1024 * 1024 },
-    fileFilter: (_req, file, callback) => {
-      callback(null, file.originalname.toLowerCase().endsWith('.xlsx'));
-    },
-  }))
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 5 * 1024 * 1024 },
+      fileFilter: (_req, file, callback) => {
+        callback(null, file.originalname.toLowerCase().endsWith('.xlsx'));
+      },
+    }),
+  )
   async previewExcel(
     @UploadedFile() file: { originalname: string; buffer: Buffer } | undefined,
   ) {
@@ -53,7 +74,8 @@ export class VehiclesController {
 
   @Post('import')
   async saveImport(@Body() body: { rows?: VehicleImportRow[] }) {
-    if (!Array.isArray(body?.rows)) throw new BadRequestException('Vehicle rows are required.');
+    if (!Array.isArray(body?.rows))
+      throw new BadRequestException('Vehicle rows are required.');
     return this.vehiclesService.saveImportRows(body.rows);
   }
 

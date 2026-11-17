@@ -17,9 +17,15 @@ describe('checklist HTTP permissions', () => {
   let app: INestApplication;
   const jwt = new JwtService({ secret });
   const service = {
-    create: jest.fn(), findAll: jest.fn(), findOne: jest.fn(), findByType: jest.fn(),
-    update: jest.fn(), updateByType: jest.fn(), remove: jest.fn(),
-    removeByType: jest.fn(), upsertMany: jest.fn(),
+    create: jest.fn(),
+    findAll: jest.fn(),
+    findOne: jest.fn(),
+    findByType: jest.fn(),
+    update: jest.fn(),
+    updateByType: jest.fn(),
+    remove: jest.fn(),
+    removeByType: jest.fn(),
+    upsertMany: jest.fn(),
   };
   const writes: [Method, string, keyof typeof service][] = [
     ['post', '/checklists', 'create'],
@@ -37,90 +43,153 @@ describe('checklist HTTP permissions', () => {
   const token = (roles: Role[], system: SystemType = SystemType.VMMS) =>
     jwt.sign({ sub: 'user-id', email: 'test@example.invalid', roles, system });
   const expectNoServiceCalls = () => {
-    for (const method of Object.values(service)) expect(method).not.toHaveBeenCalled();
+    for (const method of Object.values(service))
+      expect(method).not.toHaveBeenCalled();
   };
 
   beforeAll(async () => {
     const module = await Test.createTestingModule({
       controllers: [ChecklistsController],
-      providers: [        { provide: ChecklistsService, useValue: service },
-      ],
-    }).overrideGuard(JwtAuthGuard).useValue({ canActivate: (ctx: any) => { const auth = ctx.switchToHttp().getRequest().headers.authorization ?? ''; if (!auth.startsWith('Bearer ')) throw new UnauthorizedException(); try { ctx.switchToHttp().getRequest().user = jwt.verify(auth.slice(7)); return true; } catch { throw new UnauthorizedException(); } } }).compile();
+      providers: [{ provide: ChecklistsService, useValue: service }],
+    })
+      .overrideGuard(JwtAuthGuard)
+      .useValue({
+        canActivate: (ctx: any) => {
+          const auth =
+            ctx.switchToHttp().getRequest().headers.authorization ?? '';
+          if (!auth.startsWith('Bearer ')) throw new UnauthorizedException();
+          try {
+            ctx.switchToHttp().getRequest().user = jwt.verify(auth.slice(7));
+            return true;
+          } catch {
+            throw new UnauthorizedException();
+          }
+        },
+      })
+      .compile();
     app = module.createNestApplication();
     await app.init();
   });
   beforeEach(() => {
     jest.clearAllMocks();
 
-    for (const method of Object.values(service)) method.mockResolvedValue({ ok: true });
+    for (const method of Object.values(service))
+      method.mockResolvedValue({ ok: true });
   });
-  afterAll(async () => { await app?.close(); });
+  afterAll(async () => {
+    await app?.close();
+  });
 
-  it.each([...writes, ...reads])('rejects unauthenticated %s %s', async (method, path) => {
-    await request(app.getHttpServer())[method](path).expect(401);
-    expectNoServiceCalls();
-  });
+  it.each([...writes, ...reads])(
+    'rejects unauthenticated %s %s',
+    async (method, path) => {
+      await request(app.getHttpServer())[method](path).expect(401);
+      expectNoServiceCalls();
+    },
+  );
 
   it.each(writes)('allows VMMS Admin %s %s', async (method, path, handler) => {
-    await request(app.getHttpServer())[method](path)
+    await request(app.getHttpServer())
+      [method](path)
       .set('Authorization', `Bearer ${token([vmmsRole(UserRole.ADMIN)])}`)
-      .send({ type: 'PMS', items: [] }).expect(method === 'post' ? 201 : 200);
+      .send({ type: 'PMS', items: [] })
+      .expect(method === 'post' ? 201 : 200);
     expect(service[handler]).toHaveBeenCalledTimes(1);
   });
 
-  describe.each([UserRole.OPERATIONS, UserRole.CHIEF_MECHANIC, UserRole.MECHANIC])('%s writes', (role) => {
-    it.each(writes)('denies %s %s without modifying templates', async (method, path) => {
-
-      await request(app.getHttpServer())[method](path)
-        .set('Authorization', `Bearer ${token([vmmsRole(role)])}`)
-        .send({ type: 'PMS', items: [] }).expect(403);
-      expectNoServiceCalls();
-    });
+  describe.each([
+    UserRole.OPERATIONS,
+    UserRole.CHIEF_MECHANIC,
+    UserRole.MECHANIC,
+  ])('%s writes', (role) => {
+    it.each(writes)(
+      'denies %s %s without modifying templates',
+      async (method, path) => {
+        await request(app.getHttpServer())
+          [method](path)
+          .set('Authorization', `Bearer ${token([vmmsRole(role)])}`)
+          .send({ type: 'PMS', items: [] })
+          .expect(403);
+        expectNoServiceCalls();
+      },
+    );
   });
 
-  describe.each([UserRole.ADMIN, UserRole.OPERATIONS, UserRole.CHIEF_MECHANIC, UserRole.MECHANIC])('%s reads', (role) => {
+  describe.each([
+    UserRole.ADMIN,
+    UserRole.OPERATIONS,
+    UserRole.CHIEF_MECHANIC,
+    UserRole.MECHANIC,
+  ])('%s reads', (role) => {
     it.each(reads)('preserves %s %s', async (method, path, handler) => {
-
-      const req = request(app.getHttpServer())[method](path)
-        .set('Authorization', `Bearer ${token([vmmsRole(role)])}`).expect(200);
+      const req = request(app.getHttpServer())
+        [method](path)
+        .set('Authorization', `Bearer ${token([vmmsRole(role)])}`)
+        .expect(200);
       await req;
       expect(service[handler]).toHaveBeenCalledTimes(1);
     });
   });
 
-  it.each([UserRole.CHIEF_MECHANIC, UserRole.MECHANIC])('allows %s to read checklists', async (role) => {
-    await request(app.getHttpServer()).get('/checklists')
-      .set('Authorization', `Bearer ${token([vmmsRole(role)])}`).expect(200);
-    expect(service.findAll).toHaveBeenCalledTimes(1);
-  });
+  it.each([UserRole.CHIEF_MECHANIC, UserRole.MECHANIC])(
+    'allows %s to read checklists',
+    async (role) => {
+      await request(app.getHttpServer())
+        .get('/checklists')
+        .set('Authorization', `Bearer ${token([vmmsRole(role)])}`)
+        .expect(200);
+      expect(service.findAll).toHaveBeenCalledTimes(1);
+    },
+  );
 
-  describe.each([SystemType.VRMS, SystemType.BMS])('%s Admin cannot substitute for VMMS Admin', (system) => {
-    it.each(writes)('denies %s %s with another subsystem token and spoofed context', async (method, path) => {
-      const roles = [vmmsRole(UserRole.MECHANIC), { role: UserRole.ADMIN, system }];
-      await request(app.getHttpServer())[method](`${path}?system=${system}`)
-        .set('Authorization', `Bearer ${token(roles, system)}`)
-        .set('Origin', `https://${system.toLowerCase()}.example.invalid`)
-        .set('Referer', `https://${system.toLowerCase()}.example.invalid`)
-        .send({ roleAssignments: [{ role: UserRole.ADMIN, system }] }).expect(403);
-      expectNoServiceCalls();
-    });
+  describe.each([SystemType.VRMS, SystemType.BMS])(
+    '%s Admin cannot substitute for VMMS Admin',
+    (system) => {
+      it.each(writes)(
+        'denies %s %s with another subsystem token and spoofed context',
+        async (method, path) => {
+          const roles = [
+            vmmsRole(UserRole.MECHANIC),
+            { role: UserRole.ADMIN, system },
+          ];
+          await request(app.getHttpServer())
+            [method](`${path}?system=${system}`)
+            .set('Authorization', `Bearer ${token(roles, system)}`)
+            .set('Origin', `https://${system.toLowerCase()}.example.invalid`)
+            .set('Referer', `https://${system.toLowerCase()}.example.invalid`)
+            .send({ roleAssignments: [{ role: UserRole.ADMIN, system }] })
+            .expect(403);
+          expectNoServiceCalls();
+        },
+      );
 
-    it('denies template reads to users without any VMMS role', async () => {
-      const roles = [{ role: UserRole.ADMIN, system }];
-      await request(app.getHttpServer()).get('/checklists')
-        .set('Authorization', `Bearer ${token(roles, system)}`).expect(403);
-      expectNoServiceCalls();
-    });
-  });
-
+      it('denies template reads to users without any VMMS role', async () => {
+        const roles = [{ role: UserRole.ADMIN, system }];
+        await request(app.getHttpServer())
+          .get('/checklists')
+          .set('Authorization', `Bearer ${token(roles, system)}`)
+          .expect(403);
+        expectNoServiceCalls();
+      });
+    },
+  );
 
   it('rejects expired and incorrectly signed tokens', async () => {
-    const payload = { sub: 'user-id', system: SystemType.VMMS, roles: [vmmsRole(UserRole.ADMIN)] };
-    for (const invalidToken of [jwt.sign(payload, { expiresIn: -1 }), jwt.sign(payload, { secret: 'wrong-secret' })]) {
-      await request(app.getHttpServer()).post('/checklists/sync')
-        .set('Authorization', `Bearer ${invalidToken}`).send({}).expect(401);
+    const payload = {
+      sub: 'user-id',
+      system: SystemType.VMMS,
+      roles: [vmmsRole(UserRole.ADMIN)],
+    };
+    for (const invalidToken of [
+      jwt.sign(payload, { expiresIn: -1 }),
+      jwt.sign(payload, { secret: 'wrong-secret' }),
+    ]) {
+      await request(app.getHttpServer())
+        .post('/checklists/sync')
+        .set('Authorization', `Bearer ${invalidToken}`)
+        .send({})
+        .expect(401);
     }
     expectNoServiceCalls();
   });
-
 });

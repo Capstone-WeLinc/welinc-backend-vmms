@@ -28,19 +28,34 @@ export class ChecklistsController {
   }
 
   @Get()
-  @Roles(UserRole.ADMIN, UserRole.OPERATIONS, UserRole.CHIEF_MECHANIC, UserRole.MECHANIC)
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.OPERATIONS,
+    UserRole.CHIEF_MECHANIC,
+    UserRole.MECHANIC,
+  )
   findAll() {
     return this.checklistsService.findAll();
   }
 
   @Get(':id')
-  @Roles(UserRole.ADMIN, UserRole.OPERATIONS, UserRole.CHIEF_MECHANIC, UserRole.MECHANIC)
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.OPERATIONS,
+    UserRole.CHIEF_MECHANIC,
+    UserRole.MECHANIC,
+  )
   findOne(@Param('id') id: string) {
     return this.checklistsService.findOne(id);
   }
 
   @Get('type/:type')
-  @Roles(UserRole.ADMIN, UserRole.OPERATIONS, UserRole.CHIEF_MECHANIC, UserRole.MECHANIC)
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.OPERATIONS,
+    UserRole.CHIEF_MECHANIC,
+    UserRole.MECHANIC,
+  )
   findByType(@Param('type') type: string) {
     return this.checklistsService.findByType(type);
   }

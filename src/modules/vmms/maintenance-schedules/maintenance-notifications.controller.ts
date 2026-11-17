@@ -10,9 +10,15 @@ import type { ScheduleActor } from './schedule-access';
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.MECHANIC, UserRole.CHIEF_MECHANIC)
 export class MaintenanceNotificationsController {
-  constructor(private readonly notifications: MaintenanceNotificationsService) {}
+  constructor(
+    private readonly notifications: MaintenanceNotificationsService,
+  ) {}
   @Get()
-  list(@Req() req: { user: ScheduleActor }) { return this.notifications.list(req.user.sub); }
+  list(@Req() req: { user: ScheduleActor }) {
+    return this.notifications.list(req.user.sub);
+  }
   @Patch(':id/read')
-  read(@Param('id') id: string, @Req() req: { user: ScheduleActor }) { return this.notifications.markRead(req.user.sub, id); }
+  read(@Param('id') id: string, @Req() req: { user: ScheduleActor }) {
+    return this.notifications.markRead(req.user.sub, id);
+  }
 }

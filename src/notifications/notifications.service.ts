@@ -8,10 +8,8 @@ export class NotificationsService {
     private readonly prisma: PrismaService,
   ) {}
 
-  async listForUser(userId: string) {
-    const prisma = this.prisma as any;
-
-    return prisma.notification.findMany({
+  listForUser(userId: string) {
+    return this.prisma.notification.findMany({
       where: { userId },
       orderBy: { createdAt: 'desc' },
       select: {
@@ -27,8 +25,7 @@ export class NotificationsService {
   }
 
   async markAsRead(userId: string, notificationId: string) {
-    const prisma = this.prisma as any;
-    const notification = await prisma.notification.findFirst({
+    const notification = await this.prisma.notification.findFirst({
       where: { id: notificationId, userId },
     });
 
@@ -36,7 +33,7 @@ export class NotificationsService {
       throw new NotFoundException('Notification not found.');
     }
 
-    return prisma.notification.update({
+    return this.prisma.notification.update({
       where: { id: notificationId },
       data: { isRead: true },
       select: {

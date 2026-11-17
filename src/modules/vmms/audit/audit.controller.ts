@@ -19,7 +19,10 @@ type BusinessAuditRecord = {
 };
 
 function details(...values: Array<string | null | undefined>): string | null {
-  const text = values.map((value) => value?.trim()).filter(Boolean).join(' · ');
+  const text = values
+    .map((value) => value?.trim())
+    .filter(Boolean)
+    .join(' · ');
   return text || null;
 }
 
@@ -29,7 +32,11 @@ function record(
   action: string,
   entity: string,
   createdAt: Date,
-  options: { details?: string | null; previousValue?: string | null; newValue?: string | null } = {},
+  options: {
+    details?: string | null;
+    previousValue?: string | null;
+    newValue?: string | null;
+  } = {},
 ): BusinessAuditRecord {
   return {
     id,
@@ -55,54 +62,228 @@ export class AuditController {
   async business(@Res({ passthrough: true }) response: Response) {
     response.setHeader('Cache-Control', 'no-store');
     const take = 100;
-    const [workOrders, shopChanges, vehicles, fuel, cancellations, costing, editUnlocks, edits] =
-      await Promise.all([
-        this.prisma.auditLog.findMany({
-          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take,
-          select: { id: true, email: true, action: true, fieldName: true, previousValue: true, newValue: true, createdAt: true, workOrder: { select: { workOrderNumber: true } } },
-        }),
-        this.prisma.shopChangeLog.findMany({
-          orderBy: [{ changedAt: 'desc' }, { id: 'desc' }], take,
-          select: { id: true, changedByName: true, previousValue: true, newValue: true, changedAt: true, workOrder: { select: { workOrderNumber: true } } },
-        }),
-        this.prisma.vehicleAuditLog.findMany({
-          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take,
-          select: { id: true, email: true, action: true, fieldName: true, previousValue: true, newValue: true, createdAt: true, vehicle: { select: { plateNumber: true } } },
-        }),
-        this.prisma.fuelAuditLog.findMany({
-          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take,
-          select: { id: true, actorEmail: true, action: true, reason: true, details: true, createdAt: true, fillUp: { select: { vehicle: { select: { plateNumber: true } } } } },
-        }),
-        this.prisma.maintenanceScheduleCancellation.findMany({
-          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take,
-          select: { id: true, actorName: true, reason: true, reviewStatus: true, reviewReason: true, createdAt: true, schedule: { select: { title: true } } },
-        }),
-        this.prisma.maintenanceCostingThresholdAudit.findMany({
-          orderBy: [{ changedAt: 'desc' }, { id: 'desc' }], take,
-          select: { id: true, actorEmail: true, previousThreshold: true, newThreshold: true, changedAt: true },
-        }),
-        this.prisma.maintenanceLogEditUnlock.findMany({
-          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take,
-          select: { id: true, actorName: true, reason: true, reviewStatus: true, createdAt: true, schedule: { select: { title: true } } },
-        }),
-        this.prisma.maintenanceLogEditAudit.findMany({
-          orderBy: [{ changedAt: 'desc' }, { id: 'desc' }], take,
-          select: { id: true, actorName: true, fieldName: true, unlockReason: true, previousValue: true, newValue: true, changedAt: true, schedule: { select: { title: true } } },
-        }),
-      ]);
+    const [
+      workOrders,
+      shopChanges,
+      vehicles,
+      fuel,
+      cancellations,
+      costing,
+      editUnlocks,
+      edits,
+    ] = await Promise.all([
+      this.prisma.auditLog.findMany({
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take,
+        select: {
+          id: true,
+          email: true,
+          action: true,
+          fieldName: true,
+          previousValue: true,
+          newValue: true,
+          createdAt: true,
+          workOrder: { select: { workOrderNumber: true } },
+        },
+      }),
+      this.prisma.shopChangeLog.findMany({
+        orderBy: [{ changedAt: 'desc' }, { id: 'desc' }],
+        take,
+        select: {
+          id: true,
+          changedByName: true,
+          previousValue: true,
+          newValue: true,
+          changedAt: true,
+          workOrder: { select: { workOrderNumber: true } },
+        },
+      }),
+      this.prisma.vehicleAuditLog.findMany({
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take,
+        select: {
+          id: true,
+          email: true,
+          action: true,
+          fieldName: true,
+          previousValue: true,
+          newValue: true,
+          createdAt: true,
+          vehicle: { select: { plateNumber: true } },
+        },
+      }),
+      this.prisma.fuelAuditLog.findMany({
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take,
+        select: {
+          id: true,
+          actorEmail: true,
+          action: true,
+          reason: true,
+          details: true,
+          createdAt: true,
+          fillUp: { select: { vehicle: { select: { plateNumber: true } } } },
+        },
+      }),
+      this.prisma.maintenanceScheduleCancellation.findMany({
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take,
+        select: {
+          id: true,
+          actorName: true,
+          reason: true,
+          reviewStatus: true,
+          reviewReason: true,
+          createdAt: true,
+          schedule: { select: { title: true } },
+        },
+      }),
+      this.prisma.maintenanceCostingThresholdAudit.findMany({
+        orderBy: [{ changedAt: 'desc' }, { id: 'desc' }],
+        take,
+        select: {
+          id: true,
+          actorEmail: true,
+          previousThreshold: true,
+          newThreshold: true,
+          changedAt: true,
+        },
+      }),
+      this.prisma.maintenanceLogEditUnlock.findMany({
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take,
+        select: {
+          id: true,
+          actorName: true,
+          reason: true,
+          reviewStatus: true,
+          createdAt: true,
+          schedule: { select: { title: true } },
+        },
+      }),
+      this.prisma.maintenanceLogEditAudit.findMany({
+        orderBy: [{ changedAt: 'desc' }, { id: 'desc' }],
+        take,
+        select: {
+          id: true,
+          actorName: true,
+          fieldName: true,
+          unlockReason: true,
+          previousValue: true,
+          newValue: true,
+          changedAt: true,
+          schedule: { select: { title: true } },
+        },
+      }),
+    ]);
 
     const records: BusinessAuditRecord[] = [
-      ...workOrders.map((row) => record(row.id, row.email, row.action, `Work order ${row.workOrder.workOrderNumber}`, row.createdAt, { details: row.fieldName, previousValue: row.previousValue, newValue: row.newValue })),
-      ...shopChanges.map((row) => record(row.id, row.changedByName, 'SHOP_CHANGED', `Work order ${row.workOrder.workOrderNumber}`, row.changedAt, { previousValue: row.previousValue, newValue: row.newValue })),
-      ...vehicles.map((row) => record(row.id, row.email, row.action, `Vehicle ${row.vehicle.plateNumber}`, row.createdAt, { details: row.fieldName, previousValue: row.previousValue, newValue: row.newValue })),
-      ...fuel.map((row) => record(row.id, row.actorEmail, row.action, row.fillUp ? `Fuel ${row.fillUp.vehicle.plateNumber}` : 'Fuel report', row.createdAt, { details: details(row.reason, row.details == null ? null : JSON.stringify(row.details)) })),
-      ...cancellations.map((row) => record(row.id, row.actorName, `SCHEDULE_${row.reviewStatus}`, `Schedule ${row.schedule.title}`, row.createdAt, { details: details(row.reason, row.reviewReason) })),
-      ...costing.map((row) => record(row.id, row.actorEmail, 'COST_THRESHOLD_CHANGED', 'Maintenance costing settings', row.changedAt, { previousValue: row.previousThreshold?.toString() ?? null, newValue: row.newThreshold.toString() })),
-      ...editUnlocks.map((row) => record(row.id, row.actorName, `LOG_EDIT_${row.reviewStatus}`, `Schedule ${row.schedule.title}`, row.createdAt, { details: row.reason })),
-      ...edits.map((row) => record(row.id, row.actorName, `LOG_FIELD_${row.fieldName}`, `Schedule ${row.schedule.title}`, row.changedAt, { details: row.unlockReason, previousValue: row.previousValue, newValue: row.newValue })),
+      ...workOrders.map((row) =>
+        record(
+          row.id,
+          row.email,
+          row.action,
+          `Work order ${row.workOrder.workOrderNumber}`,
+          row.createdAt,
+          {
+            details: row.fieldName,
+            previousValue: row.previousValue,
+            newValue: row.newValue,
+          },
+        ),
+      ),
+      ...shopChanges.map((row) =>
+        record(
+          row.id,
+          row.changedByName,
+          'SHOP_CHANGED',
+          `Work order ${row.workOrder.workOrderNumber}`,
+          row.changedAt,
+          { previousValue: row.previousValue, newValue: row.newValue },
+        ),
+      ),
+      ...vehicles.map((row) =>
+        record(
+          row.id,
+          row.email,
+          row.action,
+          `Vehicle ${row.vehicle.plateNumber}`,
+          row.createdAt,
+          {
+            details: row.fieldName,
+            previousValue: row.previousValue,
+            newValue: row.newValue,
+          },
+        ),
+      ),
+      ...fuel.map((row) =>
+        record(
+          row.id,
+          row.actorEmail,
+          row.action,
+          row.fillUp ? `Fuel ${row.fillUp.vehicle.plateNumber}` : 'Fuel report',
+          row.createdAt,
+          {
+            details: details(
+              row.reason,
+              row.details == null ? null : JSON.stringify(row.details),
+            ),
+          },
+        ),
+      ),
+      ...cancellations.map((row) =>
+        record(
+          row.id,
+          row.actorName,
+          `SCHEDULE_${row.reviewStatus}`,
+          `Schedule ${row.schedule.title}`,
+          row.createdAt,
+          { details: details(row.reason, row.reviewReason) },
+        ),
+      ),
+      ...costing.map((row) =>
+        record(
+          row.id,
+          row.actorEmail,
+          'COST_THRESHOLD_CHANGED',
+          'Maintenance costing settings',
+          row.changedAt,
+          {
+            previousValue: row.previousThreshold?.toString() ?? null,
+            newValue: row.newThreshold.toString(),
+          },
+        ),
+      ),
+      ...editUnlocks.map((row) =>
+        record(
+          row.id,
+          row.actorName,
+          `LOG_EDIT_${row.reviewStatus}`,
+          `Schedule ${row.schedule.title}`,
+          row.createdAt,
+          { details: row.reason },
+        ),
+      ),
+      ...edits.map((row) =>
+        record(
+          row.id,
+          row.actorName,
+          `LOG_FIELD_${row.fieldName}`,
+          `Schedule ${row.schedule.title}`,
+          row.changedAt,
+          {
+            details: row.unlockReason,
+            previousValue: row.previousValue,
+            newValue: row.newValue,
+          },
+        ),
+      ),
     ];
 
-    records.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
+    records.sort(
+      (a, b) =>
+        b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
+    );
     return { records: records.slice(0, take) };
   }
 }

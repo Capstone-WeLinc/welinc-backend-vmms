@@ -45,16 +45,20 @@ describe('VehiclesService garage branch assignment', () => {
       select: { id: true },
     });
     expect(prisma.vehicle.create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ garageId: 'garage-1' }) }),
+      expect.objectContaining({
+        data: expect.objectContaining({ garageId: 'garage-1' }),
+      }),
     );
   });
 
   it('rejects missing or inactive branches', async () => {
-    await expect(service.create(createDto({ garageId: '' })))
-      .rejects.toThrow(new BadRequestException('Garage branch is required.'));
+    await expect(service.create(createDto({ garageId: '' }))).rejects.toThrow(
+      new BadRequestException('Garage branch is required.'),
+    );
     prisma.garage.findFirst.mockResolvedValue(null);
-    await expect(service.create(createDto()))
-      .rejects.toThrow(new BadRequestException('Select an active registered garage branch.'));
+    await expect(service.create(createDto())).rejects.toThrow(
+      new BadRequestException('Select an active registered garage branch.'),
+    );
     expect(prisma.vehicle.create).not.toHaveBeenCalled();
   });
 
@@ -93,7 +97,11 @@ describe('VehiclesService garage branch assignment', () => {
       }),
     ]);
     expect(prisma.maintenanceSchedule.findMany).toHaveBeenCalledWith({
-      where: { vehicleId: { in: ['ABC 1234'] }, status: 'COMPLETED', deletedAt: null },
+      where: {
+        vehicleId: { in: ['ABC 1234'] },
+        status: 'COMPLETED',
+        deletedAt: null,
+      },
       orderBy: [
         { completedAt: { sort: 'desc', nulls: 'last' } },
         { createdAt: 'desc' },
@@ -101,7 +109,9 @@ describe('VehiclesService garage branch assignment', () => {
       select: { vehicleId: true, completedAt: true, createdAt: true },
     });
     expect(prisma.vehicle.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ include: { garage: { select: { id: true, name: true } } } }),
+      expect.objectContaining({
+        include: { garage: { select: { id: true, name: true } } },
+      }),
     );
   });
 
@@ -112,7 +122,10 @@ describe('VehiclesService garage branch assignment', () => {
     prisma.maintenanceSchedule.findMany.mockResolvedValue([]);
 
     await expect(service.findAll()).resolves.toEqual([
-      expect.objectContaining({ plateNumber: 'NOHISTORY', lastMaintenanceDate: null }),
+      expect.objectContaining({
+        plateNumber: 'NOHISTORY',
+        lastMaintenanceDate: null,
+      }),
     ]);
   });
 
@@ -126,15 +139,26 @@ describe('VehiclesService garage branch assignment', () => {
     ]);
 
     await expect(service.findAll()).resolves.toEqual([
-      expect.objectContaining({ plateNumber: 'SEEDED', lastMaintenanceDate: seededDate }),
+      expect.objectContaining({
+        plateNumber: 'SEEDED',
+        lastMaintenanceDate: seededDate,
+      }),
     ]);
   });
 
   it('writes previous and new values for every changed vehicle field with the editor identity', async () => {
     const previous = {
-      plateNumber: 'ABC 1234', make: 'Isuzu', model: 'Elf', year: 2022,
-      engineType: 'Diesel', truckSizeCategory: 'Light Duty',
-      capacity: 0, odometer: 100, garageId: 'garage-1', status: 'AVAILABLE', isActive: true,
+      plateNumber: 'ABC 1234',
+      make: 'Isuzu',
+      model: 'Elf',
+      year: 2022,
+      engineType: 'Diesel',
+      truckSizeCategory: 'Light Duty',
+      capacity: 0,
+      odometer: 100,
+      garageId: 'garage-1',
+      status: 'AVAILABLE',
+      isActive: true,
     };
     prisma.vehicle.findUnique.mockResolvedValue(previous);
     prisma.vehicle.update.mockImplementation(({ data }) => ({
@@ -144,10 +168,14 @@ describe('VehiclesService garage branch assignment', () => {
     }));
     prisma.vehicleAuditLog.createMany.mockResolvedValue({ count: 2 });
 
-    await service.update('vehicle-1', { make: '  Hino  ', odometer: 125 }, {
-      sub: 'operations-user',
-      email: 'operations@example.test',
-    });
+    await service.update(
+      'vehicle-1',
+      { make: '  Hino  ', odometer: 125 },
+      {
+        sub: 'operations-user',
+        email: 'operations@example.test',
+      },
+    );
 
     expect(prisma.vehicleAuditLog.createMany).toHaveBeenCalledWith({
       data: [
@@ -175,16 +203,29 @@ describe('VehiclesService garage branch assignment', () => {
 
   it('does not create edit audit rows when submitted values are unchanged', async () => {
     const unchanged = {
-      plateNumber: 'ABC 1234', make: 'Isuzu', model: 'Elf', year: 2022,
-      engineType: 'Diesel', truckSizeCategory: 'Light Duty',
-      capacity: 0, odometer: 100, garageId: 'garage-1', status: 'AVAILABLE', isActive: true,
+      plateNumber: 'ABC 1234',
+      make: 'Isuzu',
+      model: 'Elf',
+      year: 2022,
+      engineType: 'Diesel',
+      truckSizeCategory: 'Light Duty',
+      capacity: 0,
+      odometer: 100,
+      garageId: 'garage-1',
+      status: 'AVAILABLE',
+      isActive: true,
     };
     prisma.vehicle.findUnique.mockResolvedValue(unchanged);
     prisma.vehicle.update.mockResolvedValue({ ...unchanged, garage: null });
 
-    await service.update('vehicle-1', { make: ' Isuzu ' }, {
-      sub: 'operations-user', email: 'operations@example.test',
-    });
+    await service.update(
+      'vehicle-1',
+      { make: ' Isuzu ' },
+      {
+        sub: 'operations-user',
+        email: 'operations@example.test',
+      },
+    );
 
     expect(prisma.vehicleAuditLog.createMany).not.toHaveBeenCalled();
   });
@@ -192,10 +233,18 @@ describe('VehiclesService garage branch assignment', () => {
   it('returns a vehicle audit history in newest-first order with a bounded result set', async () => {
     prisma.vehicle.findUnique.mockResolvedValue({ id: 'vehicle-1' });
     prisma.vehicleAuditLog.findMany.mockResolvedValue([
-      { id: 'audit-1', email: 'ops@example.test', fieldName: 'make', previousValue: 'Isuzu', newValue: 'Hino' },
+      {
+        id: 'audit-1',
+        email: 'ops@example.test',
+        fieldName: 'make',
+        previousValue: 'Isuzu',
+        newValue: 'Hino',
+      },
     ]);
 
-    await expect(service.findAuditHistory('vehicle-1')).resolves.toHaveLength(1);
+    await expect(service.findAuditHistory('vehicle-1')).resolves.toHaveLength(
+      1,
+    );
     expect(prisma.vehicleAuditLog.findMany).toHaveBeenCalledWith({
       where: { vehicleId: 'vehicle-1' },
       orderBy: { createdAt: 'desc' },
@@ -213,18 +262,70 @@ describe('VehiclesService garage branch assignment', () => {
   });
 
   it('previews valid spreadsheet rows and reports duplicates without saving vehicles', async () => {
-    const data = [[
-      'Plate Number', 'Make', 'Model', 'Year', 'Engine Type', 'Truck Size/Category', 'Garage Branch', 'Odometer Baseline',
-    ]];
-    data.push(['EXISTING', 'Isuzu', 'NKR', '2022', 'Diesel', 'Medium', 'Marikina', '100']);
-    data.push(['TRUCK-1', 'Isuzu', 'NKR', '2022', 'Diesel', 'Medium', 'Sta. Rosa', '100']);
+    const data = [
+      [
+        'Plate Number',
+        'Make',
+        'Model',
+        'Year',
+        'Engine Type',
+        'Truck Size/Category',
+        'Garage Branch',
+        'Odometer Baseline',
+      ],
+    ];
+    data.push([
+      'EXISTING',
+      'Isuzu',
+      'NKR',
+      '2022',
+      'Diesel',
+      'Medium',
+      'Marikina',
+      '100',
+    ]);
+    data.push([
+      'TRUCK-1',
+      'Isuzu',
+      'NKR',
+      '2022',
+      'Diesel',
+      'Medium',
+      'Sta. Rosa',
+      '100',
+    ]);
     for (let index = 2; index <= 8; index += 1) {
-      data.push([`TRUCK-${index}`, 'Isuzu', 'NKR', '2022', 'Diesel', 'Medium', 'Pulilan', String(index * 100)]);
+      data.push([
+        `TRUCK-${index}`,
+        'Isuzu',
+        'NKR',
+        '2022',
+        'Diesel',
+        'Medium',
+        'Pulilan',
+        String(index * 100),
+      ]);
     }
-    data.push(['TRUCK-1', 'Isuzu', 'NKR', '2022', 'Diesel', 'Medium', 'Marikina', '200']);
+    data.push([
+      'TRUCK-1',
+      'Isuzu',
+      'NKR',
+      '2022',
+      'Diesel',
+      'Medium',
+      'Marikina',
+      '200',
+    ]);
     const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(data), 'Vehicles');
-    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+    XLSX.utils.book_append_sheet(
+      workbook,
+      XLSX.utils.aoa_to_sheet(data),
+      'Vehicles',
+    );
+    const buffer = XLSX.write(workbook, {
+      type: 'buffer',
+      bookType: 'xlsx',
+    }) as Buffer;
     prisma.garage.findMany.mockResolvedValue([
       { id: 'marikina', name: 'Marikina' },
       { id: 'sta-rosa', name: 'Sta. Rosa' },
@@ -238,7 +339,11 @@ describe('VehiclesService garage branch assignment', () => {
     expect(preview.rows).toHaveLength(10);
     expect(preview.rows[0]).toMatchObject({ row: 2, plateNumber: 'EXISTING' });
     expect(preview.rows[0].errors[0]).toContain('already registered');
-    expect(preview.rows[1]).toMatchObject({ row: 3, plateNumber: 'TRUCK-1', errors: [] });
+    expect(preview.rows[1]).toMatchObject({
+      row: 3,
+      plateNumber: 'TRUCK-1',
+      errors: [],
+    });
     expect(preview.rows[9]).toMatchObject({ row: 11, plateNumber: 'TRUCK-1' });
     expect(preview.rows[9].errors[0]).toContain('duplicated');
     expect(prisma.vehicle.create).not.toHaveBeenCalled();
@@ -247,41 +352,89 @@ describe('VehiclesService garage branch assignment', () => {
     await expect(service.saveImportRows(preview.rows)).resolves.toMatchObject({
       imported: 8,
       rows: [
-        { row: 2, plateNumber: 'EXISTING', errors: [expect.stringContaining('already registered')] },
-        { row: 11, plateNumber: 'TRUCK-1', errors: [expect.stringContaining('already registered')] },
+        {
+          row: 2,
+          plateNumber: 'EXISTING',
+          errors: [expect.stringContaining('already registered')],
+        },
+        {
+          row: 11,
+          plateNumber: 'TRUCK-1',
+          errors: [expect.stringContaining('already registered')],
+        },
       ],
     });
     expect(prisma.vehicle.create).toHaveBeenCalledTimes(8);
-    expect(prisma.vehicle.create).toHaveBeenCalledWith({ data: expect.objectContaining({
-      plateNumber: 'TRUCK-1', garageId: 'sta-rosa', status: 'AVAILABLE', odometer: 100,
-    }) });
-    expect(prisma.vehicle.create).toHaveBeenCalledWith({ data: expect.objectContaining({ plateNumber: 'TRUCK-1', make: 'Hino' }) });
+    expect(prisma.vehicle.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        plateNumber: 'TRUCK-1',
+        garageId: 'sta-rosa',
+        status: 'AVAILABLE',
+        odometer: 100,
+      }),
+    });
+    expect(prisma.vehicle.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ plateNumber: 'TRUCK-1', make: 'Hino' }),
+    });
   });
 
   it('previews missing values and unregistered garage branches without writing', async () => {
     const workbook = XLSX.utils.book_new();
     const sheet = XLSX.utils.aoa_to_sheet([
-      ['Plate Number', 'Make', 'Model', 'Year', 'Engine Type', 'Truck Size/Category', 'Garage Branch', 'Odometer Baseline'],
+      [
+        'Plate Number',
+        'Make',
+        'Model',
+        'Year',
+        'Engine Type',
+        'Truck Size/Category',
+        'Garage Branch',
+        'Odometer Baseline',
+      ],
       ['MISSING', '', 'NKR', '2022', 'Diesel', 'Medium', 'Marikina', '100'],
-      ['BAD-BRANCH', 'Isuzu', 'NKR', '2022', 'Diesel', 'Medium', 'Nowhere', '100'],
+      [
+        'BAD-BRANCH',
+        'Isuzu',
+        'NKR',
+        '2022',
+        'Diesel',
+        'Medium',
+        'Nowhere',
+        '100',
+      ],
     ]);
     XLSX.utils.book_append_sheet(workbook, sheet, 'Vehicles');
-    prisma.garage.findMany.mockResolvedValue([{ id: 'marikina', name: 'Marikina' }]);
+    prisma.garage.findMany.mockResolvedValue([
+      { id: 'marikina', name: 'Marikina' },
+    ]);
     prisma.vehicle.findMany.mockResolvedValue([]);
     prisma.vehicle.create.mockResolvedValue({ id: 'created' });
 
-    await expect(service.previewExcel(XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer))
-      .resolves.toMatchObject({ imported: 0, rows: [
+    await expect(
+      service.previewExcel(
+        XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer,
+      ),
+    ).resolves.toMatchObject({
+      imported: 0,
+      rows: [
         { row: 2, errors: [expect.stringContaining('make')] },
         { row: 3, errors: [expect.stringContaining('registered branch')] },
-      ] });
+      ],
+    });
     expect(prisma.vehicle.create).not.toHaveBeenCalled();
   });
 
   it('rejects workbooks without all expected columns', async () => {
     const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['Plate Number', 'Make']]), 'Vehicles');
-    await expect(service.previewExcel(XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer))
-      .rejects.toThrow('Missing required columns');
+    XLSX.utils.book_append_sheet(
+      workbook,
+      XLSX.utils.aoa_to_sheet([['Plate Number', 'Make']]),
+      'Vehicles',
+    );
+    await expect(
+      service.previewExcel(
+        XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer,
+      ),
+    ).rejects.toThrow('Missing required columns');
   });
 });

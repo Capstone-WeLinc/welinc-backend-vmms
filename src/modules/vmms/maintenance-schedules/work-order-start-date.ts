@@ -3,7 +3,7 @@ export function getWorkOrderStartDateError(
   now = new Date(),
 ): string | null {
   if (!startDate || !Number.isFinite(startDate.getTime())) {
-    return "This work order has no scheduled start date. Ask Operations to update its schedule.";
+    return 'This work order has no scheduled start date. Ask Operations to update its schedule.';
   }
 
   const scheduledDay = startDate.toISOString().slice(0, 10);

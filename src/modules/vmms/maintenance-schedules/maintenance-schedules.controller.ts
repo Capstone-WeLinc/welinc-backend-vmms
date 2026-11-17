@@ -31,7 +31,12 @@ import { UpdateMaintenanceLogDto } from './dto/update-maintenance-log.dto';
 import { ReviewMaintenanceCancellationDto } from './dto/review-maintenance-cancellation.dto';
 import { UpdateMaintenanceOdometerThresholdDto } from './dto/update-maintenance-odometer-threshold.dto';
 
-type WorkOrderUploadFile = { originalname: string; mimetype: string; size: number; buffer: Buffer };
+type WorkOrderUploadFile = {
+  originalname: string;
+  mimetype: string;
+  size: number;
+  buffer: Buffer;
+};
 
 @Controller('maintenance-schedules')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -41,13 +46,23 @@ export class MaintenanceSchedulesController {
     private readonly maintenanceSchedulesService: MaintenanceSchedulesService,
   ) {}
 
-  @Roles(UserRole.ADMIN, UserRole.OPERATIONS, UserRole.CHIEF_MECHANIC, UserRole.MECHANIC)
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.OPERATIONS,
+    UserRole.CHIEF_MECHANIC,
+    UserRole.MECHANIC,
+  )
   @Get()
   async list(@Req() req: { user: ScheduleActor }) {
     return this.maintenanceSchedulesService.findAll(req.user);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.OPERATIONS, UserRole.CHIEF_MECHANIC, UserRole.MECHANIC)
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.OPERATIONS,
+    UserRole.CHIEF_MECHANIC,
+    UserRole.MECHANIC,
+  )
   @Get('search')
   async search(@Query('q') q: string, @Req() req: { user: ScheduleActor }) {
     return this.maintenanceSchedulesService.findAll(req.user);
@@ -75,7 +90,11 @@ export class MaintenanceSchedulesController {
     @Body() body: UpdateWorkOrderPriorityDto,
     @Req() req: { user: ScheduleActor },
   ) {
-    return this.maintenanceSchedulesService.updatePriority(id, body.priority, req.user);
+    return this.maintenanceSchedulesService.updatePriority(
+      id,
+      body.priority,
+      req.user,
+    );
   }
 
   @Roles(UserRole.ADMIN)
@@ -85,12 +104,21 @@ export class MaintenanceSchedulesController {
     @Body() body: UpdateMaintenanceOdometerThresholdDto,
     @Req() req: { user: ScheduleActor },
   ) {
-    return this.maintenanceSchedulesService.updateOdometerThreshold(id, body.thresholdKm, body.reason, req.user);
+    return this.maintenanceSchedulesService.updateOdometerThreshold(
+      id,
+      body.thresholdKm,
+      body.reason,
+      req.user,
+    );
   }
 
   @Roles(UserRole.OPERATIONS)
   @Post(':id/cancel')
-  async cancel(@Param('id', ParseUUIDPipe) id: string, @Body() body: CancelMaintenanceScheduleDto, @Req() req: { user: ScheduleActor }) {
+  async cancel(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: CancelMaintenanceScheduleDto,
+    @Req() req: { user: ScheduleActor },
+  ) {
     return this.maintenanceSchedulesService.cancel(id, body.reason, req.user);
   }
 
@@ -103,20 +131,40 @@ export class MaintenanceSchedulesController {
     @Req() req: { user: ScheduleActor },
   ) {
     return this.maintenanceSchedulesService.reviewCancellationRequest(
-      id, requestId, body.decision, body.reason, req.user,
+      id,
+      requestId,
+      body.decision,
+      body.reason,
+      req.user,
     );
   }
 
   @Roles(UserRole.ADMIN)
   @Post(':id/cancel-log')
-  async cancelMaintenanceLog(@Param('id', ParseUUIDPipe) id: string, @Body() body: CancelMaintenanceScheduleDto, @Req() req: { user: ScheduleActor }) {
-    return this.maintenanceSchedulesService.cancelMaintenanceLog(id, body.reason, req.user);
+  async cancelMaintenanceLog(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: CancelMaintenanceScheduleDto,
+    @Req() req: { user: ScheduleActor },
+  ) {
+    return this.maintenanceSchedulesService.cancelMaintenanceLog(
+      id,
+      body.reason,
+      req.user,
+    );
   }
 
   @Roles(UserRole.OPERATIONS)
   @Post(':id/unlock-log')
-  async unlockMaintenanceLog(@Param('id', ParseUUIDPipe) id: string, @Body() body: CancelMaintenanceScheduleDto, @Req() req: { user: ScheduleActor }) {
-    return this.maintenanceSchedulesService.unlockMaintenanceLog(id, body.reason, req.user);
+  async unlockMaintenanceLog(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: CancelMaintenanceScheduleDto,
+    @Req() req: { user: ScheduleActor },
+  ) {
+    return this.maintenanceSchedulesService.unlockMaintenanceLog(
+      id,
+      body.reason,
+      req.user,
+    );
   }
 
   @Roles(UserRole.ADMIN)
@@ -127,47 +175,101 @@ export class MaintenanceSchedulesController {
     @Body() body: ReviewMaintenanceCancellationDto,
     @Req() req: { user: ScheduleActor },
   ) {
-    return this.maintenanceSchedulesService.reviewMaintenanceLogUnlock(id, requestId, body.decision, body.reason, req.user);
+    return this.maintenanceSchedulesService.reviewMaintenanceLogUnlock(
+      id,
+      requestId,
+      body.decision,
+      body.reason,
+      req.user,
+    );
   }
 
   @Roles(UserRole.OPERATIONS)
   @Patch(':id/log-edit')
-  async updateMaintenanceLog(@Param('id', ParseUUIDPipe) id: string, @Body() body: UpdateMaintenanceLogDto, @Req() req: { user: ScheduleActor }) {
-    return this.maintenanceSchedulesService.updateMaintenanceLog(id, body, req.user);
+  async updateMaintenanceLog(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: UpdateMaintenanceLogDto,
+    @Req() req: { user: ScheduleActor },
+  ) {
+    return this.maintenanceSchedulesService.updateMaintenanceLog(
+      id,
+      body,
+      req.user,
+    );
   }
 
   @Roles(UserRole.OPERATIONS)
   @Post(':id/void-log')
-  async voidMaintenanceLog(@Param('id', ParseUUIDPipe) id: string, @Body() body: CancelMaintenanceScheduleDto, @Req() req: { user: ScheduleActor }) {
-    return this.maintenanceSchedulesService.voidMaintenanceLog(id, body.reason, req.user);
+  async voidMaintenanceLog(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: CancelMaintenanceScheduleDto,
+    @Req() req: { user: ScheduleActor },
+  ) {
+    return this.maintenanceSchedulesService.voidMaintenanceLog(
+      id,
+      body.reason,
+      req.user,
+    );
   }
 
-  @Roles(UserRole.ADMIN, UserRole.OPERATIONS, UserRole.CHIEF_MECHANIC, UserRole.MECHANIC)
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.OPERATIONS,
+    UserRole.CHIEF_MECHANIC,
+    UserRole.MECHANIC,
+  )
   @Patch(':id/progress')
-  async updateProgress(@Param('id') id: string, @Body() body: unknown, @Req() req: { user: ScheduleActor }) {
+  async updateProgress(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Req() req: { user: ScheduleActor },
+  ) {
     return this.maintenanceSchedulesService.updateProgress(id, body, req.user);
   }
 
   @Roles(UserRole.MECHANIC)
   @Post(':id/attachments')
-  @UseInterceptors(FileInterceptor('file', {
-    limits: { fileSize: 5 * 1024 * 1024 },
-    fileFilter: (_req, file, callback) => {
-      const allowed = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.mp4', '.pdf', '.txt'];
-      const extension = file.originalname.toLowerCase().slice(file.originalname.lastIndexOf('.'));
-      callback(null, allowed.includes(extension));
-    },
-  }))
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 5 * 1024 * 1024 },
+      fileFilter: (_req, file, callback) => {
+        const allowed = [
+          '.jpg',
+          '.jpeg',
+          '.png',
+          '.webp',
+          '.gif',
+          '.mp4',
+          '.pdf',
+          '.txt',
+        ];
+        const extension = file.originalname
+          .toLowerCase()
+          .slice(file.originalname.lastIndexOf('.'));
+        callback(null, allowed.includes(extension));
+      },
+    }),
+  )
   async uploadAttachment(
     @Param('id', ParseUUIDPipe) id: string,
     @Body('itemId') itemId: string,
     @UploadedFile() file: WorkOrderUploadFile,
     @Req() req: { user: ScheduleActor },
   ) {
-    return this.maintenanceSchedulesService.uploadAttachment(id, itemId, file, req.user);
+    return this.maintenanceSchedulesService.uploadAttachment(
+      id,
+      itemId,
+      file,
+      req.user,
+    );
   }
 
-  @Roles(UserRole.ADMIN, UserRole.OPERATIONS, UserRole.CHIEF_MECHANIC, UserRole.MECHANIC)
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.OPERATIONS,
+    UserRole.CHIEF_MECHANIC,
+    UserRole.MECHANIC,
+  )
   @Get(':id/attachments/:attachmentId')
   async getAttachment(
     @Param('id', ParseUUIDPipe) id: string,
@@ -175,10 +277,17 @@ export class MaintenanceSchedulesController {
     @Req() req: { user: ScheduleActor },
     @Res({ passthrough: true }) response: Response,
   ) {
-    const attachment = await this.maintenanceSchedulesService.getAttachment(id, attachmentId, req.user);
+    const attachment = await this.maintenanceSchedulesService.getAttachment(
+      id,
+      attachmentId,
+      req.user,
+    );
     response.setHeader('Content-Type', attachment.contentType);
     response.setHeader('Cache-Control', 'private, no-store');
-    response.setHeader('Content-Disposition', `inline; filename="${attachment.name.replace(/[\"\\\r\n]/g, '_')}"`);
+    response.setHeader(
+      'Content-Disposition',
+      `inline; filename="${attachment.name.replace(/["\\\r\n]/g, '_')}"`,
+    );
     response.setHeader('X-Content-Type-Options', 'nosniff');
     return new StreamableFile(attachment.stream);
   }
@@ -190,7 +299,11 @@ export class MaintenanceSchedulesController {
     @Param('attachmentId', ParseUUIDPipe) attachmentId: string,
     @Req() req: { user: ScheduleActor },
   ) {
-    return this.maintenanceSchedulesService.deleteAttachment(id, attachmentId, req.user);
+    return this.maintenanceSchedulesService.deleteAttachment(
+      id,
+      attachmentId,
+      req.user,
+    );
   }
 
   @Roles(UserRole.ADMIN)

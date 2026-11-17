@@ -6,8 +6,11 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { createRequire } from 'node:module';
 import type { BlobServiceClient, ContainerClient } from '@azure/storage-blob';
 import type { Env } from '../config/env';
+
+const loadFromProject = createRequire(`${process.cwd()}/package.json`);
 
 export class StorageUnavailableException extends ServiceUnavailableException {
   constructor() {
@@ -20,8 +23,12 @@ export class StorageUnavailableException extends ServiceUnavailableException {
 }
 
 function isNotFound(error: unknown): boolean {
-  return typeof error === 'object' && error !== null &&
-    'statusCode' in error && (error as { statusCode?: unknown }).statusCode === 404;
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'statusCode' in error &&
+    (error as { statusCode?: unknown }).statusCode === 404
+  );
 }
 
 /** Private object storage for attachments. Local development uses Azurite; Azure uses managed identity. */
@@ -32,21 +39,36 @@ export class BlobStorageService implements OnModuleInit {
   private ready = false;
 
   constructor(config: ConfigService<Env, true>) {
-    const connectionString = config.get('STORAGE_CONNECTION_STRING', { infer: true })?.trim();
-    const accountUrl = config.get('STORAGE_ACCOUNT_URL', { infer: true })?.trim();
-    const containerName = config.get('STORAGE_CONTAINER', { infer: true })?.trim() || 'vmms-uploads';
+    const connectionString = config
+      .get('STORAGE_CONNECTION_STRING', { infer: true })
+      ?.trim();
+    const accountUrl = config
+      .get('STORAGE_ACCOUNT_URL', { infer: true })
+      ?.trim();
+    const containerName =
+      config.get('STORAGE_CONTAINER', { infer: true })?.trim() ||
+      'vmms-uploads';
 
     // Load the Azure SDK only when blob storage is configured. Besides keeping
     // local unit tests independent of cloud SDK module formats, this lets
     // non-storage workflows run when no storage account is configured.
     let service: BlobServiceClient | null = null;
     if (connectionString) {
-      const { BlobServiceClient: AzureBlobServiceClient } = require('@azure/storage-blob') as typeof import('@azure/storage-blob');
+      const { BlobServiceClient: AzureBlobServiceClient } = loadFromProject(
+        '@azure/storage-blob',
+      ) as typeof import('@azure/storage-blob');
       service = AzureBlobServiceClient.fromConnectionString(connectionString);
     } else if (accountUrl) {
-      const { BlobServiceClient: AzureBlobServiceClient } = require('@azure/storage-blob') as typeof import('@azure/storage-blob');
-      const { DefaultAzureCredential } = require('@azure/identity') as typeof import('@azure/identity');
-      service = new AzureBlobServiceClient(accountUrl, new DefaultAzureCredential());
+      const { BlobServiceClient: AzureBlobServiceClient } = loadFromProject(
+        '@azure/storage-blob',
+      ) as typeof import('@azure/storage-blob');
+      const { DefaultAzureCredential } = loadFromProject(
+        '@azure/identity',
+      ) as typeof import('@azure/identity');
+      service = new AzureBlobServiceClient(
+        accountUrl,
+        new DefaultAzureCredential(),
+      );
     }
     this.container = service?.getContainerClient(containerName) ?? null;
   }
@@ -67,7 +89,8 @@ export class BlobStorageService implements OnModuleInit {
     try {
       return await container.getBlockBlobClient(key).downloadToBuffer();
     } catch (error) {
-      if (isNotFound(error)) throw new NotFoundException('Attachment not found.');
+      if (isNotFound(error))
+        throw new NotFoundException('Attachment not found.');
       throw error;
     }
   }
@@ -89,7 +112,9 @@ export class BlobStorageService implements OnModuleInit {
       await this.container!.createIfNotExists();
       this.ready = true;
     } catch {
-      this.logger.warn('Blob storage is not reachable; attachment requests will retry it.');
+      this.logger.warn(
+        'Blob storage is not reachable; attachment requests will retry it.',
+      );
       if (failRequest) throw new StorageUnavailableException();
     }
   }

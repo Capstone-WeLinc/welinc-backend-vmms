@@ -20,29 +20,45 @@ describe('maintenance work-order priority', () => {
     const { service, prisma } = makeService();
     const actor = { sub: 'user-1', roles: [{ system: 'VMMS', role }] };
 
-    await expect(service.updatePriority('schedule-1', MaintenancePriority.HIGH, actor))
-      .resolves.toEqual({ id: 'schedule-1', priority: MaintenancePriority.HIGH });
-    expect(prisma.maintenanceSchedule.update).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: 'schedule-1' },
-      data: { priority: MaintenancePriority.HIGH },
-    }));
+    await expect(
+      service.updatePriority('schedule-1', MaintenancePriority.HIGH, actor),
+    ).resolves.toEqual({
+      id: 'schedule-1',
+      priority: MaintenancePriority.HIGH,
+    });
+    expect(prisma.maintenanceSchedule.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'schedule-1' },
+        data: { priority: MaintenancePriority.HIGH },
+      }),
+    );
   });
 
-  it.each(['MECHANIC', 'CHIEF_MECHANIC'])('%s cannot change priority', async (role) => {
-    const { service, prisma } = makeService();
-    const actor = { sub: 'user-1', roles: [{ system: 'VMMS', role }] };
+  it.each(['MECHANIC', 'CHIEF_MECHANIC'])(
+    '%s cannot change priority',
+    async (role) => {
+      const { service, prisma } = makeService();
+      const actor = { sub: 'user-1', roles: [{ system: 'VMMS', role }] };
 
-    await expect(service.updatePriority('schedule-1', MaintenancePriority.LOW, actor))
-      .rejects.toBeInstanceOf(ForbiddenException);
-    expect(prisma.maintenanceSchedule.update).not.toHaveBeenCalled();
-  });
+      await expect(
+        service.updatePriority('schedule-1', MaintenancePriority.LOW, actor),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.maintenanceSchedule.update).not.toHaveBeenCalled();
+    },
+  );
 
   it('does not allow priority edits on completed or cancelled work orders', async () => {
-    for (const status of [MaintenanceStatus.COMPLETED, MaintenanceStatus.CANCELLED]) {
+    for (const status of [
+      MaintenanceStatus.COMPLETED,
+      MaintenanceStatus.CANCELLED,
+    ]) {
       const { service, prisma } = makeService(status);
-      await expect(service.updatePriority('schedule-1', MaintenancePriority.MEDIUM, {
-        sub: 'user-1', roles: [{ system: 'VMMS', role: 'OPERATIONS' }],
-      })).rejects.toBeInstanceOf(ForbiddenException);
+      await expect(
+        service.updatePriority('schedule-1', MaintenancePriority.MEDIUM, {
+          sub: 'user-1',
+          roles: [{ system: 'VMMS', role: 'OPERATIONS' }],
+        }),
+      ).rejects.toBeInstanceOf(ForbiddenException);
       expect(prisma.maintenanceSchedule.update).not.toHaveBeenCalled();
     }
   });

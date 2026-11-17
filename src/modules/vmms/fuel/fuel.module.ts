@@ -4,5 +4,9 @@ import { FuelController } from './fuel.controller';
 import { FuelService } from './fuel.service';
 import { FuelEscalationService } from './fuel-escalation.service';
 
-@Module({ imports: [SharedModule], controllers: [FuelController], providers: [FuelService, FuelEscalationService] })
+@Module({
+  imports: [SharedModule],
+  controllers: [FuelController],
+  providers: [FuelService, FuelEscalationService],
+})
 export class FuelModule {}

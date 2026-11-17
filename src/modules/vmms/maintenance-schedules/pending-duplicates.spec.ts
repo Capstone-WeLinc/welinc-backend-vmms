@@ -4,34 +4,82 @@ import { PrismaService } from '../../../shared/prisma.service';
 import { MaintenanceSchedulesService } from './maintenance-schedules.service';
 
 describe('Pending schedule uniqueness', () => {
-  const input = { vehicleId: ' ABC123 ', title: ' Engine Oil Change ', assignedMechanic: 'Mechanic', startDate: '2099-01-01', targetDueDate: '2099-02-01' };
-  const previous = { ...input, startDate: new Date('2099-01-01T00:00:00Z'), targetDueDate: new Date('2099-02-01T00:00:00Z'), id: '00000000-0000-4000-8000-000000000001', status: 'PENDING', createdAt: new Date(), deletedAt: null };
+  const input = {
+    vehicleId: ' ABC123 ',
+    title: ' Engine Oil Change ',
+    assignedMechanic: 'Mechanic',
+    startDate: '2099-01-01',
+    targetDueDate: '2099-02-01',
+  };
+  const previous = {
+    ...input,
+    startDate: new Date('2099-01-01T00:00:00Z'),
+    targetDueDate: new Date('2099-02-01T00:00:00Z'),
+    id: '00000000-0000-4000-8000-000000000001',
+    status: 'PENDING',
+    createdAt: new Date(),
+    deletedAt: null,
+  };
   let prisma: any;
   let service: MaintenanceSchedulesService;
-  const uniqueError = () => new Prisma.PrismaClientKnownRequestError('Unique constraint failed', { code: 'P2002', clientVersion: '7' });
+  const uniqueError = () =>
+    new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+      code: 'P2002',
+      clientVersion: '7',
+    });
   beforeEach(() => {
     prisma = {
       $queryRaw: jest.fn().mockResolvedValue([]),
-      checklistTemplate: { findMany: jest.fn().mockResolvedValue([{ id: 'template', type: 'Engine Oil Change', items: [{ id: 'item' }] }]) },
-      maintenanceSchedule: {
-        create: jest.fn().mockImplementation(async ({ data }) => ({ ...previous, ...data })),
-        findUniqueOrThrow: jest.fn().mockResolvedValue(previous),
-        update: jest.fn().mockImplementation(async ({ data }) => ({ ...previous, ...data })),
+      checklistTemplate: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'template',
+            type: 'Engine Oil Change',
+            items: [{ id: 'item' }],
+          },
+        ]),
       },
-      mechanic: { findMany: jest.fn().mockResolvedValue([{ userId: 'mechanic', name: 'Mechanic', temporaryRoles: [] }]) },
-      $transaction: jest.fn().mockImplementation(async (callback) => callback(prisma)),
+      maintenanceSchedule: {
+        create: jest
+          .fn()
+          .mockImplementation(async ({ data }) => ({ ...previous, ...data })),
+        findUniqueOrThrow: jest.fn().mockResolvedValue(previous),
+        update: jest
+          .fn()
+          .mockImplementation(async ({ data }) => ({ ...previous, ...data })),
+      },
+      mechanic: {
+        findMany: jest
+          .fn()
+          .mockResolvedValue([
+            { userId: 'mechanic', name: 'Mechanic', temporaryRoles: [] },
+          ]),
+      },
+      $transaction: jest
+        .fn()
+        .mockImplementation(async (callback) => callback(prisma)),
     };
     service = new MaintenanceSchedulesService(prisma as PrismaService);
-    jest.spyOn(service as any, 'syncVehicleStatus').mockResolvedValue(undefined);
+    jest
+      .spyOn(service as any, 'syncVehicleStatus')
+      .mockResolvedValue(undefined);
   });
 
-  it.each(['create', 'update'] as const)('blocks a duplicate %s before writing with the required warning', async (method) => {
-    prisma.$queryRaw.mockResolvedValue([{ id: 'existing' }]);
-    const result = method === 'create' ? service.create(input) : service.update(previous.id, input);
-    await expect(result).rejects.toThrow('A pending schedule of this type already exists for this truck');
-    expect(prisma.maintenanceSchedule.create).not.toHaveBeenCalled();
-    expect(prisma.maintenanceSchedule.update).not.toHaveBeenCalled();
-  });
+  it.each(['create', 'update'] as const)(
+    'blocks a duplicate %s before writing with the required warning',
+    async (method) => {
+      prisma.$queryRaw.mockResolvedValue([{ id: 'existing' }]);
+      const result =
+        method === 'create'
+          ? service.create(input)
+          : service.update(previous.id, input);
+      await expect(result).rejects.toThrow(
+        'A pending schedule of this type already exists for this truck',
+      );
+      expect(prisma.maintenanceSchedule.create).not.toHaveBeenCalled();
+      expect(prisma.maintenanceSchedule.update).not.toHaveBeenCalled();
+    },
+  );
 
   it('checks normalized keys, only active Pending rows, with bound parameters', async () => {
     await service.create(input);
@@ -45,31 +93,60 @@ describe('Pending schedule uniqueness', () => {
 
   it('allows editing the same Pending schedule by excluding its own ID', async () => {
     await service.update(previous.id, input);
-    expect(prisma.$queryRaw.mock.calls[0][0].values).toEqual([input.vehicleId, input.title, previous.id]);
+    expect(prisma.$queryRaw.mock.calls[0][0].values).toEqual([
+      input.vehicleId,
+      input.title,
+      previous.id,
+    ]);
     expect(prisma.maintenanceSchedule.update).toHaveBeenCalledTimes(1);
   });
 
   it('requires the audited cancellation endpoint instead of a general update', async () => {
     prisma.$queryRaw.mockResolvedValue([{ id: 'other' }]);
-    await expect(service.update(previous.id, { ...input, status: MaintenanceStatus.CANCELLED })).rejects.toThrow('Use the cancellation endpoint');
+    await expect(
+      service.update(previous.id, {
+        ...input,
+        status: MaintenanceStatus.CANCELLED,
+      }),
+    ).rejects.toThrow('Use the cancellation endpoint');
     expect(prisma.$queryRaw).not.toHaveBeenCalled();
     expect(prisma.maintenanceSchedule.update).not.toHaveBeenCalled();
   });
 
   it('blocks reactivation of cancelled work when a Pending schedule already exists', async () => {
-    prisma.maintenanceSchedule.findUniqueOrThrow.mockResolvedValue({ ...previous, status: 'CANCELLED' });
+    prisma.maintenanceSchedule.findUniqueOrThrow.mockResolvedValue({
+      ...previous,
+      status: 'CANCELLED',
+    });
     prisma.$queryRaw.mockResolvedValue([{ id: 'other' }]);
-    await expect(service.update(previous.id, { ...input, status: MaintenanceStatus.PENDING })).rejects.toBeInstanceOf(ConflictException);
+    await expect(
+      service.update(previous.id, {
+        ...input,
+        status: MaintenanceStatus.PENDING,
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
     expect(prisma.maintenanceSchedule.update).not.toHaveBeenCalled();
   });
 
-  it.each(['create', 'update'] as const)('translates a competing %s unique violation to HTTP 409', async (method) => {
-    prisma.$queryRaw.mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: 'winner' }]);
-    prisma.maintenanceSchedule[method].mockRejectedValue(uniqueError());
-    const result = method === 'create' ? service.create(input) : service.update(previous.id, input);
-    await expect(result).rejects.toMatchObject({ status: 409, message: 'A pending schedule of this type already exists for this truck' });
-    expect(prisma.$queryRaw).toHaveBeenCalledTimes(2);
-  });
+  it.each(['create', 'update'] as const)(
+    'translates a competing %s unique violation to HTTP 409',
+    async (method) => {
+      prisma.$queryRaw
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ id: 'winner' }]);
+      prisma.maintenanceSchedule[method].mockRejectedValue(uniqueError());
+      const result =
+        method === 'create'
+          ? service.create(input)
+          : service.update(previous.id, input);
+      await expect(result).rejects.toMatchObject({
+        status: 409,
+        message:
+          'A pending schedule of this type already exists for this truck',
+      });
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it('does not mislabel unrelated unique errors', async () => {
     const error = uniqueError();

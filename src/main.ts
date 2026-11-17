@@ -22,7 +22,10 @@ async function bootstrap() {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'no-referrer');
-    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    res.setHeader(
+      'Permissions-Policy',
+      'camera=(), microphone=(), geolocation=()',
+    );
     next();
   });
 
@@ -51,4 +54,4 @@ async function bootstrap() {
   });
   await app.listen(config.get('PORT', { infer: true }));
 }
-bootstrap();
+void bootstrap();

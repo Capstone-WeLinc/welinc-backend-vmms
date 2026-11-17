@@ -9,7 +9,9 @@ export class UpdateMaintenanceOdometerThresholdDto {
   thresholdKm!: number;
 
   @IsString()
-  @Matches(/\S/, { message: 'A reason for changing the odometer threshold is required.' })
+  @Matches(/\S/, {
+    message: 'A reason for changing the odometer threshold is required.',
+  })
   @MaxLength(2000)
   reason!: string;
 }

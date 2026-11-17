@@ -20,12 +20,19 @@ describe('work order start date enforcement', () => {
   } as MaintenanceSchedule;
 
   it('rejects START before the scheduled start date', () => {
-    expect(() => applyWorkOrderWorkflow(schedule, {}, 'START', mechanic))
-      .toThrow(BadRequestException);
+    expect(() =>
+      applyWorkOrderWorkflow(schedule, {}, 'START', mechanic),
+    ).toThrow(BadRequestException);
   });
 
   it('rejects START when the schedule has no start date', () => {
-    expect(() => applyWorkOrderWorkflow({ ...schedule, startDate: null }, {}, 'START', mechanic))
-      .toThrow(/no scheduled start date/i);
+    expect(() =>
+      applyWorkOrderWorkflow(
+        { ...schedule, startDate: null },
+        {},
+        'START',
+        mechanic,
+      ),
+    ).toThrow(/no scheduled start date/i);
   });
 });

@@ -1,4 +1,9 @@
-import { Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../../../shared/prisma.service.js';
 import { SystemType } from '@prisma/client';
 
@@ -32,19 +37,109 @@ export class VmmsConfigService {
     return vehicles;
   }
 
-  async listSystems() {
-    return Object.values(SystemType).map((value) => ({ id: value, name: value }));
+  listSystems() {
+    return Object.values(SystemType).map((value) => ({
+      id: value,
+      name: value,
+    }));
+  }
+
+  async listOutsourcedProviders() {
+    return this.prisma.outsourcedProvider.findMany({
+      orderBy: [{ isActive: 'desc' }, { name: 'asc' }],
+      select: { id: true, name: true, isActive: true },
+    });
+  }
+
+  async createOutsourcedProvider(rawName: string) {
+    const name = typeof rawName === 'string' ? rawName.trim() : '';
+    if (!name || name.length > 150) {
+      throw new BadRequestException(
+        'Provider name must contain 1 to 150 characters.',
+      );
+    }
+    const duplicate = await this.prisma.outsourcedProvider.findFirst({
+      where: { name: { equals: name, mode: 'insensitive' } },
+      select: { id: true },
+    });
+    if (duplicate)
+      throw new ConflictException('This provider is already registered.');
+    return this.prisma.outsourcedProvider.create({ data: { name } });
+  }
+
+  async updateOutsourcedProvider(
+    id: string,
+    input: { name?: string; isActive?: boolean },
+  ) {
+    const current = await this.prisma.outsourcedProvider.findUnique({
+      where: { id },
+    });
+    if (!current) throw new NotFoundException('Outsourced provider not found.');
+    if (
+      input.name !== undefined &&
+      (typeof input.name !== 'string' ||
+        !input.name.trim() ||
+        input.name.trim().length > 150)
+    ) {
+      throw new BadRequestException(
+        'Provider name must contain 1 to 150 characters.',
+      );
+    }
+    if (input.isActive !== undefined && typeof input.isActive !== 'boolean') {
+      throw new BadRequestException(
+        'Provider active status must be true or false.',
+      );
+    }
+
+    const name = input.name?.trim();
+    if (name && name.toLocaleLowerCase() !== current.name.toLocaleLowerCase()) {
+      const duplicate = await this.prisma.outsourcedProvider.findFirst({
+        where: { id: { not: id }, name: { equals: name, mode: 'insensitive' } },
+        select: { id: true },
+      });
+      if (duplicate)
+        throw new ConflictException('This provider is already registered.');
+    }
+    return this.prisma.outsourcedProvider.update({
+      where: { id },
+      data: {
+        ...(name ? { name } : {}),
+        ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
+      },
+      select: { id: true, name: true, isActive: true },
+    });
   }
 
   async listMechanics() {
     const rows = await this.prisma.mechanic.findMany({
-      where: { isActive: true, isOutsourced: false, userId: { not: null }, role: { in: ['MECHANIC', 'CHIEF_MECHANIC'] } },
+      where: {
+        isActive: true,
+        isOutsourced: false,
+        userId: { not: null },
+        role: { in: ['MECHANIC', 'CHIEF_MECHANIC'] },
+      },
       orderBy: { name: 'asc' },
-      select: { userId: true, name: true, email: true, role: true, temporaryRoles: true },
+      select: {
+        userId: true,
+        name: true,
+        email: true,
+        role: true,
+        temporaryRoles: true,
+      },
     });
-    return rows.filter((row) => row.userId && row.role && !row.temporaryRoles.includes(row.role)).map((row) => ({
-      id: row.userId!, userId: row.userId!, name: row.name, email: row.email,
-      role: row.role, roles: [{ role: row.role!, system: 'VMMS' }], temporaryRoles: row.temporaryRoles,
-    }));
+    return rows
+      .filter(
+        (row) =>
+          row.userId && row.role && !row.temporaryRoles.includes(row.role),
+      )
+      .map((row) => ({
+        id: row.userId!,
+        userId: row.userId!,
+        name: row.name,
+        email: row.email,
+        role: row.role,
+        roles: [{ role: row.role!, system: 'VMMS' }],
+        temporaryRoles: row.temporaryRoles,
+      }));
   }
 }

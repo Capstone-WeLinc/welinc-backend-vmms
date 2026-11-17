@@ -4,6 +4,10 @@ import type { Request } from 'express';
 import { UserRole } from '@prisma/client';
 import { ROLES_KEY, ROLE_SYSTEM_KEY } from '../decorators/roles.decorator';
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 @Injectable()
 export class RolesGuard implements CanActivate {
   constructor(private readonly reflector: Reflector) {}
@@ -33,9 +37,11 @@ export class RolesGuard implements CanActivate {
     // Infer system context if missing
     // A subsystem-owned controller must not accept another subsystem's role
     // because of token context, Origin/Referer, or client-supplied parameters.
-    let targetSystem = this.reflector.getAllAndOverride<string>(ROLE_SYSTEM_KEY, [
-      context.getHandler(), context.getClass(),
-    ]) ?? user.system;
+    let targetSystem =
+      this.reflector.getAllAndOverride<string>(ROLE_SYSTEM_KEY, [
+        context.getHandler(),
+        context.getClass(),
+      ]) ?? user.system;
     if (!targetSystem) {
       // 1. Check referer/origin headers
       const referer = request.headers.referer || '';
@@ -76,13 +82,22 @@ export class RolesGuard implements CanActivate {
       }
 
       // 3. Fallback to query parameter system
-      if (!targetSystem && request.query?.system) {
-        targetSystem = String(request.query.system).toUpperCase();
+      const querySystem = request.query?.system;
+      if (!targetSystem && typeof querySystem === 'string') {
+        targetSystem = querySystem.toUpperCase();
       }
 
       // 4. Fallback to body roleAssignments system
-      if (!targetSystem && (request.body as any)?.roleAssignments?.[0]?.system) {
-        targetSystem = String((request.body as any).roleAssignments[0].system).toUpperCase();
+      const body = request.body as unknown;
+      const roleAssignments = isRecord(body) ? body.roleAssignments : undefined;
+      const firstAssignment: unknown = Array.isArray(roleAssignments)
+        ? (roleAssignments as unknown[])[0]
+        : undefined;
+      const assignmentSystem = isRecord(firstAssignment)
+        ? firstAssignment.system
+        : undefined;
+      if (!targetSystem && typeof assignmentSystem === 'string') {
+        targetSystem = assignmentSystem.toUpperCase();
       }
 
       user.system = targetSystem;
@@ -97,4 +112,3 @@ export class RolesGuard implements CanActivate {
     );
   }
 }
-

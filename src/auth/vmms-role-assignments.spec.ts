@@ -16,7 +16,9 @@ describe('assertSingleVmmsRoleAssignment', () => {
   });
 
   it('rejects an empty assignment list', () => {
-    expect(() => assertSingleVmmsRoleAssignment([])).toThrow(BadRequestException);
+    expect(() => assertSingleVmmsRoleAssignment([])).toThrow(
+      BadRequestException,
+    );
   });
 
   it('rejects multiple roles', () => {
@@ -43,5 +45,4 @@ describe('assertSingleVmmsRoleAssignment', () => {
       ]),
     ).toThrow(BadRequestException);
   });
-
 });

@@ -9,7 +9,10 @@ import { LocationsModule } from './locations/locations.module';
 import { MaintenanceCostingModule } from './maintenance-costing/maintenance-costing.module';
 import { FuelModule } from './fuel/fuel.module';
 import { AuthDirectoryClient } from './directory/auth-directory.client';
-import { DirectoryPollJob, DirectorySync } from './directory/directory-sync.service';
+import {
+  DirectoryPollJob,
+  DirectorySync,
+} from './directory/directory-sync.service';
 import { MechanicsController } from './directory/mechanics.controller';
 import { FleetController } from './fleet/fleet.controller';
 import { AuditController } from './audit/audit.controller';
@@ -26,7 +29,17 @@ import { ReportsModule } from './reports/reports.module';
     FuelModule,
     ReportsModule,
   ],
-  controllers: [VmmsConfigController, MechanicsController, FleetController, AuditController],
-  providers: [VmmsConfigService, AuthDirectoryClient, DirectorySync, DirectoryPollJob],
+  controllers: [
+    VmmsConfigController,
+    MechanicsController,
+    FleetController,
+    AuditController,
+  ],
+  providers: [
+    VmmsConfigService,
+    AuthDirectoryClient,
+    DirectorySync,
+    DirectoryPollJob,
+  ],
 })
 export class VmmsModule {}

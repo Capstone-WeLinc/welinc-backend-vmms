@@ -11,6 +11,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  MaxLength,
   IsUUID,
   IsInt,
   Min,
@@ -94,6 +95,11 @@ export class CreateMaintenanceScheduleDto {
   @IsEnum(AccountType)
   @IsOptional()
   account_type?: AccountType;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(150)
+  outsourcedProvider?: string;
 
   @Type(() => Number)
   @IsNumber()

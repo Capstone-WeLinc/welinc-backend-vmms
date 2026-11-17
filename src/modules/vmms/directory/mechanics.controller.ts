@@ -13,5 +13,7 @@ export class MechanicsController {
 
   @Get()
   @Roles(UserRole.ADMIN, UserRole.OPERATIONS, UserRole.CHIEF_MECHANIC)
-  list() { return this.config.listMechanics(); }
+  list() {
+    return this.config.listMechanics();
+  }
 }

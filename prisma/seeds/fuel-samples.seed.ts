@@ -11,25 +11,44 @@ export async function seedFuelSamples(
   if (process.env['NODE_ENV'] === 'production' || (!options.fromStandardSeed && process.env['FUEL_DEMO_SEED'] !== 'true')) {
     throw new Error('Fuel demo data is development-only. Set FUEL_DEMO_SEED=true and do not run against production.');
   }
-  const operator = await prisma.vmmsPerson.findFirst({ where: { roles: { has: 'OPERATIONS' }, isActive: true, deleted: false } });
-  if (!operator) throw new Error('Fuel sample seed requires a directory-synced VMMS Operations person.');
-
-  const stationNames = ['Petron', 'Shell', 'Sea Oil'];
-  const stations = await Promise.all(stationNames.map((name) => prisma.fuelStation.upsert({
-    where: { name }, update: { isActive: true }, create: { name },
-  })));
   const vehicles = await prisma.vehicle.findMany({
     where: { plateNumber: { in: ['NDG 5821', 'CAK 9043', 'WOB 2947'] }, deletedAt: null, isActive: true },
     orderBy: { plateNumber: 'asc' },
   });
-  if (vehicles.length !== 3) throw new Error('Fuel sample seed requires the three standard sample vehicles. Run the standard VMMS seed first.');
+  if (vehicles.length !== 3) {
+    if (options.fromStandardSeed) {
+      console.log('Skipping fuel demo data: the standard sample vehicles are not all active. Existing fleet data was preserved.');
+      return;
+    }
+    throw new Error('Fuel sample seed requires the three standard sample vehicles. Run the standard VMMS seed first.');
+  }
+
+  const operator = await prisma.vmmsPerson.findFirst({ where: { roles: { has: 'OPERATIONS' }, isActive: true, deleted: false } });
+  if (!operator) {
+    if (options.fromStandardSeed) {
+      console.log('Skipping fuel demo data: no directory-synced VMMS Operations person is available.');
+      return;
+    }
+    throw new Error('Fuel sample seed requires a directory-synced VMMS Operations person.');
+  }
 
   const roles = ['ADMIN', 'OPERATIONS', 'CHIEF_MECHANIC'];
   const recipients = await prisma.vmmsPerson.findMany({
     where: { isActive: true, deleted: false, roles: { hasSome: roles } },
     select: { authUserId: true, roles: true, temporaryRoles: true },
   });
-  if (!recipients.some((user) => user.authUserId === operator.authUserId && user.roles.some((role) => role === 'OPERATIONS' && !user.temporaryRoles.includes(role)))) throw new Error('The Operations sample user must have an active permanent VMMS Operations role.');
+  if (!recipients.some((user) => user.authUserId === operator.authUserId && user.roles.some((role) => role === 'OPERATIONS' && !user.temporaryRoles.includes(role)))) {
+    if (options.fromStandardSeed) {
+      console.log('Skipping fuel demo data: the available Operations person has no active permanent VMMS Operations role.');
+      return;
+    }
+    throw new Error('The Operations sample user must have an active permanent VMMS Operations role.');
+  }
+
+  const stationNames = ['Petron', 'Shell', 'Sea Oil'];
+  const stations = await Promise.all(stationNames.map((name) => prisma.fuelStation.upsert({
+    where: { name }, update: { isActive: true }, create: { name },
+  })));
 
   const dateParts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
   const values = Object.fromEntries(dateParts.map((part) => [part.type, part.value]));

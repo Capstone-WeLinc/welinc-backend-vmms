@@ -8,7 +8,14 @@ import { MaintenanceOverdueService } from './maintenance-overdue.service';
 
 @Module({
   imports: [SharedModule],
-  controllers: [MaintenanceNotificationsController, MaintenanceSchedulesController],
-  providers: [MaintenanceSchedulesService, MaintenanceNotificationsService, MaintenanceOverdueService],
+  controllers: [
+    MaintenanceNotificationsController,
+    MaintenanceSchedulesController,
+  ],
+  providers: [
+    MaintenanceSchedulesService,
+    MaintenanceNotificationsService,
+    MaintenanceOverdueService,
+  ],
 })
 export class MaintenanceSchedulesModule {}

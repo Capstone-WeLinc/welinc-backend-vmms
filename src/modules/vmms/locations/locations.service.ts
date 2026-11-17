@@ -11,7 +11,11 @@ export class LocationsService {
       where: { deletedAt: null },
       orderBy: { name: 'asc' },
     });
-    return garages.map((g) => ({ id: g.id, name: g.name, isActive: g.isActive }));
+    return garages.map((g) => ({
+      id: g.id,
+      name: g.name,
+      isActive: g.isActive,
+    }));
   }
 
   async createGarage(dto: { name: string }) {
@@ -42,8 +46,8 @@ export class LocationsService {
     });
   }
 
-  async getSystems() {
+  getSystems() {
     const systems = Object.values(SystemType) as string[];
-    return systems.map((s, idx) => ({ id: s, name: s }));
+    return systems.map((s) => ({ id: s, name: s }));
   }
 }
