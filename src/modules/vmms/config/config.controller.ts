@@ -6,7 +6,7 @@ import { Roles } from '../../../auth/decorators/roles.decorator.js';
 import { VmmsConfigService } from './config.service.js';
 
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Controller('vmms/config')
+@Controller('config')
 export class VmmsConfigController {
   constructor(private readonly configService: VmmsConfigService) {}
 
@@ -28,9 +28,4 @@ export class VmmsConfigController {
     return this.configService.listSystems();
   }
 
-  @Roles(UserRole.ADMIN, UserRole.OPERATIONS, UserRole.CHIEF_MECHANIC)
-  @Get('users')
-  listUsers() {
-    return this.configService.listUsers();
-  }
 }

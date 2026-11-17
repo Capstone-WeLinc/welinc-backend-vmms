@@ -2,87 +2,45 @@ import 'dotenv/config';
 import { PrismaClient } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';
-
 import { seedGarages } from './seeds/garages.seed';
 import { seedUsers } from './seeds/users.seed';
 import { seedVehicles } from './seeds/vehicles.seed';
 import { seedWorkOrders } from './seeds/work-orders.seed';
 import { seedVmms } from './seeds/vmms.seed';
+import { seedFuelSamples } from './seeds/fuel-samples.seed';
 
-const pool = new pg.Pool({
-  connectionString: process.env['DATABASE_URL'],
-});
-const adapter = new PrismaPg(pool);
-const prisma = new PrismaClient({ adapter });
-
-async function cleanDatabase(prisma: PrismaClient) {
-  console.log('Cleaning database...');
-  await prisma.fuelAuditLog.deleteMany({});
-  await prisma.fuelAnomaly.deleteMany({});
-  await prisma.fuelFillUp.deleteMany({});
-  await prisma.auditLog.deleteMany({});
-  await prisma.shopChangeLog.deleteMany({});
-  await prisma.repairPart.deleteMany({});
-  await prisma.repairIssue.deleteMany({});
-  await prisma.workOrder.deleteMany({});
-  
-  // Clean self-referencing maintenance schedules
-  await prisma.maintenanceSchedule.updateMany({
-    data: { previousScheduleId: null },
-  });
-  await prisma.maintenanceSchedule.deleteMany({});
-  
-  await prisma.checklistItem.deleteMany({});
-  await prisma.checklistTemplate.deleteMany({});
-  
-  await prisma.mechanic.deleteMany({});
-  await prisma.vehicle.deleteMany({});
-  await prisma.garage.deleteMany({});
-  
-  await prisma.passwordResetToken.deleteMany({});
-  await prisma.refreshToken.deleteMany({});
-  await prisma.userRoleAssignment.deleteMany({});
-  await prisma.user.deleteMany({});
-  console.log('Database cleaned successfully!\n');
-}
+const pool = new pg.Pool({ connectionString: process.env['DATABASE_URL'] });
+const prisma = new PrismaClient({ adapter: new PrismaPg(pool) });
 
 async function main() {
-  console.log('Seeding database in modular mode...\n');
+  if (process.env['NODE_ENV'] === 'production' && process.env['SEED_ALLOW'] !== 'staging') {
+    throw new Error('Production seeding is disabled. Set SEED_ALLOW=staging only for an approved staging seed run.');
+  }
+  const [vehicles, schedules, workOrders, garages] = await Promise.all([
+    prisma.vehicle.count(), prisma.maintenanceSchedule.count(), prisma.workOrder.count(), prisma.garage.count(),
+  ]);
+  if (vehicles || schedules || workOrders || garages) {
+    console.log('VMMS already has core data; preserving existing rows.');
+  } else {
+    await seedGarages(prisma);
+    await seedUsers(prisma); // copies suite people; creates no local accounts
+    await seedVehicles(prisma);
+    await seedWorkOrders(prisma);
+    await seedVmms(prisma);
+    console.log('VMMS sample fleet seeded from suite people.json.');
+  }
 
-  // 0. Clean database first
-  await cleanDatabase(prisma);
-
-  // 1. Garages (Independent)
-  await seedGarages(prisma);
-
-  // 2. Users & Mechanics (Independent)
-  await seedUsers(prisma);
-
-  // 3. Vehicles (Independent)
-  await seedVehicles(prisma);
-
-  // 4. VMMS work orders (Depends on garages, vehicles, mechanics, users)
-  await seedWorkOrders(prisma);
-
-  // 5. VMMS schedules (Depends on garages, vehicles, mechanics)
-  await seedVmms(prisma);
-
-  console.log('Database seeded successfully!');
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-  console.log('Login credentials:');
-  console.log('  VMMS Admin → email: vmms.admin@welinc.com password: admin1234');
-  console.log('  Operations → email: ops.user@welinc.com   password: ops1234 (VMMS)');
-  console.log('  VMMS Chief Mechanic → email: vmms.chiefmech@welinc.com  password: chiefmech1234 (VMMS)');
-  console.log('  VMMS Chief Mechanic → email: vmms.chiefmech2@welinc.com password: chiefmech1234 (VMMS)');
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  if (process.env['NODE_ENV'] === 'production') {
+    console.log('Fuel demo data skipped in production.');
+    return;
+  }
+  await seedFuelSamples(prisma, { fromStandardSeed: true });
 }
 
-main()
-  .catch((e) => {
-    console.error('Seed failed:', e);
-    process.exit(1);
-  })
-  .finally(async () => {
-    await prisma.$disconnect();
-    await pool.end();
-  });
+main().catch((error) => {
+  console.error('Seed failed:', error);
+  process.exitCode = 1;
+}).finally(async () => {
+  await prisma.$disconnect();
+  await pool.end();
+});

@@ -10,6 +10,9 @@ export class PrismaService extends PrismaClient implements OnApplicationShutdown
   constructor() {
     const pool = new pg.Pool({
       connectionString: process.env['DATABASE_URL'],
+      max: Number.isSafeInteger(Number(process.env['DB_POOL_MAX'])) && Number(process.env['DB_POOL_MAX']) > 0
+        ? Number(process.env['DB_POOL_MAX'])
+        : 2,
     });
     const adapter = new PrismaPg(pool);
 

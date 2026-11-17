@@ -11,7 +11,7 @@ describe('Schedule checklist assignment', () => {
     db = {
       $queryRaw: jest.fn().mockResolvedValue([]),
       checklistTemplate: { findMany: jest.fn().mockResolvedValue([template]) },
-      user: { findMany: jest.fn().mockResolvedValue([{ id: 'mechanic', name: 'Mechanic' }]) },
+      mechanic: { findMany: jest.fn().mockResolvedValue([{ userId: 'mechanic', name: 'Mechanic', temporaryRoles: [] }]) },
       maintenanceSchedule: {
         findUniqueOrThrow: jest.fn().mockImplementation(async () => previous),
         create: jest.fn().mockImplementation(async ({ data }) => ({ ...previous, ...data })),

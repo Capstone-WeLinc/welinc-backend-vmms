@@ -1,8 +1,8 @@
 import { MaintenanceSchedulesService } from './maintenance-schedules.service';
 
 describe('Admin-approved schedule cancellation requests', () => {
-  const operations = { sub: 'ops', roles: [{ system: 'VMMS', role: 'OPERATIONS' }] };
-  const admin = { sub: 'admin', roles: [{ system: 'VMMS', role: 'ADMIN' }] };
+  const operations = { sub: 'ops', name: 'Operations User', email: 'ops@example.invalid', roles: [{ system: 'VMMS', role: 'OPERATIONS' }] };
+  const admin = { sub: 'admin', name: 'Admin User', email: 'admin@example.invalid', roles: [{ system: 'VMMS', role: 'ADMIN' }] };
   let prisma: any;
   let service: MaintenanceSchedulesService;
 
@@ -62,10 +62,9 @@ describe('Admin-approved schedule cancellation requests', () => {
     await expect(service.cancel('schedule', 'Duplicate', operations)).rejects.toMatchObject({ status: 404 });
   });
 
-  it('accepts requests only from an active Operations account', async () => {
-    await expect(service.cancel('schedule', 'Duplicate', admin)).rejects.toMatchObject({ status: 403 });
-    prisma.user.findFirst.mockResolvedValue(null);
-    await expect(service.cancel('schedule', 'Duplicate', operations)).rejects.toMatchObject({ status: 403 });
+  it('rejects request creation from non-Operations roles', async () => {
+    const mechanic = { sub: 'mechanic', roles: [{ system: 'VMMS', role: 'MECHANIC' }] };
+    await expect(service.cancel('schedule', 'Duplicate', mechanic)).rejects.toMatchObject({ status: 403 });
     expect(prisma.maintenanceScheduleCancellation.create).not.toHaveBeenCalled();
   });
 

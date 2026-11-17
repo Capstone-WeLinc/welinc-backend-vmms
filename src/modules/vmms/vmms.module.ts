@@ -2,18 +2,21 @@ import { Module } from '@nestjs/common';
 import SharedModule from '../../shared/shared.module.js';
 import { VmmsConfigController } from './config/config.controller.js';
 import { VmmsConfigService } from './config/config.service.js';
-import UsersModule from './users/users.module';
 import { ChecklistsModule } from './checklists/checklists.module';
 import { MaintenanceSchedulesModule } from './maintenance-schedules/maintenance-schedules.module';
 import { VehiclesModule } from './vehicles/vehicles.module';
 import { LocationsModule } from './locations/locations.module';
 import { MaintenanceCostingModule } from './maintenance-costing/maintenance-costing.module';
 import { FuelModule } from './fuel/fuel.module';
+import { AuthDirectoryClient } from './directory/auth-directory.client';
+import { DirectoryPollJob, DirectorySync } from './directory/directory-sync.service';
+import { MechanicsController } from './directory/mechanics.controller';
+import { FleetController } from './fleet/fleet.controller';
+import { AuditController } from './audit/audit.controller';
 
 @Module({
   imports: [
     SharedModule,
-    UsersModule,
     MaintenanceSchedulesModule,
     ChecklistsModule,
     VehiclesModule,
@@ -21,7 +24,7 @@ import { FuelModule } from './fuel/fuel.module';
     MaintenanceCostingModule,
     FuelModule,
   ],
-  controllers: [VmmsConfigController],
-  providers: [VmmsConfigService],
+  controllers: [VmmsConfigController, MechanicsController, FleetController, AuditController],
+  providers: [VmmsConfigService, AuthDirectoryClient, DirectorySync, DirectoryPollJob],
 })
 export class VmmsModule {}

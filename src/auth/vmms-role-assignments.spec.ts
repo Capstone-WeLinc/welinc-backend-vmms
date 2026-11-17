@@ -1,10 +1,6 @@
 import 'reflect-metadata';
 import { BadRequestException } from '@nestjs/common';
-import { plainToInstance } from 'class-transformer';
-import { validate } from 'class-validator';
 import { SystemType, UserRole } from '@prisma/client';
-import { CreateUserDto } from './dto/create-user.dto';
-import { UpdateUserDto } from './dto/update-user.dto';
 import { assertSingleVmmsRoleAssignment } from './vmms-role-assignments';
 
 describe('assertSingleVmmsRoleAssignment', () => {
@@ -48,35 +44,4 @@ describe('assertSingleVmmsRoleAssignment', () => {
     ).toThrow(BadRequestException);
   });
 
-  it('rejects multiple roles in the account creation DTO', async () => {
-    const dto = plainToInstance(CreateUserDto, {
-      name: 'Morgan Cruz',
-      email: 'morgan@example.com',
-      roleAssignments: [
-        { role: UserRole.ADMIN, system: SystemType.VMMS },
-        { role: UserRole.OPERATIONS, system: SystemType.VMMS },
-      ],
-    });
-    const errors = await validate(dto);
-    expect(
-      errors.find((error) => error.property === 'roleAssignments')?.constraints,
-    ).toMatchObject({
-      arrayMaxSize: 'A user account must have exactly one role.',
-    });
-  });
-
-  it('rejects multiple roles in the account update DTO', async () => {
-    const dto = plainToInstance(UpdateUserDto, {
-      roleAssignments: [
-        { role: UserRole.ADMIN, system: SystemType.VMMS },
-        { role: UserRole.OPERATIONS, system: SystemType.VMMS },
-      ],
-    });
-    const errors = await validate(dto);
-    expect(
-      errors.find((error) => error.property === 'roleAssignments')?.constraints,
-    ).toMatchObject({
-      arrayMaxSize: 'A user account must have exactly one role.',
-    });
-  });
 });

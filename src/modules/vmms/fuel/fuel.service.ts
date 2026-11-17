@@ -1,9 +1,9 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException, PayloadTooLargeException } from '@nestjs/common';
-import { createReadStream } from 'node:fs';
-import { mkdir, unlink, writeFile } from 'node:fs/promises';
-import { extname, join, resolve } from 'node:path';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Optional, PayloadTooLargeException } from '@nestjs/common';
+import { Readable } from 'node:stream';
+import { extname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../../../shared/prisma.service';
+import { BlobStorageService, StorageUnavailableException } from '../../../shared/blob-storage.service';
 import type { FuelFillUpDto } from './fuel.dto';
 import { computeFuelEfficiency, isFuelEfficiencyAnomaly } from './fuel-math';
 import { MAX_FUEL_ANOMALY_ATTACHMENT_BYTES } from './fuel.constants';
@@ -19,7 +19,12 @@ const currentFuelDate = () => {
 
 @Injectable()
 export class FuelService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, @Optional() private readonly storage?: BlobStorageService) {}
+
+  private fileStorage(): BlobStorageService {
+    if (!this.storage) throw new StorageUnavailableException();
+    return this.storage;
+  }
 
   private has(actor: FuelActor, ...roles: string[]) { return actor.roles?.some((r) => r.system === 'VMMS' && roles.includes(r.role)) ?? false; }
   private require(actor: FuelActor, ...roles: string[]) { if (!this.has(actor, ...roles)) throw new ForbiddenException('You do not have access to this fuel action.'); }
@@ -101,8 +106,9 @@ export class FuelService {
           const average = rollingEfficiencies.length ? rollingEfficiencies.reduce((a, b) => a + b, 0) / rollingEfficiencies.length : null;
           if (average != null && isFuelEfficiencyAnomaly(efficiency, average, deviation)) {
             await tx.fuelAnomaly.create({ data: { fillUpId: created.id, vehicleId: vehicle.id, efficiency, rollingAverage: average } });
-            const recipients = await tx.user.findMany({ where: { isActive: true, deletedAt: null, roles: { some: { system: 'VMMS', role: { in: ['ADMIN', 'OPERATIONS'] } } } }, select: { id: true } });
-            if (recipients.length) await tx.notification.createMany({ data: recipients.map((user) => ({ userId: user.id, title: 'Fuel efficiency anomaly', message: `${vehicle.plateNumber} recorded ${efficiency.toFixed(1)} km/L versus its ${average.toFixed(1)} km/L rolling average.`, type: 'warning' })) });
+            const recipients = await tx.vmmsPerson.findMany({ where: { isActive: true, deleted: false, erased: false, roles: { hasSome: ['ADMIN', 'OPERATIONS'] } }, select: { authUserId: true, roles: true, temporaryRoles: true } });
+            const eligible = recipients.filter((person) => person.roles.some((role) => ['ADMIN', 'OPERATIONS'].includes(role) && !person.temporaryRoles.includes(role)));
+            if (eligible.length) await tx.notification.createMany({ data: eligible.map((person) => ({ userId: person.authUserId, title: 'Fuel efficiency anomaly', message: `${vehicle.plateNumber} recorded ${efficiency.toFixed(1)} km/L versus its ${average.toFixed(1)} km/L rolling average.`, type: 'warning' })) });
           }
         }
       }
@@ -189,10 +195,9 @@ export class FuelService {
     const extension = extname(file.originalname).toLowerCase();
     const allowed: Record<string, string> = { '.pdf': 'application/pdf', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png' };
     if (!allowed[extension] || allowed[extension] !== file.mimetype) throw new BadRequestException('Only PDF, JPG, and PNG files are allowed.');
-    const attachmentId = randomUUID(); const storageName = `${attachmentId}${extension}`;
-    const directory = resolve('private-uploads', 'fuel-anomalies', id);
-    await mkdir(directory, { recursive: true });
-    await writeFile(join(directory, storageName), file.buffer, { flag: 'wx', mode: 0o600 });
+    const attachmentId = randomUUID(); const storageName = `fuel-anomalies/${id}/${attachmentId}${extension}`;
+    const fileStorage = this.fileStorage();
+    await fileStorage.put(storageName, file.buffer, file.mimetype);
     try {
       const saved = await this.prisma.$transaction(async (tx) => {
         const attachment = await tx.fuelAnomalyAttachment.create({ data: { id: attachmentId, anomalyId: id, name: file.originalname.replace(/[\\/\r\n]/g, '_').slice(0, 255), storageName, contentType: file.mimetype, uploadedById: actor.sub } });
@@ -201,7 +206,7 @@ export class FuelService {
       });
       return saved;
     } catch (error) {
-      await unlink(join(directory, storageName)).catch(() => undefined);
+      await fileStorage.delete(storageName).catch(() => undefined);
       throw error;
     }
   }
@@ -211,8 +216,8 @@ export class FuelService {
     const attachment = await this.prisma.fuelAnomalyAttachment.findFirst({ where: { id: attachmentId, anomalyId }, include: { anomaly: true } });
     if (!attachment) throw new NotFoundException('Fuel anomaly attachment not found.');
     const extension = extname(attachment.storageName).toLowerCase();
-    if (attachment.storageName !== `${attachment.id}${extension}` || !['.pdf', '.jpg', '.jpeg', '.png'].includes(extension)) throw new NotFoundException('Fuel anomaly attachment not found.');
-    return { name: attachment.name, contentType: attachment.contentType, stream: createReadStream(join(resolve('private-uploads', 'fuel-anomalies', anomalyId), attachment.storageName)) };
+    if (attachment.storageName !== `fuel-anomalies/${anomalyId}/${attachment.id}${extension}` || !['.pdf', '.jpg', '.jpeg', '.png'].includes(extension)) throw new NotFoundException('Fuel anomaly attachment not found.');
+    return { name: attachment.name, contentType: attachment.contentType, stream: Readable.from([await this.fileStorage().get(attachment.storageName)]) };
   }
 
   async report(from?: string, to?: string, actor?: FuelActor) {

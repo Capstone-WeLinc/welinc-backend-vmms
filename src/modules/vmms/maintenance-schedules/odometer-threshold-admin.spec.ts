@@ -56,12 +56,8 @@ describe('Admin odometer-threshold adjustment', () => {
     ] });
   });
 
-  it('rejects Operations and inactive Admin accounts', async () => {
-    await expect(service.updateOdometerThreshold('schedule-1', 20000, 'Adjustment', operations))
-      .rejects.toMatchObject({ status: 403 });
-    prisma.user.findFirst.mockResolvedValue(null);
-    await expect(service.updateOdometerThreshold('schedule-1', 20000, 'Adjustment', admin))
-      .rejects.toMatchObject({ status: 403 });
+  it('rejects Operations', async () => {
+    await expect(service.updateOdometerThreshold('schedule-1', 20000, 'Adjustment', operations)).rejects.toMatchObject({ status: 403 });
     expect(prisma.maintenanceSchedule.updateMany).not.toHaveBeenCalled();
   });
 

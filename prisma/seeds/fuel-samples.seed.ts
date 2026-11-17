@@ -4,12 +4,15 @@ const DEMO_DRIVER = 'Sample Driver (Demo Data)';
 const DEMO_NOTIFICATION_PREFIX = '[FUEL_DEMO]';
 
 /** Creates repeatable demo records for the outline's fuel screens and workflows. */
-export async function seedFuelSamples(prisma: PrismaClient) {
-  if (process.env['NODE_ENV'] === 'production' || process.env['FUEL_DEMO_SEED'] !== 'true') {
+export async function seedFuelSamples(
+  prisma: PrismaClient,
+  options: { fromStandardSeed?: boolean } = {},
+) {
+  if (process.env['NODE_ENV'] === 'production' || (!options.fromStandardSeed && process.env['FUEL_DEMO_SEED'] !== 'true')) {
     throw new Error('Fuel demo data is development-only. Set FUEL_DEMO_SEED=true and do not run against production.');
   }
-  const operator = await prisma.user.findUnique({ where: { email: 'ops.user@welinc.com' } });
-  if (!operator) throw new Error('Fuel sample seed requires ops.user@welinc.com. Run the standard VMMS seed first.');
+  const operator = await prisma.vmmsPerson.findFirst({ where: { roles: { has: 'OPERATIONS' }, isActive: true, deleted: false } });
+  if (!operator) throw new Error('Fuel sample seed requires a directory-synced VMMS Operations person.');
 
   const stationNames = ['Petron', 'Shell', 'Sea Oil'];
   const stations = await Promise.all(stationNames.map((name) => prisma.fuelStation.upsert({
@@ -22,11 +25,11 @@ export async function seedFuelSamples(prisma: PrismaClient) {
   if (vehicles.length !== 3) throw new Error('Fuel sample seed requires the three standard sample vehicles. Run the standard VMMS seed first.');
 
   const roles = ['ADMIN', 'OPERATIONS', 'CHIEF_MECHANIC'];
-  const recipients = await prisma.user.findMany({
-    where: { isActive: true, deletedAt: null, roles: { some: { system: 'VMMS', role: { in: roles as any } } } },
-    select: { id: true },
+  const recipients = await prisma.vmmsPerson.findMany({
+    where: { isActive: true, deleted: false, roles: { hasSome: roles } },
+    select: { authUserId: true, roles: true, temporaryRoles: true },
   });
-  if (!recipients.some((user) => user.id === operator.id)) throw new Error('The Operations sample user must have an active VMMS Operations role.');
+  if (!recipients.some((user) => user.authUserId === operator.authUserId && user.roles.some((role) => role === 'OPERATIONS' && !user.temporaryRoles.includes(role)))) throw new Error('The Operations sample user must have an active permanent VMMS Operations role.');
 
   const dateParts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
   const values = Object.fromEntries(dateParts.map((part) => [part.type, part.value]));
@@ -68,7 +71,7 @@ export async function seedFuelSamples(prisma: PrismaClient) {
           vehicleId: vehicle.id,
           stationId: stations[(vehicleIndex + cycleIndex) % stations.length].id,
           filledBy: DEMO_DRIVER,
-          enteredById: operator.id,
+          enteredById: operator.authUserId,
           entryDate: date,
           createdAt: date,
           liters,
@@ -88,7 +91,7 @@ export async function seedFuelSamples(prisma: PrismaClient) {
         vehicleId: vehicle.id,
         stationId: stations[vehicleIndex % stations.length].id,
         filledBy: DEMO_DRIVER,
-        enteredById: operator.id,
+        enteredById: operator.authUserId,
         entryDate: partialDate,
         createdAt: partialDate,
         liters: 35 + vehicleIndex * 5,
@@ -96,14 +99,14 @@ export async function seedFuelSamples(prisma: PrismaClient) {
         totalCost: (35 + vehicleIndex * 5) * (63 + vehicleIndex),
         odometer: previousOdometer,
         isFullTank: false,
-        ...(vehicleIndex === 2 ? { isVoided: true, voidReason: 'Demo record to show void handling.', voidedById: operator.id, voidedAt: new Date() } : {}),
+        ...(vehicleIndex === 2 ? { isVoided: true, voidReason: 'Demo record to show void handling.', voidedById: operator.authUserId, voidedAt: new Date() } : {}),
       } });
       seeded.push({ id: partial.id, vehicleId: vehicle.id, date: partialDate, odometer: previousOdometer, liters: 35 + vehicleIndex * 5, stationId: partial.stationId, isFullTank: false, anomalyCandidate: false, isVoided: vehicleIndex === 2 });
     }
 
     for (const row of seeded) {
-      await tx.fuelAuditLog.create({ data: { fillUpId: row.id, actorId: operator.id, actorEmail: operator.email, action: 'CREATED', details: { demoSeed: true } } });
-      if (row.isVoided) await tx.fuelAuditLog.create({ data: { fillUpId: row.id, actorId: operator.id, actorEmail: operator.email, action: 'VOIDED', reason: 'Demo record to show void handling.' } });
+      await tx.fuelAuditLog.create({ data: { fillUpId: row.id, actorId: operator.authUserId, actorEmail: operator.email, action: 'CREATED', details: { demoSeed: true } } });
+      if (row.isVoided) await tx.fuelAuditLog.create({ data: { fillUpId: row.id, actorId: operator.authUserId, actorEmail: operator.email, action: 'VOIDED', reason: 'Demo record to show void handling.' } });
     }
 
     const anomalyRow = seeded.find((row) => row.anomalyCandidate);
@@ -129,7 +132,7 @@ export async function seedFuelSamples(prisma: PrismaClient) {
       anomalyId = anomaly.id;
       for (const recipient of recipients) {
         await tx.notification.create({ data: {
-          userId: recipient.id,
+          userId: recipient.authUserId,
           title: 'Fuel efficiency anomaly',
           message: `${DEMO_NOTIFICATION_PREFIX} NDG 5821 recorded ${efficiency.toFixed(1)} km/L versus its ${rollingAverage.toFixed(1)} km/L rolling average.`,
           type: 'warning',

@@ -1,11 +1,10 @@
 import { INestApplication } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
 import { SystemType, UserRole } from '@prisma/client';
 import request from 'supertest';
-import { JwtStrategy } from '../../../auth/strategies/jwt.strategy';
-import { PrismaService } from '../../../shared/prisma.service';
+import { JwtAuthGuard } from '../../../auth/guards/jwt-auth.guard';
+import { UnauthorizedException } from '@nestjs/common';
 import { MaintenanceSchedulesController } from './maintenance-schedules.controller';
 import { MaintenanceSchedulesService } from './maintenance-schedules.service';
 
@@ -16,33 +15,25 @@ describe('scheduling HTTP permissions', () => {
   let app: INestApplication;
   const secret = 'schedule-permissions-test-only';
   const jwt = new JwtService({ secret });
-  const prisma = { user: { findFirst: jest.fn() } };
   const service = { create: jest.fn(), update: jest.fn(), cancel: jest.fn(), reviewCancellationRequest: jest.fn(), reviewMaintenanceLogUnlock: jest.fn(), updateOdometerThreshold: jest.fn(), remove: jest.fn(), cancelMaintenanceLog: jest.fn(), voidMaintenanceLog: jest.fn(), unlockMaintenanceLog: jest.fn(), updateMaintenanceLog: jest.fn(), findAll: jest.fn(), updateProgress: jest.fn() };
   const writes: ['post' | 'put', string, 'create' | 'update' | 'cancel'][] = [
     ['post', '/maintenance-schedules', 'create'],
     ['put', '/maintenance-schedules/schedule-1', 'update'],
     ['post', '/maintenance-schedules/00000000-0000-4000-8000-000000000001/cancel', 'cancel'],
   ];
-  const setUser = (roles: Role[]) => prisma.user.findFirst.mockResolvedValue({
-    id: 'user-1', email: 'test@example.invalid', isActive: true, lockedAt: null, roles,
-  });
   const token = (roles: Role[], system: SystemType = SystemType.VMMS) => jwt.sign({ sub: 'user-1', roles, system });
   beforeAll(async () => {
     const module = await Test.createTestingModule({
       controllers: [MaintenanceSchedulesController],
-      providers: [
-        JwtStrategy,
-        { provide: ConfigService, useValue: { getOrThrow: () => secret } },
-        { provide: PrismaService, useValue: prisma },
-        { provide: MaintenanceSchedulesService, useValue: service },
+      providers: [        { provide: MaintenanceSchedulesService, useValue: service },
       ],
-    }).compile();
+    }).overrideGuard(JwtAuthGuard).useValue({ canActivate: (ctx: any) => { const auth = ctx.switchToHttp().getRequest().headers.authorization ?? ''; if (!auth.startsWith('Bearer ')) throw new UnauthorizedException(); try { ctx.switchToHttp().getRequest().user = jwt.verify(auth.slice(7)); return true; } catch { throw new UnauthorizedException(); } } }).compile();
     app = module.createNestApplication();
     await app.init();
   });
   beforeEach(() => {
     jest.clearAllMocks();
-    setUser([vmms(UserRole.OPERATIONS)]);
+
     for (const method of Object.values(service)) method.mockResolvedValue({ ok: true });
   });
   afterAll(async () => { await app?.close(); });
@@ -66,7 +57,7 @@ describe('scheduling HTTP permissions', () => {
       .set('Authorization', `Bearer ${token([vmms(UserRole.OPERATIONS)])}`).send(body).expect(403);
     expect(service.reviewCancellationRequest).not.toHaveBeenCalled();
 
-    setUser([vmms(UserRole.ADMIN)]);
+
     await request(app.getHttpServer()).post(path)
       .set('Authorization', `Bearer ${token([vmms(UserRole.ADMIN)])}`).send(body).expect(201);
     expect(service.reviewCancellationRequest).toHaveBeenCalledWith(
@@ -84,7 +75,7 @@ describe('scheduling HTTP permissions', () => {
       .set('Authorization', `Bearer ${token([vmms(UserRole.OPERATIONS)])}`).expect(403);
     expect(service.remove).not.toHaveBeenCalled();
 
-    setUser([vmms(UserRole.ADMIN)]);
+
     await request(app.getHttpServer()).delete(path)
       .set('Authorization', `Bearer ${token([vmms(UserRole.ADMIN)])}`).expect(200);
     expect(service.remove).toHaveBeenCalledWith(id, expect.objectContaining({ roles: [vmms(UserRole.ADMIN)] }));
@@ -98,7 +89,7 @@ describe('scheduling HTTP permissions', () => {
       .set('Authorization', `Bearer ${token([vmms(UserRole.OPERATIONS)])}`).send(body).expect(403);
     expect(service.updateOdometerThreshold).not.toHaveBeenCalled();
 
-    setUser([vmms(UserRole.ADMIN)]);
+
     await request(app.getHttpServer()).patch(path)
       .set('Authorization', `Bearer ${token([vmms(UserRole.ADMIN)])}`).send(body).expect(200);
     expect(service.updateOdometerThreshold).toHaveBeenCalledWith(
@@ -113,7 +104,7 @@ describe('scheduling HTTP permissions', () => {
       .set('Authorization', `Bearer ${token([vmms(UserRole.OPERATIONS)])}`).send(body).expect(403);
     expect(service.cancelMaintenanceLog).not.toHaveBeenCalled();
 
-    setUser([vmms(UserRole.ADMIN)]);
+
     await request(app.getHttpServer()).post(path)
       .set('Authorization', `Bearer ${token([vmms(UserRole.ADMIN)])}`).send(body).expect(201);
     expect(service.cancelMaintenanceLog).toHaveBeenCalledWith(
@@ -131,17 +122,17 @@ describe('scheduling HTTP permissions', () => {
     await request(app.getHttpServer()).post(unlockPath)
       .set('Authorization', `Bearer ${token([vmms(UserRole.OPERATIONS)])}`).send({ reason }).expect(201);
     expect(service.unlockMaintenanceLog).toHaveBeenCalledWith(id, reason, expect.objectContaining({ roles: [vmms(UserRole.OPERATIONS)] }));
-    setUser([vmms(UserRole.ADMIN)]);
+
     await request(app.getHttpServer()).post(`/maintenance-schedules/${id}/unlock-requests/00000000-0000-4000-8000-000000000003/review`)
       .set('Authorization', `Bearer ${token([vmms(UserRole.ADMIN)])}`).send({ decision: 'APPROVE' }).expect(201);
     expect(service.reviewMaintenanceLogUnlock).toHaveBeenCalled();
 
-    setUser([vmms(UserRole.OPERATIONS)]);
+
     await request(app.getHttpServer()).patch(editPath)
       .set('Authorization', `Bearer ${token([vmms(UserRole.OPERATIONS)])}`).send(body).expect(200);
     expect(service.updateMaintenanceLog).toHaveBeenCalledWith(id, expect.objectContaining(body), expect.objectContaining({ roles: [vmms(UserRole.OPERATIONS)] }));
 
-    setUser([vmms(UserRole.ADMIN)]);
+
     await request(app.getHttpServer()).patch(editPath)
       .set('Authorization', `Bearer ${token([vmms(UserRole.ADMIN)])}`).send(body).expect(403);
   });
@@ -153,13 +144,12 @@ describe('scheduling HTTP permissions', () => {
       .set('Authorization', `Bearer ${token([vmms(UserRole.OPERATIONS)])}`).send({ reason }).expect(201);
     expect(service.voidMaintenanceLog).toHaveBeenCalledWith(id, reason, expect.objectContaining({ roles: [vmms(UserRole.OPERATIONS)] }));
 
-    setUser([vmms(UserRole.ADMIN)]);
+
     await request(app.getHttpServer()).post(path)
       .set('Authorization', `Bearer ${token([vmms(UserRole.ADMIN)])}`).send({ reason }).expect(403);
   });
   describe.each([UserRole.ADMIN, UserRole.CHIEF_MECHANIC, UserRole.MECHANIC])('%s scheduling writes', (role) => {
     it.each(writes)('denies %s %s', async (method, path, handler) => {
-      setUser([vmms(role)]);
       await request(app.getHttpServer())[method](path)
         .set('Authorization', `Bearer ${token([vmms(role)])}`)
         .send({ assignedMechanicId: 'replacement', chiefMechanicId: 'replacement-chief' }).expect(403);
@@ -169,7 +159,6 @@ describe('scheduling HTTP permissions', () => {
   describe.each([SystemType.VRMS, SystemType.BMS])('%s Operations is insufficient', (system) => {
     it.each(writes)('denies %s %s despite foreign system claims', async (method, path, handler) => {
       const roles = [vmms(UserRole.ADMIN), { role: UserRole.OPERATIONS, system }];
-      setUser(roles);
       await request(app.getHttpServer())[method](`${path}?system=${system}`)
         .set('Authorization', `Bearer ${token(roles, system)}`)
         .set('Origin', `https://${system.toLowerCase()}.example.invalid`)
@@ -179,21 +168,15 @@ describe('scheduling HTTP permissions', () => {
   });
   it.each([UserRole.ADMIN, UserRole.OPERATIONS, UserRole.CHIEF_MECHANIC, UserRole.MECHANIC])(
     'preserves scoped read requests for %s', async (role) => {
-      setUser([vmms(role)]);
       const req = request(app.getHttpServer()).get('/maintenance-schedules')
         .set('Authorization', `Bearer ${token([vmms(role)])}`).expect(200);
-      if (role === UserRole.CHIEF_MECHANIC || role === UserRole.MECHANIC) {
-        req.set('X-VMMS-Client', 'mobile');
-      }
       await req;
       expect(service.findAll).toHaveBeenCalledWith(expect.objectContaining({ sub: 'user-1', roles: [vmms(role)] }));
     },
   );
   it.each([UserRole.MECHANIC, UserRole.CHIEF_MECHANIC])('preserves the %s execution/review endpoint', async (role) => {
-    setUser([vmms(role)]);
     await request(app.getHttpServer()).patch('/maintenance-schedules/schedule-1/progress')
       .set('Authorization', `Bearer ${token([vmms(role)])}`)
-      .set('X-VMMS-Client', 'mobile')
       .send({ action: role === UserRole.MECHANIC ? 'SUBMIT' : 'APPROVE' }).expect(200);
     expect(service.updateProgress).toHaveBeenCalledWith('schedule-1', expect.any(Object), expect.objectContaining({ roles: [vmms(role)] }));
   });

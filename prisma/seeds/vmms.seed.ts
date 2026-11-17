@@ -6,8 +6,6 @@ import {
   AccountType,
   MaintenanceTriggerType,
   MaintenanceIntervalType,
-  SystemType,
-  UserRole,
 } from '@prisma/client';
 
 export async function seedVmms(prisma: PrismaClient) {
@@ -34,17 +32,13 @@ export async function seedVmms(prisma: PrismaClient) {
       ? addTimeInterval(baseDate, interval)
       : new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
   };
-  const chiefMechanics = await prisma.user.findMany({
-    where: {
-      deletedAt: null,
-      isActive: true,
-      roles: { some: { system: SystemType.VMMS, role: UserRole.CHIEF_MECHANIC } },
-    },
+  const chiefMechanics = await prisma.mechanic.findMany({
+    where: { isActive: true, role: 'CHIEF_MECHANIC', isOutsourced: false },
     orderBy: { email: 'asc' },
-    select: { id: true, name: true, email: true },
+    select: { userId: true, name: true, email: true },
   });
   if (!chiefMechanics.length) {
-    throw new Error('Cannot seed maintenance schedules: no active VMMS Chief Mechanic users exist. Run the users seed first.');
+    throw new Error('Cannot seed maintenance schedules: no active VMMS Chief Mechanic directory rows exist.');
   }
 
   const checklistTemplatesData = [
@@ -1194,7 +1188,7 @@ export async function seedVmms(prisma: PrismaClient) {
     ...schedule,
     garageId: vehicle.garageId,
     startDate: schedule.createdAt,
-    chiefMechanicId: chiefMechanic.id,
+    chiefMechanicId: chiefMechanic.userId!,
     chiefMechanic: chiefMechanic.name,
     assignedMechanicId: resolveSeedMechanicId(
       schedule.assignedMechanic,

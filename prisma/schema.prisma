@@ -88,34 +88,6 @@ enum MaintenanceIntervalType {
 // MODELS
 // ==========================================
 
-model User {
-  id                       String                    @id @default(uuid()) @db.Uuid
-  name                     String                    @db.VarChar(100)
-  email                    String                    @unique @map("email") @db.VarChar(255)
-  emailVerified            Boolean                   @default(false) @map("email_verified")
-  passwordHash             String                    @map("password_hash") @db.VarChar(255)
-  contact                  String?                   @db.VarChar(100)
-  profilePicture           String?                   @map("profile_picture") @db.Text
-  isActive                 Boolean                   @default(true) @map("is_active")
-  failedLoginAttempts      Int                       @default(0) @map("failed_login_attempts")
-  lockedAt                 DateTime?                 @map("locked_at") @db.Timestamptz(6)
-  deletedAt                DateTime?                 @map("deleted_at") @db.Timestamptz(6)
-  createdAt                DateTime                  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt                DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(6)
-  roles                    UserRoleAssignment[]
-  mechanic                 Mechanic?
-  notifications            Notification[]
-  maintenanceNotifications MaintenanceNotification[]
-  passwordResetTokens      PasswordResetToken[]
-  refreshTokens            RefreshToken[]
-  loginActivities          LoginActivity[]
-  chiefMechanicSchedules   MaintenanceSchedule[]     @relation("ScheduleChiefMechanic")
-  assignedSchedules        MaintenanceSchedule[]     @relation("ScheduleMechanic")
-
-  @@index([deletedAt])
-  @@map("users")
-}
-
 model Notification {
   id        String   @id @default(uuid()) @db.Uuid
   userId    String   @map("user_id") @db.Uuid
@@ -126,24 +98,8 @@ model Notification {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
   @@index([userId, isRead, createdAt])
   @@map("notifications")
-}
-
-model UserRoleAssignment {
-  id        String     @id @default(uuid()) @db.Uuid
-  userId    String     @map("user_id") @db.Uuid
-  role      UserRole
-  system    SystemType
-  createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, role, system])
-  @@map("user_roles")
 }
 
 model Vehicle {
@@ -307,7 +263,10 @@ model FuelAuditLog {
 
 model Mechanic {
   id           String   @id @default(uuid()) @db.Uuid
-  userId       String?  @unique @map("user_id") @db.Uuid // Linked if in-house mechanic has a login
+  userId       String?  @unique @map("user_id") @db.Uuid // welinc-auth person id; intentionally no foreign key
+  email        String?  @db.VarChar(255)
+  role         String?  @db.VarChar(30)
+  temporaryRoles String[] @default([]) @map("temporary_roles")
   name         String   @db.VarChar(100)
   isOutsourced Boolean  @default(false) @map("is_outsourced")
   shopName     String?  @map("shop_name") @db.VarChar(100) // For outsourced "Other" shop names
@@ -315,7 +274,6 @@ model Mechanic {
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  user       User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
   workOrders WorkOrder[] @relation("WorkOrderMechanics")
 
   @@map("mechanics")
@@ -506,8 +464,6 @@ model MaintenanceSchedule {
   createdAt                  DateTime                  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt                  DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  chiefMechanicUser         User?                             @relation("ScheduleChiefMechanic", fields: [chiefMechanicId], references: [id], onDelete: SetNull)
-  assignedMechanicUser      User?                             @relation("ScheduleMechanic", fields: [assignedMechanicId], references: [id], onDelete: SetNull)
   notifications             MaintenanceNotification[]
   cancellations             MaintenanceScheduleCancellation[]
   maintenanceLogEditUnlocks MaintenanceLogEditUnlock[]
@@ -616,22 +572,6 @@ model MaintenanceLogEditAudit {
   @@map("maintenance_log_edit_audits")
 }
 
-model LoginActivity {
-  id         String   @id @default(uuid()) @db.Uuid
-  userId     String?  @map("user_id") @db.Uuid
-  email      String   @db.VarChar(255)
-  event      String   @db.VarChar(30)
-  ipAddress  String?  @map("ip_address") @db.VarChar(45)
-  deviceType String   @map("device_type") @db.VarChar(30)
-  userAgent  String?  @map("user_agent") @db.Text
-  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-
-  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
-
-  @@index([userId, createdAt])
-  @@map("login_activities")
-}
-
 model MaintenanceNotification {
   id            String              @id @default(uuid()) @db.Uuid
   userId        String              @map("user_id") @db.Uuid
@@ -640,9 +580,6 @@ model MaintenanceNotification {
   message       String              @db.Text
   createdAt     DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
   readAt        DateTime?           @map("read_at") @db.Timestamptz(6)
-  smsStatus     String              @default("PENDING") @map("sms_status") @db.VarChar(20)
-  smsProviderId String?             @map("sms_provider_id") @db.VarChar(100)
-  user          User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   schedule      MaintenanceSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
 
   @@unique([userId, scheduleId, kind])
@@ -650,27 +587,28 @@ model MaintenanceNotification {
   @@map("maintenance_notifications")
 }
 
-model PasswordResetToken {
-  id        String    @id @default(cuid())
-  userId    String    @map("user_id") @db.Uuid
-  otp       String
-  expiresAt DateTime  @map("expires_at")
-  usedAt    DateTime? @map("used_at")
-  createdAt DateTime  @default(now()) @map("created_at")
-  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+model DirectorySyncState {
+  id           String    @id
+  cursor       String?
+  leaseUntil   DateTime? @map("lease_until") @db.Timestamptz(3)
+  leaseOwner   String?   @map("lease_owner") @db.Uuid
+  failingSince DateTime? @map("failing_since") @db.Timestamptz(3)
+  updatedAt    DateTime  @default(now()) @map("updated_at") @db.Timestamptz(3)
 
-  @@map("password_reset_tokens")
+  @@map("directory_sync_state")
 }
 
-model RefreshToken {
-  id             String   @id @default(cuid())
-  userId         String   @map("user_id") @db.Uuid
-  tokenHash      String   @unique @map("token_hash")
-  clientPlatform String   @map("client_platform") @db.VarChar(10)
-  expiresAt      DateTime @map("expires_at") @db.Timestamptz(6)
-  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+model VmmsPerson {
+  authUserId     String   @id @map("auth_user_id") @db.Uuid
+  name           String   @db.VarChar(255)
+  email          String   @db.VarChar(255)
+  picture        String?
+  roles          String[]
+  temporaryRoles String[] @map("temporary_roles")
+  isActive       Boolean  @map("is_active")
+  deleted        Boolean
+  erased         Boolean  @default(false)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  @@index([userId, expiresAt])
-  @@map("refresh_tokens")
+  @@map("vmms_people")
 }

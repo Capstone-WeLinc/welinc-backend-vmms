@@ -3,6 +3,8 @@ import { Prisma } from '@prisma/client';
 
 export interface ScheduleActor {
   sub: string;
+  name: string;
+  email: string;
   roles: { role: string; system: string }[];
   system?: string;
 }

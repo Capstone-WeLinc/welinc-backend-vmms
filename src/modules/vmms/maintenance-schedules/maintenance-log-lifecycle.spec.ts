@@ -54,9 +54,6 @@ describe('Maintenance-log void and delete permissions', () => {
   it('allows only active Admin to deactivate a non-log schedule', async () => {
     prisma.maintenanceSchedule.findFirst.mockResolvedValue({ id: 'schedule-1', status: MaintenanceStatus.PENDING, logNumber: null, workOrderProgress: {} });
     await expect(service.remove('schedule-1', admin)).resolves.toEqual({ success: true });
-    expect(prisma.user.findFirst).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ id: admin.sub, isActive: true }),
-    }));
     expect(prisma.maintenanceSchedule.update).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: 'schedule-1', deletedAt: null },
       data: { deletedAt: expect.any(Date) },

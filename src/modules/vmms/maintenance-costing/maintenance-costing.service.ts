@@ -15,7 +15,6 @@ type CostSchedule = {
   laborCost: Prisma.Decimal | null;
   totalCost: Prisma.Decimal | null;
   workOrderProgress: Prisma.JsonValue | null;
-  assignedMechanicUser: { name: string } | null;
 };
 
 function decimalNumber(value: unknown): number | null {
@@ -165,7 +164,6 @@ export class MaintenanceCostingService {
           laborCost: true,
           totalCost: true,
           workOrderProgress: true,
-          assignedMechanicUser: { select: { name: true } },
         },
         orderBy: { completedAt: 'desc' },
       }),
@@ -196,7 +194,7 @@ export class MaintenanceCostingService {
           title: schedule.title,
           type: schedule.title,
           completedAt: schedule.completedAt,
-          mechanicName: schedule.assignedMechanicUser?.name ?? schedule.assignedMechanic,
+          mechanicName: schedule.assignedMechanic,
           ...cost,
         });
         recordsByVehicle.set(vehicle.id, rows);

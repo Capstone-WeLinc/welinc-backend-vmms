@@ -21,7 +21,9 @@ export class FuelEscalationService {
         ] as const;
         for (const stage of stages) {
           if (age < stage.days * 86400000 || anomaly[stage.field]) continue;
-          const recipients = await this.prisma.user.findMany({ where: { isActive: true, deletedAt: null, roles: { some: { system: 'VMMS', role: { in: stage.roles as any } } } }, select: { id: true } });
+          const people = await this.prisma.vmmsPerson.findMany({ where: { isActive: true, deleted: false, erased: false, roles: { hasSome: [...stage.roles] } }, select: { authUserId: true, roles: true, temporaryRoles: true } });
+          const allowedRoles: readonly string[] = stage.roles;
+          const recipients = people.filter((person) => person.roles.some((role) => allowedRoles.includes(role) && !person.temporaryRoles.includes(role)));
           await this.prisma.$transaction(async (tx) => {
             // Claim this escalation stage atomically so overlapping workers
             // cannot send duplicate notifications for the same anomaly.
@@ -45,7 +47,7 @@ export class FuelEscalationService {
               ? ` Report attachment${attachmentNames.length === 1 ? '' : 's'}: ${attachmentNames.length ? attachmentNames.join(', ') : 'none uploaded'}. Admin and Operations can review this anomaly in Fuel Management and download available reports.`
               : '';
             const message = `${anomaly.vehicle.plateNumber} has an unresolved fuel-efficiency anomaly (Day ${stage.days}). Operations note: ${note}.${reportSummary}`;
-            await tx.notification.createMany({ data: recipients.map((user) => ({ userId: user.id, title: stage.label, message, type: 'warning' })) });
+            await tx.notification.createMany({ data: recipients.map((person) => ({ userId: person.authUserId, title: stage.label, message, type: 'warning' })) });
           });
         }
       }
