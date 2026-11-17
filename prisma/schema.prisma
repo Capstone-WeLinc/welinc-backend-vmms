@@ -94,12 +94,26 @@ model Notification {
   title     String   @db.VarChar(200)
   message   String   @db.Text
   type      String   @default("info") @db.VarChar(30)
-  isRead    Boolean  @default(false) @map("is_read")
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  dedupeKey              String?              @unique @map("dedupe_key") @db.VarChar(255)
+  maintenanceScheduleId  String?              @map("maintenance_schedule_id") @db.Uuid
+  maintenanceSchedule    MaintenanceSchedule? @relation(fields: [maintenanceScheduleId], references: [id], onDelete: SetNull)
+  isRead                 Boolean              @default(false) @map("is_read")
+  createdAt              DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   @@index([userId, isRead, createdAt])
   @@map("notifications")
+}
+
+model ScheduledFleetReport {
+  id          String   @id @default(uuid()) @db.Uuid
+  reportType  String   @map("report_type") @db.VarChar(20)
+  periodKey   String   @map("period_key") @db.VarChar(10)
+  data        Json     @db.JsonB
+  generatedAt DateTime @default(now()) @map("generated_at") @db.Timestamptz(6)
+
+  @@unique([reportType, periodKey])
+  @@map("scheduled_fleet_reports")
 }
 
 model Vehicle {
@@ -465,6 +479,7 @@ model MaintenanceSchedule {
   updatedAt                  DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   notifications             MaintenanceNotification[]
+  systemNotifications       Notification[]
   cancellations             MaintenanceScheduleCancellation[]
   maintenanceLogEditUnlocks MaintenanceLogEditUnlock[]
   maintenanceLogEditAudits  MaintenanceLogEditAudit[]

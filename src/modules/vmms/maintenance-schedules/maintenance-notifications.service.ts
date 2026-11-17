@@ -37,6 +37,57 @@ export class MaintenanceNotificationsService {
     }
   }
 
+  @Cron('0 7 * * *', { timeZone: 'Asia/Manila', waitForCompletion: true })
+  async evaluateOverdueEscalations() {
+    try {
+      const evaluationTime = Date.now();
+      const overdue = await this.prisma.maintenanceSchedule.findMany({
+        where: { deletedAt: null, status: 'OVERDUE' },
+      });
+      const people = await this.prisma.vmmsPerson.findMany({
+        where: { isActive: true, deleted: false, erased: false },
+        select: { authUserId: true, roles: true, temporaryRoles: true },
+      });
+      const stages = [
+        { days: 1, roles: ['CHIEF_MECHANIC'], title: 'Maintenance overdue follow-up', critical: false },
+        { days: 3, roles: ['ADMIN', 'OPERATIONS'], title: 'Maintenance overdue escalation', critical: false },
+        { days: 7, roles: ['ADMIN', 'OPERATIONS', 'CHIEF_MECHANIC'], title: 'Critical maintenance escalation', critical: true },
+      ] as const;
+
+      for (const schedule of overdue) {
+        const progress = schedule.workOrderProgress && typeof schedule.workOrderProgress === 'object' && !Array.isArray(schedule.workOrderProgress)
+          ? schedule.workOrderProgress as Record<string, unknown>
+          : {};
+        const overdueAt = typeof progress.overdueAt === 'string'
+          ? Date.parse(progress.overdueAt)
+          : schedule.targetDueDate?.getTime() ?? schedule.updatedAt.getTime();
+        if (!Number.isFinite(overdueAt)) continue;
+        const daysOverdue = Math.floor((evaluationTime - overdueAt) / 86_400_000);
+        for (const stage of stages) {
+          if (daysOverdue < stage.days) continue;
+          const recipients = people.filter((person) =>
+            person.roles.some((role) => (stage.roles as readonly string[]).includes(role) && !person.temporaryRoles.includes(role)),
+          );
+          if (!recipients.length) continue;
+          const workOrder = schedule.workOrderNumber || schedule.title;
+          await this.prisma.notification.createMany({
+            data: recipients.map((person) => ({
+              userId: person.authUserId,
+              maintenanceScheduleId: schedule.id,
+              title: stage.title,
+              message: `${stage.critical ? 'Critical: ' : ''}${workOrder} is ${daysOverdue} day(s) overdue. The work-order status remains ${schedule.status}.`,
+              type: 'warning',
+              dedupeKey: `maintenance-escalation:${schedule.id}:day-${stage.days}:${person.authUserId}`,
+            })),
+            skipDuplicates: true,
+          });
+        }
+      }
+    } catch (error) {
+      this.logger.error('Maintenance overdue escalation failed.', error instanceof Error ? error.stack : undefined);
+    }
+  }
+
   async list(userId: string) {
     return this.prisma.maintenanceNotification.findMany({
       where: { userId, schedule: { deletedAt: null, assignedMechanicId: userId } },

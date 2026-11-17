@@ -44,6 +44,7 @@ export class MaintenanceOverdueService {
               ? schedule.workOrderProgress as Record<string, unknown>
               : {}),
             overdueFromStatus: schedule.status,
+            overdueAt: now.toISOString(),
           } as Prisma.InputJsonObject,
         },
       });

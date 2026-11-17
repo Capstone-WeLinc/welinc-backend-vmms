@@ -13,6 +13,7 @@ import { DirectoryPollJob, DirectorySync } from './directory/directory-sync.serv
 import { MechanicsController } from './directory/mechanics.controller';
 import { FleetController } from './fleet/fleet.controller';
 import { AuditController } from './audit/audit.controller';
+import { ReportsModule } from './reports/reports.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { AuditController } from './audit/audit.controller';
     LocationsModule,
     MaintenanceCostingModule,
     FuelModule,
+    ReportsModule,
   ],
   controllers: [VmmsConfigController, MechanicsController, FleetController, AuditController],
   providers: [VmmsConfigService, AuthDirectoryClient, DirectorySync, DirectoryPollJob],

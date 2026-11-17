@@ -1,10 +1,8 @@
 import {
-  Body,
   Controller,
   Get,
   Param,
   Patch,
-  Post,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -19,15 +17,6 @@ export class NotificationsController {
   @Get()
   list(@Req() req: { user: { sub: string } }) {
     return this.notificationsService.listForUser(req.user.sub);
-  }
-
-  @UseGuards(JwtAuthGuard)
-  @Post()
-  create(
-    @Req() req: { user: { sub: string } },
-    @Body() body: { title: string; message: string; type?: 'info' | 'success' | 'warning' | 'error' },
-  ) {
-    return this.notificationsService.createForUser(req.user.sub, body);
   }
 
   @UseGuards(JwtAuthGuard)
