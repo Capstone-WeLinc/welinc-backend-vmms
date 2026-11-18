@@ -127,6 +127,8 @@ model Vehicle {
   capacity          Int               @default(0) @map("capacity")
   status            VehicleStatus     @default(AVAILABLE)
   odometer          Int               @default(0)
+  defaultMaintenanceIntervalKm Int?  @map("default_maintenance_interval_km")
+  defaultMaintenanceBufferKm   Int?  @map("default_maintenance_buffer_km")
   garageId          String?           @map("garage_id") @db.Uuid
   workOrders        WorkOrder[]
   isActive          Boolean           @default(true) @map("is_active")
@@ -136,6 +138,7 @@ model Vehicle {
   auditLogs         VehicleAuditLog[]
   fuelFillUps       FuelFillUp[]
   fuelAnomalies    FuelAnomaly[]
+  maintenanceDefaults VehicleMaintenanceDefault[]
   garage            Garage?           @relation(fields: [garageId], references: [id], onDelete: Restrict)
 
   @@index([deletedAt])
@@ -427,6 +430,7 @@ model ChecklistTemplate {
   type      String                @db.VarChar(100) // Oil Change, Brake Inspection, etc.
   items     ChecklistItem[]
   schedules MaintenanceSchedule[]
+  vehicleDefaults VehicleMaintenanceDefault[]
   deletedAt DateTime?             @map("deleted_at") @db.Timestamptz(6)
   createdAt DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -434,6 +438,21 @@ model ChecklistTemplate {
   @@unique([type])
   @@index([deletedAt])
   @@map("checklist_templates")
+}
+
+model VehicleMaintenanceDefault {
+  vehicleId           String   @map("vehicle_id") @db.Uuid
+  checklistTemplateId String   @map("checklist_template_id") @db.Uuid
+  intervalKm          Int      @map("interval_km")
+  bufferDistanceKm    Int      @map("buffer_distance_km")
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  vehicle           Vehicle           @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  checklistTemplate ChecklistTemplate @relation(fields: [checklistTemplateId], references: [id], onDelete: Cascade)
+
+  @@id([vehicleId, checklistTemplateId])
+  @@map("vehicle_maintenance_defaults")
 }
 
 model ChecklistItem {

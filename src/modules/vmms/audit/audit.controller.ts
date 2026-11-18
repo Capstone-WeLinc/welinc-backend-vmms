@@ -54,7 +54,7 @@ function record(
 @Controller('audit-logs')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @RoleSystem(SystemType.VMMS)
-@Roles(UserRole.ADMIN, UserRole.OPERATIONS)
+@Roles(UserRole.ADMIN)
 export class AuditController {
   constructor(private readonly prisma: PrismaService) {}
 

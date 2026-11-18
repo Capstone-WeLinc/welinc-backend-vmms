@@ -100,11 +100,11 @@ describe('Next maintenance cycle after approval', () => {
   });
   it.each([
     [26000, 25000, 26000],
-    [24000, 25000, 25000],
-    [0, null, 0],
-    [null, 25000, 25000],
+    [24000, 25000, 24000],
+    [0, 25000, 0],
+    [26000, null, 26000],
   ])(
-    'uses available recorded mileage without moving backwards (%s, %s)',
+    'uses only the Operations-confirmed master reading (%s, %s)',
     async (vehicle, recorded, expected) => {
       tx.vehicle.findFirst.mockResolvedValue(
         vehicle === null ? null : { odometer: vehicle },
@@ -121,7 +121,10 @@ describe('Next maintenance cycle after approval', () => {
   it('refuses to invent a missing odometer reading', async () => {
     tx.vehicle.findFirst.mockResolvedValue(null);
     await expect(
-      recur(service, tx, { triggerType: 'ODOMETER', odometerReading: null }),
+      recur(service, tx, {
+        triggerType: 'ODOMETER',
+        odometerReading: 30000,
+      }),
     ).rejects.toThrow('current odometer reading');
     expect(tx.maintenanceSchedule.upsert).not.toHaveBeenCalled();
   });
@@ -175,6 +178,7 @@ describe('Next maintenance cycle after approval', () => {
         data: expect.objectContaining({ completedAt: expect.any(Date) }),
       }),
     );
+    expect(tx.vehicle.updateMany).not.toHaveBeenCalled();
     expect(tx.$transaction).toHaveBeenCalledTimes(1);
   });
   it('rejection returns work to the mechanic without creating another cycle', async () => {

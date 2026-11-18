@@ -50,12 +50,6 @@ export class UpdateVehicleDto {
   truckSizeCategory?: string;
 
   @ValidateIf((_object, value) => value !== undefined)
-  @Type(() => Number)
-  @IsInt()
-  @Min(0)
-  odometer?: number;
-
-  @ValidateIf((_object, value) => value !== undefined)
   @IsUUID()
   garageId?: string;
 

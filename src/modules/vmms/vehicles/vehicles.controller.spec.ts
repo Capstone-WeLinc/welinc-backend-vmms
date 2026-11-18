@@ -1,11 +1,14 @@
-import { INestApplication } from '@nestjs/common';
+import {
+  INestApplication,
+  UnauthorizedException,
+  ValidationPipe,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
 import { SystemType, UserRole } from '@prisma/client';
 import request from 'supertest';
 import * as XLSX from 'xlsx';
 import { JwtAuthGuard } from '../../../auth/guards/jwt-auth.guard';
-import { UnauthorizedException } from '@nestjs/common';
 import { VehiclesController } from './vehicles.controller';
 import { VehiclesService } from './vehicles.service';
 
@@ -20,16 +23,22 @@ describe('vehicle HTTP permissions', () => {
   const service = {
     create: jest.fn(),
     update: jest.fn(),
+    updateOdometer: jest.fn(),
     delete: jest.fn(),
     findAll: jest.fn(),
     findAuditHistory: jest.fn(),
+    getMaintenanceDefaults: jest.fn(),
+    updateMaintenanceDefaults: jest.fn(),
     previewExcel: jest.fn(),
     saveImportRows: jest.fn(),
+    previewOdometerExcel: jest.fn(),
+    saveOdometerImportRows: jest.fn(),
   };
   const writes: ['post' | 'patch' | 'delete', string, keyof typeof service][] =
     [
       ['post', '/vehicles', 'create'],
       ['patch', `/vehicles/${vehicleId}`, 'update'],
+      ['patch', `/vehicles/${vehicleId}/odometer`, 'updateOdometer'],
       ['delete', `/vehicles/${vehicleId}`, 'delete'],
     ];
   const token = (roles: Role[], system: SystemType = SystemType.VMMS) =>
@@ -37,7 +46,11 @@ describe('vehicle HTTP permissions', () => {
   const expectNoWrites = () => {
     expect(service.create).not.toHaveBeenCalled();
     expect(service.update).not.toHaveBeenCalled();
+    expect(service.updateOdometer).not.toHaveBeenCalled();
     expect(service.delete).not.toHaveBeenCalled();
+    expect(service.updateMaintenanceDefaults).not.toHaveBeenCalled();
+    expect(service.previewOdometerExcel).not.toHaveBeenCalled();
+    expect(service.saveOdometerImportRows).not.toHaveBeenCalled();
   };
 
   beforeAll(async () => {
@@ -61,6 +74,13 @@ describe('vehicle HTTP permissions', () => {
       })
       .compile();
     app = module.createNestApplication();
+    app.useGlobalPipes(
+      new ValidationPipe({
+        forbidNonWhitelisted: true,
+        transform: true,
+        whitelist: true,
+      }),
+    );
     await app.init();
   });
   beforeEach(() => {
@@ -78,21 +98,89 @@ describe('vehicle HTTP permissions', () => {
   });
 
   it.each(writes)('allows Operations %s %s', async (method, path, handler) => {
+    const body = path.endsWith('/odometer')
+      ? { odometer: 100 }
+      : method === 'post'
+        ? {
+            plateNumber: 'ABC123',
+            make: 'Isuzu',
+            model: 'Truck',
+            year: 2022,
+            engineType: 'Diesel',
+            truckSizeCategory: 'Medium Duty',
+            odometer: 100,
+            garageId: '8da72728-b06e-4475-945e-2cf3c99a996e',
+          }
+        : { make: 'Hino' };
     await request(app.getHttpServer())
       [method](path)
       .set('Authorization', `Bearer ${token([roleFor(UserRole.OPERATIONS)])}`)
-      .send({
-        plateNumber: 'ABC123',
-        make: 'Isuzu',
-        model: 'Truck',
-        year: 2022,
-        engineType: 'Diesel',
-        truckSizeCategory: 'Medium Duty',
-        odometer: 100,
-        garageId: '8da72728-b06e-4475-945e-2cf3c99a996e',
-      })
+      .send(body)
       .expect(method === 'post' ? 201 : 200);
     expect(service[handler]).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects master odometer changes on the generic vehicle update route', async () => {
+    await request(app.getHttpServer())
+      .patch(`/vehicles/${vehicleId}`)
+      .set('Authorization', `Bearer ${token([roleFor(UserRole.OPERATIONS)])}`)
+      .send({ odometer: 125 })
+      .expect(400);
+
+    expect(service.update).not.toHaveBeenCalled();
+  });
+
+  it('allows Operations to update a vehicle odometer', async () => {
+    await request(app.getHttpServer())
+      .patch(`/vehicles/${vehicleId}/odometer`)
+      .set('Authorization', `Bearer ${token([roleFor(UserRole.OPERATIONS)])}`)
+      .send({ odometer: 125 })
+      .expect(200);
+
+    expect(service.updateOdometer).toHaveBeenCalledWith(
+      vehicleId,
+      125,
+      expect.objectContaining({
+        sub: 'user-id',
+        email: 'test@example.invalid',
+      }),
+    );
+  });
+
+  it('lets only Operations manage vehicle maintenance defaults', async () => {
+    const body = {
+      baseIntervalKm: '5000',
+      baseBufferDistanceKm: '500',
+      categoryOverrides: [
+        {
+          checklistTemplateId: vehicleId,
+          intervalKm: '8000',
+          bufferDistanceKm: '800',
+        },
+      ],
+    };
+
+    await request(app.getHttpServer())
+      .get(`/vehicles/${vehicleId}/maintenance-defaults`)
+      .set('Authorization', `Bearer ${token([roleFor(UserRole.OPERATIONS)])}`)
+      .expect(200);
+    expect(service.getMaintenanceDefaults).toHaveBeenCalledWith(vehicleId);
+
+    await request(app.getHttpServer())
+      .put(`/vehicles/${vehicleId}/maintenance-defaults`)
+      .set('Authorization', `Bearer ${token([roleFor(UserRole.OPERATIONS)])}`)
+      .send(body)
+      .expect(200);
+    expect(service.updateMaintenanceDefaults).toHaveBeenCalledWith(
+      vehicleId,
+      expect.objectContaining(body),
+    );
+
+    await request(app.getHttpServer())
+      .put(`/vehicles/${vehicleId}/maintenance-defaults`)
+      .set('Authorization', `Bearer ${token([roleFor(UserRole.ADMIN)])}`)
+      .send(body)
+      .expect(403);
   });
 
   it('allows Operations to preview an XLSX workbook without saving vehicles', async () => {
@@ -145,6 +233,64 @@ describe('vehicle HTTP permissions', () => {
     expect(service.saveImportRows).toHaveBeenCalledWith(expect.any(Array));
   });
 
+  it('allows Operations to preview odometer readings without saving them', async () => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(
+      workbook,
+      XLSX.utils.aoa_to_sheet([
+        ['Plate Number', 'Odometer Reading (km)'],
+        ['ABC123', 125],
+      ]),
+      'Odometers',
+    );
+    const buffer = XLSX.write(workbook, {
+      type: 'buffer',
+      bookType: 'xlsx',
+    }) as Buffer;
+    service.previewOdometerExcel.mockResolvedValue({
+      updated: 0,
+      unchanged: 0,
+      rows: [],
+    });
+
+    await request(app.getHttpServer())
+      .post('/vehicles/odometer/import/preview')
+      .set('Authorization', `Bearer ${token([roleFor(UserRole.OPERATIONS)])}`)
+      .attach('file', buffer, {
+        filename: 'odometer-readings.xlsx',
+        contentType:
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      })
+      .expect(201, { updated: 0, unchanged: 0, rows: [] });
+    expect(service.previewOdometerExcel).toHaveBeenCalledWith(
+      expect.any(Buffer),
+    );
+    expect(service.saveOdometerImportRows).not.toHaveBeenCalled();
+  });
+
+  it('saves reviewed odometer rows and passes the Operations identity', async () => {
+    service.saveOdometerImportRows.mockResolvedValue({
+      updated: 1,
+      unchanged: 0,
+      rows: [],
+    });
+    const rows = [{ row: 2, plateNumber: 'ABC123', odometerReading: '125' }];
+
+    await request(app.getHttpServer())
+      .post('/vehicles/odometer/import')
+      .set('Authorization', `Bearer ${token([roleFor(UserRole.OPERATIONS)])}`)
+      .send({ rows })
+      .expect(201, { updated: 1, unchanged: 0, rows: [] });
+
+    expect(service.saveOdometerImportRows).toHaveBeenCalledWith(
+      rows,
+      expect.objectContaining({
+        sub: 'user-id',
+        email: 'test@example.invalid',
+      }),
+    );
+  });
+
   it('denies Admin access to vehicle import', async () => {
     await request(app.getHttpServer())
       .post('/vehicles/import/preview')
@@ -153,6 +299,16 @@ describe('vehicle HTTP permissions', () => {
       .expect(403);
     expect(service.previewExcel).not.toHaveBeenCalled();
     expect(service.saveImportRows).not.toHaveBeenCalled();
+  });
+
+  it('denies Admin access to bulk odometer import', async () => {
+    await request(app.getHttpServer())
+      .post('/vehicles/odometer/import')
+      .set('Authorization', `Bearer ${token([roleFor(UserRole.ADMIN)])}`)
+      .send({ rows: [] })
+      .expect(403);
+    expect(service.previewOdometerExcel).not.toHaveBeenCalled();
+    expect(service.saveOdometerImportRows).not.toHaveBeenCalled();
   });
 
   it('passes the authenticated editor identity to the vehicle update service', async () => {

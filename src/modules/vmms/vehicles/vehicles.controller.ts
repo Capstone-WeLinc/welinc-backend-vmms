@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Patch,
+  Put,
   Delete,
   Body,
   Param,
@@ -25,7 +26,10 @@ import {
   type VehicleImportRow,
 } from './vehicles.service';
 import { CreateVehicleDto } from './dto/create-vehicle.dto';
+import { SaveOdometerImportDto } from './dto/save-odometer-import.dto';
+import { UpdateOdometerDto } from './dto/update-odometer.dto';
 import { UpdateVehicleDto } from './dto/update-vehicle.dto';
+import { UpdateVehicleMaintenanceDefaultsDto } from './dto/update-vehicle-maintenance-defaults.dto';
 
 @Controller('vehicles')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -49,6 +53,21 @@ export class VehiclesController {
   @Get(':id/audit')
   async auditHistory(@Param('id', ParseUUIDPipe) id: string) {
     return this.vehiclesService.findAuditHistory(id);
+  }
+
+  @Roles(UserRole.OPERATIONS)
+  @Get(':id/maintenance-defaults')
+  async maintenanceDefaults(@Param('id', ParseUUIDPipe) id: string) {
+    return this.vehiclesService.getMaintenanceDefaults(id);
+  }
+
+  @Roles(UserRole.OPERATIONS)
+  @Put(':id/maintenance-defaults')
+  async updateMaintenanceDefaults(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateVehicleMaintenanceDefaultsDto,
+  ) {
+    return this.vehiclesService.updateMaintenanceDefaults(id, dto);
   }
 
   @Post()
@@ -77,6 +96,42 @@ export class VehiclesController {
     if (!Array.isArray(body?.rows))
       throw new BadRequestException('Vehicle rows are required.');
     return this.vehiclesService.saveImportRows(body.rows);
+  }
+
+  @Roles(UserRole.OPERATIONS)
+  @Post('odometer/import/preview')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 5 * 1024 * 1024 },
+      fileFilter: (_req, file, callback) => {
+        callback(null, file.originalname.toLowerCase().endsWith('.xlsx'));
+      },
+    }),
+  )
+  async previewOdometerExcel(
+    @UploadedFile() file: { originalname: string; buffer: Buffer } | undefined,
+  ) {
+    if (!file) throw new BadRequestException('Upload an .xlsx odometer file.');
+    return this.vehiclesService.previewOdometerExcel(file.buffer);
+  }
+
+  @Roles(UserRole.OPERATIONS)
+  @Post('odometer/import')
+  async saveOdometerImport(
+    @Body() dto: SaveOdometerImportDto,
+    @Req() req: { user: VehicleAuditActor },
+  ) {
+    return this.vehiclesService.saveOdometerImportRows(dto.rows, req.user);
+  }
+
+  @Roles(UserRole.OPERATIONS)
+  @Patch(':id/odometer')
+  async updateOdometer(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateOdometerDto,
+    @Req() req: { user: VehicleAuditActor },
+  ) {
+    return this.vehiclesService.updateOdometer(id, dto.odometer, req.user);
   }
 
   @Patch(':id')

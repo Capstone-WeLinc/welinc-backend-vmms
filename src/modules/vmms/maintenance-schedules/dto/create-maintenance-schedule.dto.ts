@@ -7,6 +7,7 @@ import {
 } from '@prisma/client';
 import {
   IsEnum,
+  IsBoolean,
   IsNotEmpty,
   IsNumber,
   IsOptional,
@@ -146,6 +147,10 @@ export class CreateMaintenanceScheduleDto {
   @IsString()
   @IsOptional()
   bufferDistanceKm?: string;
+
+  @IsBoolean()
+  @IsOptional()
+  useVehicleDefaults?: boolean;
 
   @IsString()
   @IsOptional()

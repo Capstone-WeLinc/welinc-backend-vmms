@@ -1,13 +1,16 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { MaintenanceStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../../shared/prisma.service';
 import * as XLSX from 'xlsx';
+import { odometerScheduleStatus } from '../maintenance-schedules/schedule-due';
 import { CreateVehicleDto } from './dto/create-vehicle.dto';
 import { UpdateVehicleDto } from './dto/update-vehicle.dto';
+import { UpdateVehicleMaintenanceDefaultsDto } from './dto/update-vehicle-maintenance-defaults.dto';
 
 export type VehicleAuditActor = { sub: string; email: string };
 
@@ -28,6 +31,25 @@ export type VehicleImportResult = {
   rows: VehicleImportRow[];
 };
 
+export type OdometerImportStatus = 'READY' | 'UPDATED' | 'UNCHANGED' | 'ERROR';
+export type OdometerImportRow = {
+  row: number;
+  plateNumber: string;
+  odometerReading: string;
+  currentOdometer: number | null;
+  status: OdometerImportStatus;
+  errors: string[];
+};
+export type OdometerImportInput = Pick<
+  OdometerImportRow,
+  'row' | 'plateNumber' | 'odometerReading'
+>;
+export type OdometerImportResult = {
+  updated: number;
+  unchanged: number;
+  rows: OdometerImportRow[];
+};
+
 const importColumns = [
   'plate number',
   'make',
@@ -38,6 +60,30 @@ const importColumns = [
   'garage branch',
   'odometer baseline',
 ] as const;
+const odometerImportColumns = [
+  'plate number',
+  'odometer reading (km)',
+] as const;
+const MAX_MAINTENANCE_KM = 2147483647;
+
+function parseMaintenanceDefault(
+  value: string,
+  label: string,
+  allowZero: boolean,
+): number | null {
+  if (value === '') return null;
+  const parsed = Number(value);
+  if (
+    !Number.isSafeInteger(parsed) ||
+    parsed > MAX_MAINTENANCE_KM ||
+    (allowZero ? parsed < 0 : parsed < 1)
+  ) {
+    throw new BadRequestException(
+      `${label} must be a ${allowZero ? 'non-negative' : 'positive'} whole number no greater than ${MAX_MAINTENANCE_KM}.`,
+    );
+  }
+  return parsed;
+}
 
 function normalizeImportHeader(value: unknown): string {
   return importCellText(value).trim().toLowerCase().replace(/\s+/g, ' ');
@@ -125,6 +171,156 @@ export class VehiclesService {
       isActive: vehicle.isActive,
     }));
   }
+
+  async getMaintenanceDefaults(id: string) {
+    const vehicle = await this.prisma.vehicle.findFirst({
+      where: { id, deletedAt: null },
+      select: {
+        id: true,
+        plateNumber: true,
+        defaultMaintenanceIntervalKm: true,
+        defaultMaintenanceBufferKm: true,
+      },
+    });
+    if (!vehicle) throw new NotFoundException('Vehicle not found.');
+
+    const templates = await this.prisma.checklistTemplate.findMany({
+      where: { deletedAt: null },
+      orderBy: { type: 'asc' },
+      select: {
+        id: true,
+        type: true,
+        vehicleDefaults: {
+          where: { vehicleId: id },
+          select: { intervalKm: true, bufferDistanceKm: true },
+        },
+      },
+    });
+
+    return {
+      vehicleId: vehicle.id,
+      plateNumber: vehicle.plateNumber,
+      baseIntervalKm: vehicle.defaultMaintenanceIntervalKm,
+      baseBufferDistanceKm: vehicle.defaultMaintenanceBufferKm,
+      categories: templates.map((template) => ({
+        checklistTemplateId: template.id,
+        type: template.type,
+        intervalKm: template.vehicleDefaults[0]?.intervalKm ?? null,
+        bufferDistanceKm: template.vehicleDefaults[0]?.bufferDistanceKm ?? null,
+      })),
+    };
+  }
+
+  async updateMaintenanceDefaults(
+    id: string,
+    dto: UpdateVehicleMaintenanceDefaultsDto,
+  ) {
+    const baseIntervalKm = parseMaintenanceDefault(
+      dto.baseIntervalKm,
+      'Base maintenance interval',
+      false,
+    );
+    const baseBufferDistanceKm = parseMaintenanceDefault(
+      dto.baseBufferDistanceKm,
+      'Base maintenance buffer',
+      true,
+    );
+    if ((baseIntervalKm === null) !== (baseBufferDistanceKm === null))
+      throw new BadRequestException(
+        'Set both base maintenance interval and buffer, or leave both blank.',
+      );
+
+    const overrides = dto.categoryOverrides.map((override) => ({
+      checklistTemplateId: override.checklistTemplateId,
+      intervalKm: parseMaintenanceDefault(
+        override.intervalKm,
+        'Category maintenance interval',
+        false,
+      ),
+      bufferDistanceKm: parseMaintenanceDefault(
+        override.bufferDistanceKm,
+        'Category maintenance buffer',
+        true,
+      ),
+    }));
+    const validOverrides = overrides.map((override) => {
+      if (override.intervalKm === null || override.bufferDistanceKm === null) {
+        throw new BadRequestException(
+          'Each category override requires both an interval and buffer.',
+        );
+      }
+      return {
+        ...override,
+        intervalKm: override.intervalKm,
+        bufferDistanceKm: override.bufferDistanceKm,
+      };
+    });
+
+    await this.prisma.$transaction(async (tx) => {
+      const vehicle = await tx.vehicle.findFirst({
+        where: { id, deletedAt: null },
+        select: { id: true, isActive: true },
+      });
+      if (!vehicle) throw new NotFoundException('Vehicle not found.');
+      if (!vehicle.isActive)
+        throw new BadRequestException(
+          'Maintenance defaults can only be changed for active vehicles.',
+        );
+
+      const templateIds = validOverrides.map(
+        (override) => override.checklistTemplateId,
+      );
+      if (templateIds.length) {
+        const activeTemplates = await tx.checklistTemplate.findMany({
+          where: { id: { in: templateIds }, deletedAt: null },
+          select: { id: true },
+        });
+        if (activeTemplates.length !== templateIds.length)
+          throw new BadRequestException(
+            'Every category override must use an active checklist template.',
+          );
+      }
+
+      await tx.vehicle.update({
+        where: { id },
+        data: {
+          defaultMaintenanceIntervalKm: baseIntervalKm,
+          defaultMaintenanceBufferKm: baseBufferDistanceKm,
+        },
+      });
+      await tx.vehicleMaintenanceDefault.deleteMany({
+        where: {
+          vehicleId: id,
+          ...(templateIds.length
+            ? { checklistTemplateId: { notIn: templateIds } }
+            : {}),
+        },
+      });
+      for (const override of validOverrides) {
+        await tx.vehicleMaintenanceDefault.upsert({
+          where: {
+            vehicleId_checklistTemplateId: {
+              vehicleId: id,
+              checklistTemplateId: override.checklistTemplateId,
+            },
+          },
+          create: {
+            vehicleId: id,
+            checklistTemplateId: override.checklistTemplateId,
+            intervalKm: override.intervalKm,
+            bufferDistanceKm: override.bufferDistanceKm,
+          },
+          update: {
+            intervalKm: override.intervalKm,
+            bufferDistanceKm: override.bufferDistanceKm,
+          },
+        });
+      }
+    });
+
+    return this.getMaintenanceDefaults(id);
+  }
+
   async create(dto: CreateVehicleDto) {
     await this.assertActiveGarage(dto.garageId);
     try {
@@ -212,6 +408,233 @@ export class VehiclesService {
       );
     }
     return this.processImportRows(rows, true);
+  }
+
+  async previewOdometerExcel(buffer: Buffer): Promise<OdometerImportResult> {
+    let rows: unknown[][];
+    try {
+      const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: false });
+      const firstSheet = workbook.SheetNames[0];
+      if (!firstSheet) throw new Error('The workbook has no worksheets.');
+      rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[firstSheet], {
+        header: 1,
+        raw: false,
+        defval: '',
+      });
+    } catch {
+      throw new BadRequestException(
+        'The uploaded file is not a readable .xlsx workbook.',
+      );
+    }
+
+    if (!rows.length) throw new BadRequestException('The workbook is empty.');
+    const headerIndexes = new Map<string, number>();
+    rows[0].forEach((value, index) =>
+      headerIndexes.set(normalizeImportHeader(value), index),
+    );
+    const missingColumns = odometerImportColumns.filter(
+      (column) => !headerIndexes.has(column),
+    );
+    if (missingColumns.length) {
+      throw new BadRequestException(
+        `Missing required columns: ${missingColumns.join(', ')}.`,
+      );
+    }
+    if (rows.length - 1 > 1000)
+      throw new BadRequestException(
+        'Import at most 1,000 odometer rows per workbook.',
+      );
+
+    const candidates = rows.slice(1).flatMap((row, index) => {
+      if (row.every((value) => importCellText(value).trim() === '')) return [];
+      const cell = (column: string) =>
+        importCellText(row[headerIndexes.get(column)!]).trim();
+      return [
+        {
+          row: index + 2,
+          plateNumber: cell('plate number'),
+          odometerReading: cell('odometer reading (km)'),
+        },
+      ];
+    });
+    if (!candidates.length)
+      throw new BadRequestException('The workbook contains no odometer rows.');
+    return this.processOdometerImportRows(candidates, false);
+  }
+
+  async saveOdometerImportRows(
+    rows: unknown[],
+    actor: VehicleAuditActor,
+  ): Promise<OdometerImportResult> {
+    if (!Array.isArray(rows) || rows.length === 0 || rows.length > 1000) {
+      throw new BadRequestException(
+        'Submit between 1 and 1,000 odometer rows to save.',
+      );
+    }
+    return this.processOdometerImportRows(rows, true, actor);
+  }
+
+  private async processOdometerImportRows(
+    rows: unknown[],
+    save: boolean,
+    actor?: VehicleAuditActor,
+  ): Promise<OdometerImportResult> {
+    const candidates: OdometerImportRow[] = rows.map((rawRow, index) => {
+      const row =
+        rawRow && typeof rawRow === 'object'
+          ? (rawRow as Partial<OdometerImportInput>)
+          : {};
+      return {
+        row:
+          Number.isInteger(row.row) && Number(row.row) > 1
+            ? Number(row.row)
+            : index + 2,
+        plateNumber: importCellText(row.plateNumber).trim(),
+        odometerReading: importCellText(row.odometerReading).trim(),
+        currentOdometer: null,
+        status: 'READY',
+        errors: [],
+      };
+    });
+    const result: OdometerImportResult = {
+      updated: 0,
+      unchanged: 0,
+      rows: candidates,
+    };
+    const error = (candidate: OdometerImportRow, message: string) => {
+      candidate.status = 'ERROR';
+      candidate.errors.push(message);
+    };
+    const duplicatePlates = new Set<string>();
+    const plateCounts = new Map<string, number>();
+    for (const candidate of candidates) {
+      const plate = normalizePlate(candidate.plateNumber);
+      if (plate) plateCounts.set(plate, (plateCounts.get(plate) ?? 0) + 1);
+    }
+    for (const [plate, count] of plateCounts) {
+      if (count > 1) duplicatePlates.add(plate);
+    }
+
+    const plates = [...plateCounts.keys()];
+    const matchingVehicles = plates.length
+      ? await this.prisma.vehicle.findMany({
+          where: {
+            deletedAt: null,
+            OR: plates.map((plateNumber) => ({
+              plateNumber: { equals: plateNumber, mode: 'insensitive' },
+            })),
+          },
+          select: {
+            id: true,
+            plateNumber: true,
+            odometer: true,
+            isActive: true,
+          },
+        })
+      : [];
+    const vehiclesByPlate = new Map<string, typeof matchingVehicles>();
+    for (const vehicle of matchingVehicles) {
+      const plate = normalizePlate(vehicle.plateNumber);
+      vehiclesByPlate.set(plate, [
+        ...(vehiclesByPlate.get(plate) ?? []),
+        vehicle,
+      ]);
+    }
+
+    const validRows: Array<{
+      candidate: OdometerImportRow;
+      vehicleId: string;
+      odometer: number;
+    }> = [];
+    for (const candidate of candidates) {
+      const plate = normalizePlate(candidate.plateNumber);
+      if (!plate) error(candidate, 'Plate number is required.');
+      else if (candidate.plateNumber.length > 20)
+        error(candidate, 'Plate number must be 20 characters or fewer.');
+      if (!candidate.odometerReading)
+        error(candidate, 'Odometer reading is required.');
+      else if (!/^\d+$/.test(candidate.odometerReading))
+        error(candidate, 'Odometer reading must be a positive whole number.');
+      else {
+        const odometer = Number(candidate.odometerReading);
+        if (
+          !Number.isSafeInteger(odometer) ||
+          odometer < 1 ||
+          odometer > 2147483647
+        )
+          error(
+            candidate,
+            'Odometer reading must be between 1 and 2,147,483,647.',
+          );
+      }
+
+      if (plate && duplicatePlates.has(plate))
+        error(candidate, 'Plate number is duplicated in this workbook.');
+      if (candidate.status === 'ERROR') continue;
+
+      const matched = vehiclesByPlate.get(plate) ?? [];
+      if (matched.length > 1) {
+        error(candidate, 'Plate number matches multiple vehicles.');
+        continue;
+      }
+      const vehicle = matched[0];
+      if (!vehicle) {
+        error(candidate, 'No active vehicle found for this plate number.');
+        continue;
+      }
+      candidate.currentOdometer = vehicle.odometer;
+      if (!vehicle.isActive) {
+        error(
+          candidate,
+          'Odometer updates are only allowed for active vehicles.',
+        );
+        continue;
+      }
+
+      const odometer = Number(candidate.odometerReading);
+      if (odometer < vehicle.odometer) {
+        error(
+          candidate,
+          `Odometer cannot be lower than the current reading (${vehicle.odometer}).`,
+        );
+        continue;
+      }
+      candidate.status = odometer === vehicle.odometer ? 'UNCHANGED' : 'READY';
+      validRows.push({ candidate, vehicleId: vehicle.id, odometer });
+    }
+
+    if (!save) return result;
+    if (!actor)
+      throw new Error('An audit actor is required to save odometer rows.');
+
+    for (const { candidate, vehicleId, odometer } of validRows) {
+      try {
+        const outcome = await this.prisma.$transaction((tx) =>
+          this.updateOdometerInTransaction(tx, vehicleId, odometer, actor),
+        );
+        candidate.currentOdometer = outcome.vehicle.odometer;
+        candidate.status = outcome.changed ? 'UPDATED' : 'UNCHANGED';
+        if (outcome.changed) result.updated += 1;
+        else result.unchanged += 1;
+      } catch (saveError) {
+        if (
+          saveError instanceof BadRequestException ||
+          saveError instanceof NotFoundException ||
+          saveError instanceof ConflictException
+        ) {
+          error(candidate, saveError.message);
+          const current = await this.prisma.vehicle.findUnique({
+            where: { id: vehicleId },
+            select: { odometer: true, deletedAt: true },
+          });
+          candidate.currentOdometer =
+            current && !current.deletedAt ? current.odometer : null;
+          continue;
+        }
+        throw saveError;
+      }
+    }
+    return result;
   }
 
   private async processImportRows(
@@ -382,7 +805,6 @@ export class VehiclesService {
           ? { truckSizeCategory: dto.truckSizeCategory.trim() }
           : {}),
         ...(dto.capacity !== undefined ? { capacity: dto.capacity } : {}),
-        ...(dto.odometer !== undefined ? { odometer: dto.odometer } : {}),
         ...(dto.garageId !== undefined ? { garageId: dto.garageId } : {}),
         ...(dto.status !== undefined ? { status: dto.status } : {}),
         ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
@@ -399,7 +821,6 @@ export class VehiclesService {
             engineType: true,
             truckSizeCategory: true,
             capacity: true,
-            odometer: true,
             garageId: true,
             status: true,
             isActive: true,
@@ -440,6 +861,161 @@ export class VehiclesService {
       });
     } catch (error) {
       this.throwPlateConflict(error);
+    }
+  }
+
+  async updateOdometer(id: string, odometer: number, actor: VehicleAuditActor) {
+    if (
+      !Number.isSafeInteger(odometer) ||
+      odometer < 1 ||
+      odometer > 2147483647
+    )
+      throw new BadRequestException(
+        'Enter a positive whole-number odometer reading.',
+      );
+
+    const outcome = await this.prisma.$transaction((tx) =>
+      this.updateOdometerInTransaction(tx, id, odometer, actor),
+    );
+    return outcome.vehicle;
+  }
+
+  private async updateOdometerInTransaction(
+    tx: Prisma.TransactionClient,
+    id: string,
+    odometer: number,
+    actor: VehicleAuditActor,
+  ) {
+    let previous = await tx.vehicle.findUnique({
+      where: { id },
+      select: { odometer: true, isActive: true, deletedAt: true },
+    });
+
+    if (!previous || previous.deletedAt)
+      throw new NotFoundException('Vehicle not found.');
+    if (!previous.isActive)
+      throw new BadRequestException(
+        'Odometer updates are only allowed for active vehicles.',
+      );
+    if (odometer < previous.odometer)
+      throw new BadRequestException(
+        `Odometer cannot be lower than the current reading (${previous.odometer}).`,
+      );
+
+    let changed = false;
+    while (odometer > previous.odometer) {
+      const result = await tx.vehicle.updateMany({
+        where: {
+          id,
+          odometer: previous.odometer,
+          isActive: true,
+          deletedAt: null,
+        },
+        data: { odometer },
+      });
+
+      if (result.count === 1) {
+        await tx.vehicleAuditLog.createMany({
+          data: [
+            {
+              vehicleId: id,
+              userId: actor.sub,
+              email: actor.email,
+              action: 'ODOMETER_UPDATED',
+              fieldName: 'odometer',
+              previousValue: String(previous.odometer),
+              newValue: String(odometer),
+            },
+          ],
+        });
+        changed = true;
+        break;
+      }
+
+      previous = await tx.vehicle.findUnique({
+        where: { id },
+        select: { odometer: true, isActive: true, deletedAt: true },
+      });
+      if (!previous || previous.deletedAt)
+        throw new NotFoundException('Vehicle not found.');
+      if (!previous.isActive)
+        throw new BadRequestException(
+          'Odometer updates are only allowed for active vehicles.',
+        );
+      if (odometer < previous.odometer)
+        throw new BadRequestException(
+          `Odometer cannot be lower than the current reading (${previous.odometer}).`,
+        );
+    }
+
+    const updated = await tx.vehicle.findUnique({
+      where: { id },
+      include: { garage: { select: { id: true, name: true } } },
+    });
+    if (!updated || updated.deletedAt)
+      throw new NotFoundException('Vehicle not found.');
+    if (!updated.isActive)
+      throw new BadRequestException(
+        'Odometer updates are only allowed for active vehicles.',
+      );
+
+    if (changed) {
+      await this.refreshOdometerScheduleStatuses(
+        tx,
+        updated.plateNumber,
+        updated.odometer,
+      );
+    }
+    return { vehicle: updated, changed };
+  }
+
+  private async refreshOdometerScheduleStatuses(
+    tx: Prisma.TransactionClient,
+    plateNumber: string,
+    currentOdometer: number,
+  ): Promise<void> {
+    const schedules = await tx.maintenanceSchedule.findMany({
+      where: {
+        vehicleId: plateNumber,
+        triggerType: 'ODOMETER',
+        status: {
+          in: [
+            MaintenanceStatus.PENDING,
+            MaintenanceStatus.DUE,
+            MaintenanceStatus.OVERDUE,
+          ],
+        },
+        deletedAt: null,
+      },
+      select: {
+        id: true,
+        status: true,
+        triggerType: true,
+        startingReferenceReadingKm: true,
+        odometerReading: true,
+        intervalKm: true,
+        bufferDistanceKm: true,
+        updatedAt: true,
+      },
+    });
+
+    for (const schedule of schedules) {
+      const status = odometerScheduleStatus(schedule, currentOdometer);
+      if (!status || status === schedule.status) continue;
+
+      const result = await tx.maintenanceSchedule.updateMany({
+        where: {
+          id: schedule.id,
+          status: schedule.status,
+          updatedAt: schedule.updatedAt,
+          deletedAt: null,
+        },
+        data: { status },
+      });
+      if (result.count !== 1)
+        throw new ConflictException(
+          'A maintenance schedule changed during the odometer update. Retry the operation.',
+        );
     }
   }
 

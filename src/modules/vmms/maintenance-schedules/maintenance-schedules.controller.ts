@@ -29,7 +29,6 @@ import { CancelMaintenanceScheduleDto } from './dto/cancel-maintenance-schedule.
 import { UpdateWorkOrderPriorityDto } from './dto/update-work-order-priority.dto';
 import { UpdateMaintenanceLogDto } from './dto/update-maintenance-log.dto';
 import { ReviewMaintenanceCancellationDto } from './dto/review-maintenance-cancellation.dto';
-import { UpdateMaintenanceOdometerThresholdDto } from './dto/update-maintenance-odometer-threshold.dto';
 
 type WorkOrderUploadFile = {
   originalname: string;
@@ -93,21 +92,6 @@ export class MaintenanceSchedulesController {
     return this.maintenanceSchedulesService.updatePriority(
       id,
       body.priority,
-      req.user,
-    );
-  }
-
-  @Roles(UserRole.ADMIN)
-  @Patch(':id/odometer-threshold')
-  async updateOdometerThreshold(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body() body: UpdateMaintenanceOdometerThresholdDto,
-    @Req() req: { user: ScheduleActor },
-  ) {
-    return this.maintenanceSchedulesService.updateOdometerThreshold(
-      id,
-      body.thresholdKm,
-      body.reason,
       req.user,
     );
   }
