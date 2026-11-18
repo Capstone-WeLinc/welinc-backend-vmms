@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { MaintenanceStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../../shared/prisma.service';
-import * as XLSX from 'xlsx';
+import * as ExcelJS from 'exceljs';
 import { odometerScheduleStatus } from '../maintenance-schedules/schedule-due';
 import { CreateVehicleDto } from './dto/create-vehicle.dto';
 import { UpdateVehicleDto } from './dto/update-vehicle.dto';
@@ -347,13 +347,17 @@ export class VehiclesService {
   async previewExcel(buffer: Buffer): Promise<VehicleImportResult> {
     let rows: unknown[][];
     try {
-      const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: false });
-      const firstSheet = workbook.SheetNames[0];
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(buffer as never);
+      const firstSheet = workbook.worksheets[0];
       if (!firstSheet) throw new Error('The workbook has no worksheets.');
-      rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[firstSheet], {
-        header: 1,
-        raw: false,
-        defval: '',
+      rows = [];
+      firstSheet.eachRow((row) => {
+        rows.push(
+          Array.from({ length: firstSheet.columnCount }, (_, index) =>
+            row.getCell(index + 1).value,
+          ),
+        );
       });
     } catch {
       throw new BadRequestException(
@@ -413,13 +417,17 @@ export class VehiclesService {
   async previewOdometerExcel(buffer: Buffer): Promise<OdometerImportResult> {
     let rows: unknown[][];
     try {
-      const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: false });
-      const firstSheet = workbook.SheetNames[0];
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(buffer as never);
+      const firstSheet = workbook.worksheets[0];
       if (!firstSheet) throw new Error('The workbook has no worksheets.');
-      rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[firstSheet], {
-        header: 1,
-        raw: false,
-        defval: '',
+      rows = [];
+      firstSheet.eachRow((row) => {
+        rows.push(
+          Array.from({ length: firstSheet.columnCount }, (_, index) =>
+            row.getCell(index + 1).value,
+          ),
+        );
       });
     } catch {
       throw new BadRequestException(
