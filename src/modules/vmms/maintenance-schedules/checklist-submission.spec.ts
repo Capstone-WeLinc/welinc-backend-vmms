@@ -182,7 +182,11 @@ describe('submission through MaintenanceSchedulesService', () => {
   const prisma = {
     maintenanceSchedule: { findFirst: jest.fn(), update: jest.fn() },
     checklistItem: { findMany: jest.fn() },
-    vehicle: { findFirst: jest.fn(), updateMany: jest.fn() },
+    vehicle: {
+      findFirst: jest.fn(),
+      update: jest.fn(),
+      updateMany: jest.fn(),
+    },
     $transaction: jest.fn(),
     $queryRaw: jest.fn(),
   };
@@ -225,6 +229,7 @@ describe('submission through MaintenanceSchedulesService', () => {
     });
     expect(prisma.$transaction).not.toHaveBeenCalled();
     expect(prisma.maintenanceSchedule.update).not.toHaveBeenCalled();
+    expect(prisma.vehicle.update).not.toHaveBeenCalled();
     expect(prisma.vehicle.updateMany).not.toHaveBeenCalled();
   });
 
@@ -298,6 +303,8 @@ describe('submission through MaintenanceSchedulesService', () => {
         }),
       }),
     );
+    expect(prisma.vehicle.update).not.toHaveBeenCalled();
+    expect(prisma.vehicle.updateMany).not.toHaveBeenCalled();
     expect(result.logNumber).toBe('MLG-20261109-0001');
   });
 
@@ -330,6 +337,7 @@ describe('submission through MaintenanceSchedulesService', () => {
         data: expect.not.objectContaining({ logNumber: expect.anything() }),
       }),
     );
+    expect(prisma.vehicle.updateMany).not.toHaveBeenCalled();
     expect(result.logNumber).toBe('MLG-20261101-0012');
   });
 

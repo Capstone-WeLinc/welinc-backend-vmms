@@ -350,8 +350,9 @@ export class MaintenanceSchedulesService {
   }
 
   private async resolveMileage(
-    db: Pick<Prisma.TransactionClient, 'vehicle'>,
+    db: Pick<Prisma.TransactionClient, 'vehicle' | 'vehicleMaintenanceDefault'>,
     data: CreateMaintenanceScheduleDto,
+    checklistTemplateId: string,
     previous?: MaintenanceSchedule,
   ) {
     const vehicle =
@@ -366,10 +367,69 @@ export class MaintenanceSchedulesService {
               deletedAt: null,
               isActive: true,
             },
-            select: { odometer: true },
+            select: {
+              id: true,
+              odometer: true,
+              defaultMaintenanceIntervalKm: true,
+              defaultMaintenanceBufferKm: true,
+            },
           })
         : null;
-    return validateScheduleMileage(data, previous, vehicle?.odometer);
+    if (
+      (data.triggerType ?? previous?.triggerType) !==
+      MaintenanceTriggerType.ODOMETER
+    )
+      return validateScheduleMileage(data, previous, vehicle?.odometer);
+
+    let mileageData = data;
+    if (data.useVehicleDefaults) {
+      if (!vehicle)
+        throw new BadRequestException(
+          'Select an active truck before using its maintenance defaults.',
+        );
+      const categoryDefault = await db.vehicleMaintenanceDefault.findUnique({
+        where: {
+          vehicleId_checklistTemplateId: {
+            vehicleId: vehicle.id,
+            checklistTemplateId,
+          },
+        },
+        select: { intervalKm: true, bufferDistanceKm: true },
+      });
+      const intervalKm =
+        categoryDefault?.intervalKm ?? vehicle.defaultMaintenanceIntervalKm;
+      const bufferDistanceKm =
+        categoryDefault?.bufferDistanceKm ?? vehicle.defaultMaintenanceBufferKm;
+      if (intervalKm == null || bufferDistanceKm == null)
+        throw new BadRequestException(
+          'No maintenance defaults are configured for this vehicle and category. Choose Custom and enter an interval and buffer.',
+        );
+      mileageData = {
+        ...data,
+        intervalKm: String(intervalKm),
+        bufferDistanceKm: String(bufferDistanceKm),
+      };
+    } else {
+      const intervalValue =
+        data.intervalKm === undefined
+          ? previous?.intervalKm?.toString()
+          : data.intervalKm;
+      const bufferValue =
+        data.bufferDistanceKm === undefined
+          ? previous?.bufferDistanceKm?.toString()
+          : data.bufferDistanceKm;
+      if (!previous && (!intervalValue || !bufferValue))
+        throw new BadRequestException(
+          'Custom odometer schedules require both an interval and buffer.',
+        );
+      mileageData = {
+        ...data,
+        intervalKm: intervalValue,
+        bufferDistanceKm: bufferValue,
+      };
+    }
+
+    return validateScheduleMileage(mileageData, previous, vehicle?.odometer);
   }
 
   private async resolveChecklistTemplate(
@@ -713,7 +773,11 @@ export class MaintenanceSchedulesService {
 
     const schedule = await this.prisma
       .$transaction(async (tx) => {
-        const mileage = await this.resolveMileage(tx, data);
+        const mileage = await this.resolveMileage(
+          tx,
+          data,
+          checklist.checklistTemplateId,
+        );
         return tx.maintenanceSchedule.create({
           data: {
             vehicleId: data.vehicleId,
@@ -867,7 +931,12 @@ export class MaintenanceSchedulesService {
           data,
           previous,
         );
-        const mileage = await this.resolveMileage(tx, data, previous);
+        const mileage = await this.resolveMileage(
+          tx,
+          data,
+          checklist.checklistTemplateId,
+          previous,
+        );
         const outsourcedProvider = await this.resolveOutsourcedProvider(
           tx,
           data,
@@ -911,7 +980,6 @@ export class MaintenanceSchedulesService {
           !this.isCompleted(previous.status);
 
         if (justCompleted) {
-          await this.syncCompletedOdometer(tx, updated);
           await this.createNextRecurringSchedule(tx, updated);
         }
 
@@ -1001,205 +1069,6 @@ export class MaintenanceSchedulesService {
       where: { id },
       data: { priority },
       select: { id: true, priority: true },
-    });
-  }
-
-  async updateOdometerThreshold(
-    id: string,
-    thresholdKm: number,
-    reason: unknown,
-    actor: ScheduleActor,
-  ) {
-    if (
-      !actor?.sub ||
-      !actor.roles?.some(
-        (role) => role.system === 'VMMS' && role.role === 'ADMIN',
-      )
-    ) {
-      throw new ForbiddenException(
-        'Only Admin can change a truck schedule odometer threshold.',
-      );
-    }
-    if (
-      !Number.isSafeInteger(thresholdKm) ||
-      thresholdKm <= 0 ||
-      thresholdKm > 2_147_483_647
-    ) {
-      throw new BadRequestException(
-        'Odometer threshold must be a positive whole number within the supported range.',
-      );
-    }
-    if (
-      typeof reason !== 'string' ||
-      !reason.trim() ||
-      reason.trim().length > 2000
-    ) {
-      throw new BadRequestException(
-        'A reason of 1 to 2000 characters is required to change the odometer threshold.',
-      );
-    }
-
-    return this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM maintenance_schedules WHERE id = ${id}::uuid FOR UPDATE`;
-      const schedule = await tx.maintenanceSchedule.findFirst({
-        where: { id, deletedAt: null },
-      });
-      if (!schedule)
-        throw new NotFoundException('Maintenance schedule not found.');
-      if (schedule.triggerType !== MaintenanceTriggerType.ODOMETER) {
-        throw new BadRequestException(
-          'Only odometer-based schedules have an odometer threshold.',
-        );
-      }
-      if (
-        !(
-          [
-            MaintenanceStatus.PENDING,
-            MaintenanceStatus.DUE,
-            MaintenanceStatus.OVERDUE,
-          ] as MaintenanceStatus[]
-        ).includes(schedule.status)
-      ) {
-        throw new BadRequestException(
-          'The odometer threshold cannot be changed after work has started or the work order is closed.',
-        );
-      }
-
-      const pendingCancellation =
-        await tx.maintenanceScheduleCancellation.findFirst({
-          where: {
-            scheduleId: id,
-            reviewStatus: MaintenanceCancellationReviewStatus.PENDING,
-          },
-          select: { id: true },
-        });
-      if (pendingCancellation)
-        throw new ConflictException(
-          'Resolve the pending cancellation or void request before changing this schedule threshold.',
-        );
-
-      const vehicle = await tx.vehicle.findFirst({
-        where: {
-          plateNumber: {
-            equals: schedule.vehicleId.trim(),
-            mode: 'insensitive',
-          },
-          deletedAt: null,
-          isActive: true,
-        },
-        select: { id: true, odometer: true },
-      });
-      if (
-        !vehicle ||
-        !Number.isInteger(vehicle.odometer) ||
-        vehicle.odometer < 0
-      ) {
-        throw new BadRequestException(
-          'Select an active truck with a recorded odometer reading.',
-        );
-      }
-      const currentOdometer = Math.max(
-        vehicle.odometer,
-        schedule.odometerReading ?? 0,
-      );
-      if (thresholdKm <= currentOdometer) {
-        throw new BadRequestException(
-          `The target must be in the future. This truck is at ${currentOdometer.toLocaleString()} km; choose a higher odometer threshold or schedule its maintenance immediately.`,
-        );
-      }
-
-      const previousReference =
-        schedule.startingReferenceReadingKm ??
-        schedule.odometerReading ??
-        currentOdometer;
-      const previousThreshold =
-        schedule.intervalKm == null
-          ? null
-          : previousReference + schedule.intervalKm;
-      const intervalKm = thresholdKm - currentOdometer;
-      if (!Number.isSafeInteger(intervalKm) || intervalKm <= 0) {
-        throw new BadRequestException(
-          'The odometer interval must be a positive whole number.',
-        );
-      }
-      if (
-        previousThreshold === thresholdKm &&
-        schedule.odometerReading === currentOdometer &&
-        schedule.startingReferenceReadingKm === currentOdometer
-      ) {
-        return {
-          id: schedule.id,
-          status: schedule.status,
-          odometerReading: String(currentOdometer),
-          startingReferenceReadingKm: String(currentOdometer),
-          intervalKm: String(intervalKm),
-          bufferDistanceKm: String(schedule.bufferDistanceKm ?? 0),
-          dueOdometer: thresholdKm,
-        };
-      }
-
-      const bufferDistanceKm = schedule.bufferDistanceKm ?? 0;
-      const activationOdometer = Math.max(
-        currentOdometer,
-        thresholdKm - bufferDistanceKm,
-      );
-      const nextStatus =
-        currentOdometer < activationOdometer
-          ? MaintenanceStatus.PENDING
-          : MaintenanceStatus.DUE;
-      const changed = await tx.maintenanceSchedule.updateMany({
-        where: {
-          id,
-          status: schedule.status,
-          updatedAt: schedule.updatedAt,
-          deletedAt: null,
-        },
-        data: {
-          odometerReading: currentOdometer,
-          startingReferenceReadingKm: currentOdometer,
-          intervalKm,
-          status: nextStatus,
-        },
-      });
-      if (changed.count !== 1)
-        throw new ConflictException(
-          'The schedule changed. Refresh before editing its threshold.',
-        );
-
-      const scheduleKey = `${schedule.workOrderNumber}:dueOdometer`;
-      await tx.vehicleAuditLog.createMany({
-        data: [
-          {
-            vehicleId: vehicle.id,
-            userId: actor.sub,
-            email: actor.email,
-            action: 'SCHEDULE_ODOMETER_THRESHOLD_UPDATED',
-            fieldName: scheduleKey,
-            previousValue:
-              previousThreshold == null ? null : String(previousThreshold),
-            newValue: String(thresholdKm),
-          },
-          {
-            vehicleId: vehicle.id,
-            userId: actor.sub,
-            email: actor.email,
-            action: 'SCHEDULE_ODOMETER_THRESHOLD_UPDATED',
-            fieldName: `${schedule.workOrderNumber}:reason`,
-            previousValue: null,
-            newValue: reason.trim(),
-          },
-        ],
-      });
-
-      return {
-        id: schedule.id,
-        status: nextStatus,
-        odometerReading: String(currentOdometer),
-        startingReferenceReadingKm: String(currentOdometer),
-        intervalKm: String(intervalKm),
-        bufferDistanceKm: String(bufferDistanceKm),
-        dueOdometer: thresholdKm,
-      };
     });
   }
 
@@ -2185,24 +2054,6 @@ export class MaintenanceSchedulesService {
               `Odometer reading cannot be lower than the last recorded reading (${vehicle.odometer}).`,
             );
           }
-
-          if (odometerToRecord > vehicle.odometer) {
-            await tx.vehicle.update({
-              where: { id: vehicle.id },
-              data: { odometer: odometerToRecord },
-            });
-            await tx.vehicleAuditLog.create({
-              data: {
-                vehicleId: vehicle.id,
-                userId: actor.sub,
-                email: actor.email,
-                action: 'ODOMETER_RECORDED',
-                fieldName: 'odometer',
-                previousValue: String(vehicle.odometer),
-                newValue: String(odometerToRecord),
-              },
-            });
-          }
         }
 
         const updated = await tx.maintenanceSchedule.update({
@@ -2216,7 +2067,6 @@ export class MaintenanceSchedulesService {
         });
         let nextSchedule: MaintenanceSchedule | null = null;
         if (workflow.status === MaintenanceStatus.COMPLETED) {
-          await this.syncCompletedOdometer(tx, updated);
           nextSchedule = await this.createNextRecurringSchedule(tx, updated);
         }
         return { schedule: updated, nextSchedule };
@@ -2682,24 +2532,6 @@ export class MaintenanceSchedulesService {
     return assignedMechanic;
   }
 
-  private async syncCompletedOdometer(
-    tx: Prisma.TransactionClient,
-    schedule: {
-      vehicleId: string;
-      odometerReading: number | null;
-    },
-  ): Promise<void> {
-    if (schedule.odometerReading == null) return;
-
-    await tx.vehicle.updateMany({
-      where: {
-        plateNumber: schedule.vehicleId,
-        odometer: { lt: schedule.odometerReading },
-      },
-      data: { odometer: schedule.odometerReading },
-    });
-  }
-
   private async createNextRecurringSchedule(
     tx: Prisma.TransactionClient,
     schedule: MaintenanceSchedule,
@@ -2736,13 +2568,10 @@ export class MaintenanceSchedulesService {
           select: { odometer: true },
         })
       : null;
-    const readings = [schedule.odometerReading, vehicle?.odometer].filter(
-      (reading): reading is number =>
-        typeof reading === 'number' &&
-        Number.isInteger(reading) &&
-        reading >= 0,
-    );
-    const nextOdometer = readings.length ? Math.max(...readings) : null;
+    const nextOdometer =
+      vehicle && Number.isInteger(vehicle.odometer) && vehicle.odometer >= 0
+        ? vehicle.odometer
+        : null;
     if (odometerRecurring && nextOdometer === null) {
       throw new BadRequestException(
         'Record a current odometer reading before approving recurring maintenance.',

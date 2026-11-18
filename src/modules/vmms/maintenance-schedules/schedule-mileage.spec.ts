@@ -185,19 +185,120 @@ describe('Odometer schedule validation', () => {
   });
   it('looks up an active vehicle rather than trusting the request reading', async () => {
     const db = {
-      vehicle: { findFirst: jest.fn().mockResolvedValue({ odometer: 16000 }) },
+      vehicle: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'vehicle-1',
+          odometer: 16000,
+          defaultMaintenanceIntervalKm: null,
+          defaultMaintenanceBufferKm: null,
+        }),
+      },
+      vehicleMaintenanceDefault: { findUnique: jest.fn() },
     };
     const service = new MaintenanceSchedulesService(db as any);
-    await expect((service as any).resolveMileage(db, input)).rejects.toThrow(
-      'must be greater',
-    );
+    await expect(
+      (service as any).resolveMileage(db, input, 'template-1'),
+    ).rejects.toThrow('must be greater');
     expect(db.vehicle.findFirst).toHaveBeenCalledWith({
       where: {
         plateNumber: { equals: input.vehicleId, mode: 'insensitive' },
         deletedAt: null,
         isActive: true,
       },
-      select: { odometer: true },
+      select: {
+        id: true,
+        odometer: true,
+        defaultMaintenanceIntervalKm: true,
+        defaultMaintenanceBufferKm: true,
+      },
     });
+  });
+
+  it('uses a vehicle/category default pair when selected', async () => {
+    const db = {
+      vehicle: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'vehicle-1',
+          odometer: 12000,
+          defaultMaintenanceIntervalKm: 5000,
+          defaultMaintenanceBufferKm: 500,
+        }),
+      },
+      vehicleMaintenanceDefault: {
+        findUnique: jest.fn().mockResolvedValue({
+          intervalKm: 8000,
+          bufferDistanceKm: 800,
+        }),
+      },
+    };
+    const service = new MaintenanceSchedulesService(db as any);
+
+    await expect(
+      (service as any).resolveMileage(
+        db,
+        {
+          ...input,
+          startingReferenceReadingKm: '12000',
+          useVehicleDefaults: true,
+        },
+        'template-1',
+      ),
+    ).resolves.toMatchObject({
+      intervalKm: 8000,
+      bufferDistanceKm: 800,
+      startingReferenceReadingKm: 12000,
+    });
+  });
+
+  it('falls back to vehicle base defaults when no category override exists', async () => {
+    const db = {
+      vehicle: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'vehicle-1',
+          odometer: 12000,
+          defaultMaintenanceIntervalKm: 5000,
+          defaultMaintenanceBufferKm: 500,
+        }),
+      },
+      vehicleMaintenanceDefault: {
+        findUnique: jest.fn().mockResolvedValue(null),
+      },
+    };
+    const service = new MaintenanceSchedulesService(db as any);
+
+    await expect(
+      (service as any).resolveMileage(
+        db,
+        {
+          ...input,
+          startingReferenceReadingKm: '12000',
+          useVehicleDefaults: true,
+        },
+        'template-1',
+      ),
+    ).resolves.toMatchObject({ intervalKm: 5000, bufferDistanceKm: 500 });
+  });
+
+  it('requires custom interval and buffer when no default is selected', async () => {
+    const db = {
+      vehicle: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'vehicle-1',
+          odometer: 12000,
+          defaultMaintenanceIntervalKm: 5000,
+          defaultMaintenanceBufferKm: 500,
+        }),
+      },
+      vehicleMaintenanceDefault: { findUnique: jest.fn() },
+    };
+    const service = new MaintenanceSchedulesService(db as any);
+
+    await expect(
+      (service as any).resolveMileage(
+        db,
+        { ...input, bufferDistanceKm: '' },
+        'template-1',
+      ),
+    ).rejects.toThrow('require both an interval and buffer');
   });
 });

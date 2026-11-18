@@ -21,7 +21,6 @@ describe('scheduling HTTP permissions', () => {
     cancel: jest.fn(),
     reviewCancellationRequest: jest.fn(),
     reviewMaintenanceLogUnlock: jest.fn(),
-    updateOdometerThreshold: jest.fn(),
     remove: jest.fn(),
     cancelMaintenanceLog: jest.fn(),
     voidMaintenanceLog: jest.fn(),
@@ -135,30 +134,19 @@ describe('scheduling HTTP permissions', () => {
       expect.objectContaining({ roles: [vmms(UserRole.ADMIN)] }),
     );
   });
-  it('allows only Admin to update an odometer maintenance threshold', async () => {
-    const id = '00000000-0000-4000-8000-000000000001';
-    const path = `/maintenance-schedules/${id}/odometer-threshold`;
-    const body = { thresholdKm: 25000, reason: 'Update service target' };
-
-    await request(app.getHttpServer())
-      .patch(path)
-      .set('Authorization', `Bearer ${token([vmms(UserRole.OPERATIONS)])}`)
-      .send(body)
-      .expect(403);
-    expect(service.updateOdometerThreshold).not.toHaveBeenCalled();
-
-    await request(app.getHttpServer())
-      .patch(path)
-      .set('Authorization', `Bearer ${token([vmms(UserRole.ADMIN)])}`)
-      .send(body)
-      .expect(200);
-    expect(service.updateOdometerThreshold).toHaveBeenCalledWith(
-      id,
-      body.thresholdKm,
-      body.reason,
-      expect.objectContaining({ roles: [vmms(UserRole.ADMIN)] }),
-    );
-  });
+  it.each([UserRole.ADMIN, UserRole.OPERATIONS])(
+    'does not expose per-schedule odometer threshold edits to %s',
+    async (role) => {
+      await request(app.getHttpServer())
+        .patch(
+          '/maintenance-schedules/00000000-0000-4000-8000-000000000001/odometer-threshold',
+        )
+        .set('Authorization', `Bearer ${token([vmms(role)])}`)
+        .send({ thresholdKm: 25000, reason: 'Update service target' })
+        .expect(404);
+      expect(service.update).not.toHaveBeenCalled();
+    },
+  );
   it('allows only Admin to use the all-stage maintenance-log cancellation endpoint', async () => {
     const path =
       '/maintenance-schedules/00000000-0000-4000-8000-000000000001/cancel-log';

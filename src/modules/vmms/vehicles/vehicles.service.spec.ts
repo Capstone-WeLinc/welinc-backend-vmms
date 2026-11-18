@@ -7,13 +7,14 @@ describe('VehiclesService garage branch assignment', () => {
   const prisma = {
     $transaction: jest.fn(),
     garage: { findFirst: jest.fn(), findMany: jest.fn() },
-    maintenanceSchedule: { findMany: jest.fn() },
+    maintenanceSchedule: { findMany: jest.fn(), updateMany: jest.fn() },
     vehicleAuditLog: { createMany: jest.fn(), findMany: jest.fn() },
     vehicle: {
       findMany: jest.fn(),
       findUnique: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
+      updateMany: jest.fn(),
     },
   };
   const service = new VehiclesService(prisma as unknown as PrismaService);
@@ -32,6 +33,7 @@ describe('VehiclesService garage branch assignment', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     prisma.$transaction.mockImplementation((callback) => callback(prisma));
+    prisma.maintenanceSchedule.findMany.mockResolvedValue([]);
   });
 
   it('requires an active registered branch when creating a vehicle', async () => {
@@ -166,17 +168,17 @@ describe('VehiclesService garage branch assignment', () => {
       ...data,
       garage: { id: 'garage-1', name: 'Marikina' },
     }));
-    prisma.vehicleAuditLog.createMany.mockResolvedValue({ count: 2 });
+    prisma.vehicleAuditLog.createMany.mockResolvedValue({ count: 1 });
 
-    await service.update(
-      'vehicle-1',
-      { make: '  Hino  ', odometer: 125 },
-      {
-        sub: 'operations-user',
-        email: 'operations@example.test',
-      },
+    const legacyInput = { make: '  Hino  ', odometer: 125 };
+    await service.update('vehicle-1', legacyInput, {
+      sub: 'operations-user',
+      email: 'operations@example.test',
+    });
+
+    expect(prisma.vehicle.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { make: 'Hino' } }),
     );
-
     expect(prisma.vehicleAuditLog.createMany).toHaveBeenCalledWith({
       data: [
         {
@@ -188,11 +190,48 @@ describe('VehiclesService garage branch assignment', () => {
           previousValue: 'Isuzu',
           newValue: 'Hino',
         },
+      ],
+    });
+  });
+
+  it('updates and audits the master odometer atomically', async () => {
+    prisma.vehicle.findUnique
+      .mockResolvedValueOnce({
+        odometer: 100,
+        isActive: true,
+        deletedAt: null,
+      })
+      .mockResolvedValueOnce({
+        id: 'vehicle-1',
+        odometer: 125,
+        isActive: true,
+        deletedAt: null,
+        garage: null,
+      });
+    prisma.vehicle.updateMany.mockResolvedValue({ count: 1 });
+    prisma.vehicleAuditLog.createMany.mockResolvedValue({ count: 1 });
+
+    await service.updateOdometer('vehicle-1', 125, {
+      sub: 'operations-user',
+      email: 'operations@example.test',
+    });
+
+    expect(prisma.vehicle.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'vehicle-1',
+        odometer: 100,
+        isActive: true,
+        deletedAt: null,
+      },
+      data: { odometer: 125 },
+    });
+    expect(prisma.vehicleAuditLog.createMany).toHaveBeenCalledWith({
+      data: [
         {
           vehicleId: 'vehicle-1',
           userId: 'operations-user',
           email: 'operations@example.test',
-          action: 'VEHICLE_UPDATED',
+          action: 'ODOMETER_UPDATED',
           fieldName: 'odometer',
           previousValue: '100',
           newValue: '125',
@@ -200,6 +239,154 @@ describe('VehiclesService garage branch assignment', () => {
       ],
     });
   });
+
+  it('refreshes eligible odometer schedule statuses in the odometer transaction', async () => {
+    prisma.vehicle.findUnique
+      .mockResolvedValueOnce({
+        odometer: 10000,
+        isActive: true,
+        deletedAt: null,
+      })
+      .mockResolvedValueOnce({
+        id: 'vehicle-1',
+        plateNumber: 'ABC 1234',
+        odometer: 14500,
+        isActive: true,
+        deletedAt: null,
+        garage: null,
+      });
+    prisma.vehicle.updateMany.mockResolvedValue({ count: 1 });
+    prisma.vehicleAuditLog.createMany.mockResolvedValue({ count: 1 });
+    prisma.maintenanceSchedule.findMany.mockResolvedValue([
+      {
+        id: 'schedule-due',
+        status: 'PENDING',
+        triggerType: 'ODOMETER',
+        startingReferenceReadingKm: 10000,
+        odometerReading: 10000,
+        intervalKm: 5000,
+        bufferDistanceKm: 500,
+        updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+      },
+      {
+        id: 'schedule-overdue',
+        status: 'DUE',
+        triggerType: 'ODOMETER',
+        startingReferenceReadingKm: 10000,
+        odometerReading: 10000,
+        intervalKm: 4000,
+        bufferDistanceKm: 500,
+        updatedAt: new Date('2026-01-02T00:00:00.000Z'),
+      },
+      {
+        id: 'schedule-in-progress',
+        status: 'IN_PROGRESS',
+        triggerType: 'ODOMETER',
+        startingReferenceReadingKm: 10000,
+        odometerReading: 10000,
+        intervalKm: 3000,
+        bufferDistanceKm: 500,
+        updatedAt: new Date('2026-01-03T00:00:00.000Z'),
+      },
+    ]);
+    prisma.maintenanceSchedule.updateMany.mockResolvedValue({ count: 1 });
+
+    await service.updateOdometer('vehicle-1', 14500, {
+      sub: 'operations-user',
+      email: 'operations@example.test',
+    });
+
+    expect(prisma.maintenanceSchedule.updateMany).toHaveBeenNthCalledWith(1, {
+      where: {
+        id: 'schedule-due',
+        status: 'PENDING',
+        updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+        deletedAt: null,
+      },
+      data: { status: 'DUE' },
+    });
+    expect(prisma.maintenanceSchedule.updateMany).toHaveBeenNthCalledWith(2, {
+      where: {
+        id: 'schedule-overdue',
+        status: 'DUE',
+        updatedAt: new Date('2026-01-02T00:00:00.000Z'),
+        deletedAt: null,
+      },
+      data: { status: 'OVERDUE' },
+    });
+    expect(prisma.maintenanceSchedule.updateMany).toHaveBeenCalledTimes(2);
+  });
+
+  it('accepts an unchanged odometer without writing or auditing', async () => {
+    prisma.vehicle.findUnique.mockResolvedValue({
+      id: 'vehicle-1',
+      odometer: 100,
+      isActive: true,
+      deletedAt: null,
+      garage: null,
+    });
+
+    await service.updateOdometer('vehicle-1', 100, {
+      sub: 'operations-user',
+      email: 'operations@example.test',
+    });
+
+    expect(prisma.vehicle.updateMany).not.toHaveBeenCalled();
+    expect(prisma.vehicleAuditLog.createMany).not.toHaveBeenCalled();
+    expect(prisma.maintenanceSchedule.findMany).not.toHaveBeenCalled();
+  });
+
+  it('rejects a lower or stale odometer without writing', async () => {
+    prisma.vehicle.findUnique
+      .mockResolvedValueOnce({
+        odometer: 150,
+        isActive: true,
+        deletedAt: null,
+      })
+      .mockResolvedValueOnce({
+        odometer: 175,
+        isActive: true,
+        deletedAt: null,
+      });
+    prisma.vehicle.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect(
+      service.updateOdometer('vehicle-1', 160, {
+        sub: 'operations-user',
+        email: 'operations@example.test',
+      }),
+    ).rejects.toThrow('cannot be lower than the current reading (175)');
+    expect(prisma.vehicleAuditLog.createMany).not.toHaveBeenCalled();
+  });
+
+  it('rejects odometer updates for inactive vehicles', async () => {
+    prisma.vehicle.findUnique.mockResolvedValue({
+      odometer: 100,
+      isActive: false,
+      deletedAt: null,
+    });
+
+    await expect(
+      service.updateOdometer('vehicle-1', 125, {
+        sub: 'operations-user',
+        email: 'operations@example.test',
+      }),
+    ).rejects.toThrow('only allowed for active vehicles');
+    expect(prisma.vehicle.updateMany).not.toHaveBeenCalled();
+  });
+
+  it.each([0, 1.5, 2147483648, Number.NaN])(
+    'rejects invalid odometer value %p',
+    async (odometer) => {
+      await expect(
+        service.updateOdometer('vehicle-1', odometer, {
+          sub: 'operations-user',
+          email: 'operations@example.test',
+        }),
+      ).rejects.toThrow('positive whole-number odometer');
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    },
+  );
 
   it('does not create edit audit rows when submitted values are unchanged', async () => {
     const unchanged = {
