@@ -56,6 +56,8 @@ export class FuelEscalationService {
                 !person.temporaryRoles.includes(role),
             ),
           );
+          if (!recipients.length) continue;
+
           await this.prisma.$transaction(async (tx) => {
             // Claim this escalation stage atomically so overlapping workers
             // cannot send duplicate notifications for the same anomaly.
@@ -63,7 +65,7 @@ export class FuelEscalationService {
               where: { id: anomaly.id, status: 'OPEN', [stage.field]: null },
               data: { [stage.field]: now },
             });
-            if (!claimed.count || !recipients.length) return;
+            if (!claimed.count) return;
 
             // Re-read at send time so Day 3 recipients get the latest note and
             // reports attached after the anomaly was first flagged.

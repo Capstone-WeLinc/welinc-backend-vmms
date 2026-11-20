@@ -41,6 +41,14 @@ export const envSchema = z.object({
     blank,
     z.string().trim().min(1).default('vmms-uploads'),
   ),
+  AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT: z.preprocess(
+    blank,
+    z.url({ protocol: /^https$/ }).optional(),
+  ),
+  AZURE_DOCUMENT_INTELLIGENCE_KEY: z.preprocess(
+    blank,
+    z.string().trim().optional(),
+  ),
 });
 
 const productionUrlNames = [
@@ -50,6 +58,7 @@ const productionUrlNames = [
   'PORTAL_URL',
   'AUTH_PUBLIC_URL',
   'STORAGE_ACCOUNT_URL',
+  'AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT',
 ] as const;
 const localHosts = new Set(['localhost', '127.0.0.1', '[::1]']);
 
@@ -73,6 +82,14 @@ export function validateEnv(raw: Record<string, unknown>): Env {
     const productionDetails = productionUrlIssues(raw);
     throw new Error(
       `Environment check failed:\n  ${[...details, ...productionDetails].join('\n  ')}`,
+    );
+  }
+  if (
+    Boolean(parsed.data.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT) !==
+    Boolean(parsed.data.AZURE_DOCUMENT_INTELLIGENCE_KEY)
+  ) {
+    throw new Error(
+      'Environment check failed:\n  AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT and AZURE_DOCUMENT_INTELLIGENCE_KEY must be configured together',
     );
   }
   const productionDetails = productionUrlIssues(raw);
