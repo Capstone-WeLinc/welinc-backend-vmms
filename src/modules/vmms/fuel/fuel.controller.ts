@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -21,7 +22,12 @@ import { JwtAuthGuard } from '../../../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../../auth/guards/roles.guard';
 import { RoleSystem, Roles } from '../../../auth/decorators/roles.decorator';
 import { FuelActor, FuelService } from './fuel.service';
-import { MAX_FUEL_ANOMALY_ATTACHMENT_BYTES } from './fuel.constants';
+import {
+  MAX_FUEL_ANOMALY_ATTACHMENT_BYTES,
+  MAX_FUEL_RECEIPT_BYTES,
+} from './fuel.constants';
+import { FuelReceiptScannerService } from './fuel-receipt-scanner.service';
+import type { FuelReceiptFile } from './fuel-receipt-file';
 import {
   FuelAcknowledgmentDto,
   FuelAnomalyNoteDto,
@@ -32,11 +38,39 @@ import {
   VoidFuelDto,
 } from './fuel.dto';
 
+function fuelReceiptUploadInterceptor() {
+  return FileInterceptor('file', {
+    limits: { fileSize: MAX_FUEL_RECEIPT_BYTES + 1 },
+    fileFilter: (_req, file, callback) => {
+      const extension = file.originalname
+        .toLowerCase()
+        .slice(file.originalname.lastIndexOf('.'));
+      const expectedMime =
+        extension === '.jpg' || extension === '.jpeg'
+          ? 'image/jpeg'
+          : extension === '.png'
+            ? 'image/png'
+            : null;
+      if (!expectedMime || file.mimetype.toLowerCase() !== expectedMime) {
+        callback(
+          new BadRequestException('Receipt must be a JPG, JPEG, or PNG image.'),
+          false,
+        );
+        return;
+      }
+      callback(null, true);
+    },
+  });
+}
+
 @Controller('fuel')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @RoleSystem(SystemType.VMMS)
 export class FuelController {
-  constructor(private readonly fuel: FuelService) {}
+  constructor(
+    private readonly fuel: FuelService,
+    private readonly receiptScanner: FuelReceiptScannerService,
+  ) {}
 
   @Roles(UserRole.ADMIN, UserRole.OPERATIONS)
   @Get('stations')
@@ -80,6 +114,50 @@ export class FuelController {
   ) {
     return this.fuel.list(req.user, from, to);
   }
+
+  @Roles(UserRole.OPERATIONS)
+  @Post('receipt/scan')
+  @UseInterceptors(fuelReceiptUploadInterceptor())
+  scanReceipt(
+    @UploadedFile() file: FuelReceiptFile | undefined,
+    @Req() req: { user: FuelActor },
+  ) {
+    return this.receiptScanner.scan(file, req.user.sub);
+  }
+
+  @Roles(UserRole.OPERATIONS)
+  @Post('with-receipt')
+  @UseInterceptors(fuelReceiptUploadInterceptor())
+  createWithReceipt(
+    @Body() dto: FuelFillUpDto,
+    @UploadedFile() file: FuelReceiptFile | undefined,
+    @Req() req: { user: FuelActor },
+  ) {
+    if (!file)
+      throw new BadRequestException(
+        'Select a receipt image to save with this fuel entry.',
+      );
+    return this.fuel.create(dto, req.user, file);
+  }
+
+  @Roles(UserRole.OPERATIONS)
+  @Get(':id/receipt')
+  async getReceipt(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: { user: FuelActor },
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const file = await this.fuel.getReceiptAttachment(id, req.user);
+    response.setHeader('Content-Type', file.contentType);
+    response.setHeader('Cache-Control', 'private, no-store');
+    response.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${file.name.replace(/["\\\r\n]/g, '_')}"`,
+    );
+    response.setHeader('X-Content-Type-Options', 'nosniff');
+    return new StreamableFile(file.stream);
+  }
+
   @Roles(UserRole.OPERATIONS)
   @Post()
   create(@Body() dto: FuelFillUpDto, @Req() req: { user: FuelActor }) {
@@ -125,8 +203,7 @@ export class FuelController {
     @Param('id', ParseUUIDPipe) id: string,
     @UploadedFile()
     file:
-      | { originalname: string; mimetype: string; buffer: Buffer }
-      | undefined,
+      { originalname: string; mimetype: string; buffer: Buffer } | undefined,
     @Req() req: { user: FuelActor },
   ) {
     return this.fuel.uploadAnomalyAttachment(id, file, req.user);

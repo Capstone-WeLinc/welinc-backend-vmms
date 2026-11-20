@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
   Optional,
   PayloadTooLargeException,
@@ -18,6 +19,10 @@ import {
 import type { FuelFillUpDto } from './fuel.dto';
 import { computeFuelEfficiency, isFuelEfficiencyAnomaly } from './fuel-math';
 import { MAX_FUEL_ANOMALY_ATTACHMENT_BYTES } from './fuel.constants';
+import {
+  type FuelReceiptFile,
+  validateFuelReceiptFile,
+} from './fuel-receipt-file';
 
 export type FuelActor = {
   sub: string;
@@ -28,6 +33,7 @@ const includeFuel = {
   vehicle: { select: { id: true, plateNumber: true, model: true } },
   station: true,
   anomaly: true,
+  receipt: true,
 } as const;
 type FuelTransaction = Prisma.TransactionClient | PrismaService;
 type FuelEntry = Prisma.FuelFillUpGetPayload<{ include: typeof includeFuel }>;
@@ -51,6 +57,8 @@ const currentFuelDate = () => {
 
 @Injectable()
 export class FuelService {
+  private readonly logger = new Logger(FuelService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     @Optional() private readonly storage?: BlobStorageService,
@@ -184,8 +192,15 @@ export class FuelService {
     return Promise.all(entries.map((entry) => this.toResponse(entry)));
   }
 
-  async create(dto: FuelFillUpDto, actor: FuelActor) {
+  async create(
+    dto: FuelFillUpDto,
+    actor: FuelActor,
+    receiptFile?: FuelReceiptFile,
+  ) {
     this.require(actor, 'OPERATIONS');
+    const receiptImage = receiptFile
+      ? validateFuelReceiptFile(receiptFile)
+      : undefined;
     const vehicle = await this.prisma.vehicle.findFirst({
       where: { id: dto.vehicleId, deletedAt: null, isActive: true },
     });
@@ -209,108 +224,190 @@ export class FuelService {
       );
     if (dto.date > currentFuelDate())
       throw new BadRequestException('Fuel-up date cannot be in the future.');
-    const entry = await this.prisma.$transaction(async (tx) => {
-      const deviation = await this.currentAnomalyThreshold(tx);
-      const created = await tx.fuelFillUp.create({
-        data: {
-          vehicleId: vehicle.id,
-          stationId: station.id,
-          enteredById: actor.sub,
-          entryDate: new Date(`${dto.date}T00:00:00.000Z`),
-          liters: dto.liters,
-          pricePerLiter: dto.pricePerLiter,
-          totalCost: Math.round(dto.liters * dto.pricePerLiter * 100) / 100,
-          odometer: dto.odometer,
-          isFullTank: dto.isFullTank,
-          filledBy: dto.filledBy.trim(),
-        },
-        include: includeFuel,
-      });
-      await tx.fuelAuditLog.create({
-        data: {
-          fillUpId: created.id,
-          actorId: actor.sub,
-          actorEmail: actor.email,
-          action: 'CREATED',
-        },
-      });
-      const efficiency = await this.efficiencyFor(tx, created);
-      if (dto.isFullTank && efficiency != null) {
-        const previousCycles = await tx.fuelFillUp.findMany({
-          where: {
+    const fillUpId = randomUUID();
+    const receiptId = receiptFile ? randomUUID() : null;
+    const storageName =
+      receiptFile && receiptImage && receiptId
+        ? `fuel-receipts/${fillUpId}/${receiptId}${receiptImage.extension}`
+        : null;
+    const fileStorage = receiptFile ? this.fileStorage() : undefined;
+
+    if (receiptFile && receiptImage && storageName && fileStorage) {
+      try {
+        await fileStorage.put(
+          storageName,
+          receiptFile.buffer,
+          receiptImage.contentType,
+        );
+      } catch (error) {
+        await this.cleanupReceiptStorage(fileStorage, storageName);
+        throw error;
+      }
+    }
+
+    let entry: { id: string };
+    try {
+      entry = await this.prisma.$transaction(async (tx) => {
+        const deviation = await this.currentAnomalyThreshold(tx);
+        const created = await tx.fuelFillUp.create({
+          data: {
+            id: fillUpId,
             vehicleId: vehicle.id,
-            id: { not: created.id },
-            isVoided: false,
-            isFullTank: true,
-            OR: [
-              { odometer: { lt: created.odometer } },
-              {
-                odometer: created.odometer,
-                createdAt: { lt: created.createdAt },
-              },
-            ],
+            stationId: station.id,
+            enteredById: actor.sub,
+            entryDate: new Date(`${dto.date}T00:00:00.000Z`),
+            liters: dto.liters,
+            pricePerLiter: dto.pricePerLiter,
+            totalCost: Math.round(dto.liters * dto.pricePerLiter * 100) / 100,
+            odometer: dto.odometer,
+            isFullTank: dto.isFullTank,
+            filledBy: dto.filledBy.trim(),
           },
-          orderBy: [{ odometer: 'desc' }, { createdAt: 'desc' }],
-          take: 2,
+          include: includeFuel,
         });
-        if (previousCycles.length >= 2) {
-          const rollingEfficiencies = await this.priorEfficiencies(
-            tx,
-            vehicle.id,
-            created,
-          );
-          const average = rollingEfficiencies.length
-            ? rollingEfficiencies.reduce((a, b) => a + b, 0) /
-              rollingEfficiencies.length
-            : null;
-          if (
-            average != null &&
-            isFuelEfficiencyAnomaly(efficiency, average, deviation)
-          ) {
-            await tx.fuelAnomaly.create({
-              data: {
-                fillUpId: created.id,
-                vehicleId: vehicle.id,
-                efficiency,
-                rollingAverage: average,
-              },
-            });
-            const recipients = await tx.vmmsPerson.findMany({
-              where: {
-                isActive: true,
-                deleted: false,
-                erased: false,
-                roles: { hasSome: ['ADMIN', 'OPERATIONS'] },
-              },
-              select: { authUserId: true, roles: true, temporaryRoles: true },
-            });
-            const eligible = recipients.filter((person) =>
-              person.roles.some(
-                (role) =>
-                  ['ADMIN', 'OPERATIONS'].includes(role) &&
-                  !person.temporaryRoles.includes(role),
-              ),
+        if (receiptFile && receiptImage && receiptId && storageName) {
+          await tx.fuelReceiptAttachment.create({
+            data: {
+              id: receiptId,
+              fillUpId: created.id,
+              name: `fuel-receipt${receiptImage.extension}`,
+              storageName,
+              contentType: receiptImage.contentType,
+              uploadedById: actor.sub,
+            },
+          });
+        }
+        await tx.fuelAuditLog.create({
+          data: {
+            fillUpId: created.id,
+            actorId: actor.sub,
+            actorEmail: actor.email,
+            action: 'CREATED',
+            ...(receiptId
+              ? { details: { receiptAttachmentId: receiptId } }
+              : {}),
+          },
+        });
+        const efficiency = await this.efficiencyFor(tx, created);
+        if (dto.isFullTank && efficiency != null) {
+          const previousCycles = await tx.fuelFillUp.findMany({
+            where: {
+              vehicleId: vehicle.id,
+              id: { not: created.id },
+              isVoided: false,
+              isFullTank: true,
+              OR: [
+                { odometer: { lt: created.odometer } },
+                {
+                  odometer: created.odometer,
+                  createdAt: { lt: created.createdAt },
+                },
+              ],
+            },
+            orderBy: [{ odometer: 'desc' }, { createdAt: 'desc' }],
+            take: 2,
+          });
+          if (previousCycles.length >= 2) {
+            const rollingEfficiencies = await this.priorEfficiencies(
+              tx,
+              vehicle.id,
+              created,
             );
-            if (eligible.length)
-              await tx.notification.createMany({
-                data: eligible.map((person) => ({
-                  userId: person.authUserId,
-                  title: 'Fuel efficiency anomaly',
-                  message: `${vehicle.plateNumber} recorded ${efficiency.toFixed(1)} km/L versus its ${average.toFixed(1)} km/L rolling average.`,
-                  type: 'warning',
-                })),
+            const average = rollingEfficiencies.length
+              ? rollingEfficiencies.reduce((a, b) => a + b, 0) /
+                rollingEfficiencies.length
+              : null;
+            if (
+              average != null &&
+              isFuelEfficiencyAnomaly(efficiency, average, deviation)
+            ) {
+              await tx.fuelAnomaly.create({
+                data: {
+                  fillUpId: created.id,
+                  vehicleId: vehicle.id,
+                  efficiency,
+                  rollingAverage: average,
+                },
               });
+              const recipients = await tx.vmmsPerson.findMany({
+                where: {
+                  isActive: true,
+                  deleted: false,
+                  erased: false,
+                  roles: { hasSome: ['ADMIN', 'OPERATIONS'] },
+                },
+                select: { authUserId: true, roles: true, temporaryRoles: true },
+              });
+              const eligible = recipients.filter((person) =>
+                person.roles.some(
+                  (role) =>
+                    ['ADMIN', 'OPERATIONS'].includes(role) &&
+                    !person.temporaryRoles.includes(role),
+                ),
+              );
+              if (eligible.length)
+                await tx.notification.createMany({
+                  data: eligible.map((person) => ({
+                    userId: person.authUserId,
+                    title: 'Fuel efficiency anomaly',
+                    message: `${vehicle.plateNumber} recorded ${efficiency.toFixed(1)} km/L versus its ${average.toFixed(1)} km/L rolling average.`,
+                    type: 'warning',
+                  })),
+                });
+            }
           }
         }
-      }
-      return created;
-    });
+        return created;
+      });
+    } catch (error) {
+      if (fileStorage && storageName)
+        await this.cleanupReceiptStorage(fileStorage, storageName);
+      throw error;
+    }
     return this.toResponse(
       await this.prisma.fuelFillUp.findUniqueOrThrow({
         where: { id: entry.id },
         include: includeFuel,
       }),
     );
+  }
+
+  async getReceiptAttachment(fillUpId: string, actor: FuelActor) {
+    this.require(actor, 'OPERATIONS');
+    const attachment = await this.prisma.fuelReceiptAttachment.findUnique({
+      where: { fillUpId },
+    });
+    if (!attachment)
+      throw new NotFoundException('Fuel receipt attachment not found.');
+    const extension = extname(attachment.storageName).toLowerCase();
+    const contentType = extension === '.png' ? 'image/png' : 'image/jpeg';
+    if (
+      attachment.storageName !==
+        `fuel-receipts/${fillUpId}/${attachment.id}${extension}` ||
+      !['.jpg', '.jpeg', '.png'].includes(extension) ||
+      attachment.contentType !== contentType
+    )
+      throw new NotFoundException('Fuel receipt attachment not found.');
+    return {
+      name: attachment.name,
+      contentType,
+      stream: Readable.from([
+        await this.fileStorage().get(attachment.storageName),
+      ]),
+    };
+  }
+
+  private async cleanupReceiptStorage(
+    storage: BlobStorageService,
+    storageName: string,
+  ) {
+    try {
+      await storage.delete(storageName);
+    } catch {
+      this.logger.error(
+        'Unable to remove an orphaned fuel receipt object after a failed save.',
+      );
+    }
   }
 
   async void(id: string, reason: string, actor: FuelActor) {
@@ -505,8 +602,7 @@ export class FuelService {
   async uploadAnomalyAttachment(
     id: string,
     file:
-      | { originalname: string; mimetype: string; buffer: Buffer }
-      | undefined,
+      { originalname: string; mimetype: string; buffer: Buffer } | undefined,
     actor: FuelActor,
   ) {
     this.require(actor, 'OPERATIONS');
@@ -775,6 +871,14 @@ export class FuelService {
         fuelClassification === 'Below Average'
           ? 'below'
           : 'normal',
+      receipt: entry.receipt
+        ? {
+            id: entry.receipt.id,
+            name: entry.receipt.name,
+            contentType: entry.receipt.contentType,
+            createdAt: entry.receipt.createdAt.toISOString(),
+          }
+        : null,
       anomaly: entry.anomaly
         ? {
             ...entry.anomaly,

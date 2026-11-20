@@ -7,6 +7,7 @@ import { RolesGuard } from '../../../auth/guards/roles.guard';
 import { BlobStorageService } from '../../../shared/blob-storage.service';
 import { PrismaService } from '../../../shared/prisma.service';
 import { FuelController } from './fuel.controller';
+import { FuelReceiptScannerService } from './fuel-receipt-scanner.service';
 import { FuelService } from './fuel.service';
 
 const vehicleId = '00000000-0000-4000-8000-000000000301';
@@ -236,6 +237,7 @@ describe('Fuel baseline and void API behavior', () => {
         FuelService,
         { provide: PrismaService, useValue: prisma },
         { provide: BlobStorageService, useValue: blobStorage },
+        { provide: FuelReceiptScannerService, useValue: {} },
       ],
     })
       .overrideGuard(JwtAuthGuard)

@@ -10,7 +10,13 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
+
+function multipartBoolean(value: unknown): unknown {
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return value;
+}
 
 export class FuelFillUpDto {
   @IsUUID() vehicleId!: string;
@@ -25,7 +31,9 @@ export class FuelFillUpDto {
   @Min(0.01)
   pricePerLiter!: number;
   @Type(() => Number) @IsInt() @Min(0) @Max(2147483647) odometer!: number;
-  @IsBoolean() isFullTank!: boolean;
+  @Transform(({ value }) => multipartBoolean(value))
+  @IsBoolean()
+  isFullTank!: boolean;
   @IsString() @MinLength(1) filledBy!: string;
 }
 

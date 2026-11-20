@@ -226,6 +226,7 @@ model FuelFillUp {
   station         FuelStation     @relation(fields: [stationId], references: [id], onDelete: Restrict)
   anomaly         FuelAnomaly?
   audits          FuelAuditLog[]
+  receipt         FuelReceiptAttachment?
 
   @@index([vehicleId, entryDate, createdAt])
   @@index([isVoided, entryDate])
@@ -271,6 +272,19 @@ model FuelAnomalyAttachment {
 
   @@index([anomalyId, createdAt])
   @@map("fuel_anomaly_attachments")
+}
+
+model FuelReceiptAttachment {
+  id           String     @id @default(uuid()) @db.Uuid
+  fillUpId     String     @unique @map("fill_up_id") @db.Uuid
+  name         String     @db.VarChar(255)
+  storageName  String     @map("storage_name") @db.VarChar(255)
+  contentType  String     @map("content_type") @db.VarChar(100)
+  uploadedById String     @map("uploaded_by_id") @db.Uuid
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  fillUp       FuelFillUp @relation(fields: [fillUpId], references: [id], onDelete: Cascade)
+
+  @@map("fuel_receipt_attachments")
 }
 
 model FuelAuditLog {
