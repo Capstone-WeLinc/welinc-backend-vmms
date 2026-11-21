@@ -23,8 +23,16 @@ describe('production URL validation', () => {
   it.each([
     ['http protocol', { ...baseEnv, WEB_APP_URL: 'http://web.example.com' }],
     [
+      'internal auth http protocol',
+      { ...baseEnv, AUTH_INTERNAL_URL: 'http://auth.internal.example.com' },
+    ],
+    [
       'localhost hostname',
       { ...baseEnv, AUTH_JWKS_URL: 'https://localhost:3001/jwks' },
+    ],
+    [
+      'internal auth localhost hostname',
+      { ...baseEnv, AUTH_INTERNAL_URL: 'https://localhost:3001' },
     ],
     [
       'localhost CORS origin',
@@ -60,5 +68,24 @@ describe('production URL validation', () => {
         WEB_APP_URL: 'http://localhost:8002',
       }).NODE_ENV,
     ).toBe('development');
+  });
+
+  it('allows the Document Intelligence endpoint without an API key', () => {
+    expect(() =>
+      validateEnv({
+        ...baseEnv,
+        AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT:
+          'https://resource.cognitiveservices.azure.com',
+      }),
+    ).not.toThrow();
+  });
+
+  it('requires an endpoint when a Document Intelligence API key is set', () => {
+    expect(() =>
+      validateEnv({
+        ...baseEnv,
+        AZURE_DOCUMENT_INTELLIGENCE_KEY: 'local-test-key',
+      }),
+    ).toThrow(/AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT is required/);
   });
 });

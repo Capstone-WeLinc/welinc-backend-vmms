@@ -53,6 +53,7 @@ export const envSchema = z.object({
 
 const productionUrlNames = [
   'AUTH_JWKS_URL',
+  'AUTH_INTERNAL_URL',
   'WEB_APP_URL',
   'API_PUBLIC_URL',
   'PORTAL_URL',
@@ -85,11 +86,11 @@ export function validateEnv(raw: Record<string, unknown>): Env {
     );
   }
   if (
-    Boolean(parsed.data.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT) !==
-    Boolean(parsed.data.AZURE_DOCUMENT_INTELLIGENCE_KEY)
+    parsed.data.AZURE_DOCUMENT_INTELLIGENCE_KEY &&
+    !parsed.data.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT
   ) {
     throw new Error(
-      'Environment check failed:\n  AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT and AZURE_DOCUMENT_INTELLIGENCE_KEY must be configured together',
+      'Environment check failed:\n  AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT is required when AZURE_DOCUMENT_INTELLIGENCE_KEY is configured',
     );
   }
   const productionDetails = productionUrlIssues(raw);
