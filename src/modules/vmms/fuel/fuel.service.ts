@@ -1126,13 +1126,16 @@ export class FuelService {
     const now = Date.now();
     return rows.map((a) => ({
       ...a,
-      fillUp: {
-        ...a.fillUp,
-        station: {
-          ...a.fillUp.station,
-          name: a.fillUp.stationNameSnapshot,
-        },
-      },
+      fillUp: a.fillUp
+        ? {
+            ...a.fillUp,
+            station: {
+              ...(a.fillUp.station ?? {}),
+              name:
+                a.fillUp.stationNameSnapshot ?? a.fillUp.station?.name,
+            },
+          }
+        : a.fillUp,
       efficiency: money(a.efficiency),
       rollingAverage: money(a.rollingAverage),
       severity:
