@@ -53,6 +53,7 @@ export const envSchema = z.object({
 
 const productionUrlNames = [
   'AUTH_JWKS_URL',
+  'AUTH_INTERNAL_URL',
   'WEB_APP_URL',
   'API_PUBLIC_URL',
   'PORTAL_URL',
@@ -62,10 +63,15 @@ const productionUrlNames = [
 ] as const;
 const localHosts = new Set(['localhost', '127.0.0.1', '[::1]']);
 
-function productionUrlProblem(value: string): string | null {
+function productionUrlProblem(value: string, name: string): string | null {
   if (!URL.canParse(value)) return null;
   const parsed = new URL(value);
-  if (parsed.protocol !== 'https:') return 'must use https in production';
+  const isContainerAuthUrl =
+    name === 'AUTH_INTERNAL_URL' &&
+    parsed.hostname !== 'localhost' &&
+    !parsed.hostname.includes('.');
+  if (parsed.protocol !== 'https:' && !isContainerAuthUrl)
+    return 'must use https in production';
   if (localHosts.has(parsed.hostname))
     return 'must not point at localhost in production';
   return null;
@@ -85,11 +91,11 @@ export function validateEnv(raw: Record<string, unknown>): Env {
     );
   }
   if (
-    Boolean(parsed.data.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT) !==
-    Boolean(parsed.data.AZURE_DOCUMENT_INTELLIGENCE_KEY)
+    parsed.data.AZURE_DOCUMENT_INTELLIGENCE_KEY &&
+    !parsed.data.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT
   ) {
     throw new Error(
-      'Environment check failed:\n  AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT and AZURE_DOCUMENT_INTELLIGENCE_KEY must be configured together',
+      'Environment check failed:\n  AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT is required when AZURE_DOCUMENT_INTELLIGENCE_KEY is configured',
     );
   }
   const productionDetails = productionUrlIssues(raw);
@@ -107,13 +113,13 @@ function productionUrlIssues(raw: Record<string, unknown>): string[] {
   for (const name of productionUrlNames) {
     const value = raw[name];
     if (typeof value !== 'string' || !value.trim()) continue;
-    const problem = productionUrlProblem(value.trim());
+    const problem = productionUrlProblem(value.trim(), name);
     if (problem) issues.push(`${name}: ${problem}`);
   }
   const origins =
     typeof raw.CORS_ORIGINS === 'string' ? raw.CORS_ORIGINS.split(',') : [];
   for (const origin of origins.map((value) => value.trim()).filter(Boolean)) {
-    const problem = productionUrlProblem(origin);
+    const problem = productionUrlProblem(origin, 'CORS_ORIGINS');
     if (problem) {
       issues.push(`CORS_ORIGINS: each entry ${problem}`);
       break;

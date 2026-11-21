@@ -7,6 +7,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { createRequire } from 'node:module';
 import type { Env } from '../../../config/env';
 import {
   type FuelReceiptFile,
@@ -17,6 +18,9 @@ const API_VERSION = '2024-11-30';
 const MAX_SCAN_DURATION_MS = 30_000;
 const MAX_SCANS_PER_ACTOR_PER_MINUTE = 5;
 const MAX_CONCURRENT_SCANS = 2;
+const DOCUMENT_INTELLIGENCE_SCOPE =
+  'https://cognitiveservices.azure.com/.default';
+const loadFromProject = createRequire(`${process.cwd()}/package.json`);
 
 type JsonRecord = Record<string, unknown>;
 
@@ -195,6 +199,9 @@ function unavailable(
 @Injectable()
 export class FuelReceiptScannerService {
   private readonly logger = new Logger(FuelReceiptScannerService.name);
+  private credential: {
+    getToken(scope: string): Promise<{ token: string } | null>;
+  } | null = null;
   private activeScans = 0;
   private readonly scanTimes = new Map<string, number[]>();
 
@@ -215,7 +222,7 @@ export class FuelReceiptScannerService {
     const key = this.config
       .get('AZURE_DOCUMENT_INTELLIGENCE_KEY', { infer: true })
       ?.trim();
-    if (!endpoint || !key)
+    if (!endpoint)
       throw unavailable(
         'Receipt scanning is not configured. Enter the fuel details manually.',
       );
@@ -228,6 +235,9 @@ export class FuelReceiptScannerService {
         base.hostname.endsWith('.cognitiveservices.azure.us') ||
         base.hostname.endsWith('.cognitiveservices.azure.cn');
       if (base.protocol !== 'https:' || !azureHost) throw unavailable();
+      const authHeaders = key
+        ? { 'Ocp-Apim-Subscription-Key': key }
+        : await this.identityAuthHeaders();
       const analyzeUrl = new URL(
         `/documentintelligence/documentModels/prebuilt-receipt:analyze?_overload=analyzeDocument&api-version=${API_VERSION}`,
         base,
@@ -236,7 +246,7 @@ export class FuelReceiptScannerService {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Ocp-Apim-Subscription-Key': key,
+          ...authHeaders,
         },
         body: JSON.stringify({ base64Source: file.buffer.toString('base64') }),
       });
@@ -256,7 +266,7 @@ export class FuelReceiptScannerService {
       )
         throw unavailable();
 
-      const result = await this.poll(operationUrl, key);
+      const result = await this.poll(operationUrl, authHeaders);
       return mapReceiptResult(result);
     } catch (error) {
       if (error instanceof HttpException) throw error;
@@ -271,6 +281,28 @@ export class FuelReceiptScannerService {
       throw error;
     } finally {
       this.activeScans -= 1;
+    }
+  }
+
+  private async identityAuthHeaders(): Promise<Record<string, string>> {
+    try {
+      if (!this.credential) {
+        const { DefaultAzureCredential } = loadFromProject(
+          '@azure/identity',
+        ) as typeof import('@azure/identity');
+        this.credential = new DefaultAzureCredential();
+      }
+      const token = await this.credential.getToken(DOCUMENT_INTELLIGENCE_SCOPE);
+      if (!token?.token) throw unavailable();
+      return { Authorization: `Bearer ${token.token}` };
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      this.logger.warn(
+        'Receipt scanning identity authentication failed; no image was retained.',
+      );
+      throw unavailable(
+        'Receipt scanning authentication is unavailable. Enter the fuel details manually.',
+      );
     }
   }
 
@@ -298,13 +330,16 @@ export class FuelReceiptScannerService {
     this.activeScans += 1;
   }
 
-  private async poll(operationUrl: URL, key: string): Promise<unknown> {
+  private async poll(
+    operationUrl: URL,
+    authHeaders: Record<string, string>,
+  ): Promise<unknown> {
     const deadline = Date.now() + MAX_SCAN_DURATION_MS;
     while (Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
       const response = await this.request(operationUrl, {
         method: 'GET',
-        headers: { 'Ocp-Apim-Subscription-Key': key },
+        headers: authHeaders,
       });
       if (!response.ok) throw unavailable();
       const payload: unknown = await response.json();
