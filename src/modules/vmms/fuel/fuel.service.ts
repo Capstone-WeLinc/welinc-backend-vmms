@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -17,12 +18,17 @@ import {
   StorageUnavailableException,
 } from '../../../shared/blob-storage.service';
 import type { FuelFillUpDto } from './fuel.dto';
+import type { UpdateFuelStationDto } from './fuel.dto';
 import { computeFuelEfficiency, isFuelEfficiencyAnomaly } from './fuel-math';
 import { MAX_FUEL_ANOMALY_ATTACHMENT_BYTES } from './fuel.constants';
 import {
   type FuelReceiptFile,
   validateFuelReceiptFile,
 } from './fuel-receipt-file';
+import {
+  parseFuelImportWorkbook,
+  type ParsedFuelImportRow,
+} from './fuel-import';
 
 export type FuelActor = {
   sub: string;
@@ -54,6 +60,123 @@ const currentFuelDate = () => {
   );
   return `${values['year']}-${values['month']}-${values['day']}`;
 };
+const normalizedPlate = (value: string) =>
+  value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+const isoDate = (value: unknown): value is string => {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value))
+    return false;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return Number.isFinite(date.getTime()) &&
+    date.toISOString().slice(0, 10) === value;
+};
+
+type FuelImportSaveRow = {
+  key: string;
+  sheetName: string;
+  worksheetRow: number;
+  plateNumber: string;
+  stationId: string;
+  date: string;
+  odometer: number | null;
+  liters: number | null;
+  pricePerLiter: number | null;
+  filledBy: string;
+  isFullTank: boolean | null;
+  poNumber: string;
+  siNumber: string;
+  product: string;
+  vehicleId: string | null;
+  errors: string[];
+  status: 'READY' | 'SAVED' | 'ERROR';
+  fillUpId?: string;
+};
+
+function importText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function importNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value.trim().replace(/[₱,\s]/g, ''));
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function normalizeImportDraftRows(rawRows: unknown[]): Prisma.InputJsonValue[] {
+  return rawRows.map((raw, index) => {
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw))
+      throw new BadRequestException('Each draft row must be an object.');
+    const row = raw as Record<string, unknown>;
+    const errors = Array.isArray(row.errors)
+      ? row.errors
+          .filter((message): message is string => typeof message === 'string')
+          .slice(0, 20)
+          .map((message) => message.slice(0, 500))
+      : [];
+    const status =
+      row.status === 'SAVED' || row.status === 'ERROR'
+        ? row.status
+        : 'READY';
+    return {
+      key: importText(row.key).slice(0, 200) || `row-${index + 1}`,
+      sheetName: importText(row.sheetName).slice(0, 100),
+      worksheetRow:
+        Number.isInteger(row.worksheetRow) && Number(row.worksheetRow) > 0
+          ? Number(row.worksheetRow)
+          : index + 1,
+      plateNumber: importText(row.plateNumber).slice(0, 50),
+      date: importText(row.date).slice(0, 20),
+      odometer: importNumber(row.odometer),
+      poNumber: importText(row.poNumber).slice(0, 100),
+      siNumber: importText(row.siNumber).slice(0, 100),
+      product: importText(row.product).slice(0, 100),
+      liters: importNumber(row.liters),
+      pricePerLiter: importNumber(row.pricePerLiter),
+      vehicleId: importText(row.vehicleId).slice(0, 36) || null,
+      stationId: importText(row.stationId).slice(0, 36),
+      filledBy: importText(row.filledBy).slice(0, 100),
+      isFullTank:
+        typeof row.isFullTank === 'boolean' ? row.isFullTank : null,
+      errors,
+      status,
+    };
+  });
+}
+
+function importDraftSheetNames(rows: Prisma.JsonValue[]): string[] {
+  return [
+    ...new Set(
+      rows.flatMap((row) =>
+        typeof row === 'object' &&
+        row !== null &&
+        !Array.isArray(row) &&
+        typeof row['sheetName'] === 'string'
+          ? [row['sheetName']]
+          : [],
+      ),
+    ),
+  ];
+}
+
+function importHttpError(error: unknown): string {
+  if (error instanceof BadRequestException) {
+    const response = error.getResponse();
+    if (typeof response === 'string') return response;
+    if (
+      typeof response === 'object' &&
+      response !== null &&
+      'message' in response
+    ) {
+      const message = (response as { message?: unknown }).message;
+      if (typeof message === 'string') return message;
+      if (Array.isArray(message))
+        return message.filter((item) => typeof item === 'string').join(' ');
+    }
+  }
+  return 'Unable to save this fill-up due to a server error.';
+}
 
 @Injectable()
 export class FuelService {
@@ -156,21 +279,64 @@ export class FuelService {
       orderBy: { name: 'asc' },
     });
   }
+  async listStationsForManagement() {
+    return this.prisma.fuelStation.findMany({
+      select: { id: true, name: true, isActive: true },
+      orderBy: { name: 'asc' },
+    });
+  }
   async createStation(name: string) {
     const clean = name.trim();
     if (!clean || clean.length > 100)
       throw new BadRequestException(
         'Station name must be 1 to 100 characters.',
       );
-    return this.prisma.fuelStation.create({ data: { name: clean } });
+    try {
+      return await this.prisma.fuelStation.create({ data: { name: clean } });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      )
+        throw new ConflictException(
+          'A fuel station with this name already exists.',
+        );
+      throw error;
+    }
   }
-  async setStationActive(id: string, isActive: boolean) {
-    const result = await this.prisma.fuelStation.updateMany({
-      where: { id },
-      data: { isActive },
-    });
-    if (!result.count) throw new NotFoundException('Fuel station not found.');
-    return this.prisma.fuelStation.findUniqueOrThrow({ where: { id } });
+  async updateStation(id: string, input: UpdateFuelStationDto) {
+    const data: Prisma.FuelStationUpdateInput = {};
+    if (input.name !== undefined) {
+      const clean = input.name.trim();
+      if (!clean || clean.length > 100)
+        throw new BadRequestException(
+          'Station name must be 1 to 100 characters.',
+        );
+      data.name = clean;
+    }
+    if (input.isActive !== undefined) data.isActive = input.isActive;
+    if (!Object.keys(data).length)
+      throw new BadRequestException(
+        'Provide a station name or active status to update.',
+      );
+
+    try {
+      return await this.prisma.fuelStation.update({
+        where: { id },
+        data,
+        select: { id: true, name: true, isActive: true },
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError) {
+        if (error.code === 'P2025')
+          throw new NotFoundException('Fuel station not found.');
+        if (error.code === 'P2002')
+          throw new ConflictException(
+            'A fuel station with this name already exists.',
+          );
+      }
+      throw error;
+    }
   }
 
   async list(actor: FuelActor, from?: string, to?: string) {
@@ -196,6 +362,7 @@ export class FuelService {
     dto: FuelFillUpDto,
     actor: FuelActor,
     receiptFile?: FuelReceiptFile,
+    allowHistoricalOdometer = false,
   ) {
     this.require(actor, 'OPERATIONS');
     const receiptImage = receiptFile
@@ -218,7 +385,14 @@ export class FuelService {
       orderBy: [{ odometer: 'desc' }, { createdAt: 'desc' }],
     });
     const lastOdometer = Math.max(vehicle.odometer, latest?.odometer ?? 0);
-    if (dto.odometer < lastOdometer)
+    if (allowHistoricalOdometer) {
+      await this.validateHistoricalOdometer(
+        vehicle.id,
+        dto,
+        latest,
+        vehicle.odometer,
+      );
+    } else if (dto.odometer < lastOdometer)
       throw new BadRequestException(
         `Odometer cannot be lower than the latest reading (${lastOdometer} km).`,
       );
@@ -254,11 +428,15 @@ export class FuelService {
             id: fillUpId,
             vehicleId: vehicle.id,
             stationId: station.id,
+            stationNameSnapshot: station.name,
             enteredById: actor.sub,
             entryDate: new Date(`${dto.date}T00:00:00.000Z`),
             liters: dto.liters,
             pricePerLiter: dto.pricePerLiter,
             totalCost: Math.round(dto.liters * dto.pricePerLiter * 100) / 100,
+            poNumber: dto.poNumber?.trim() || null,
+            siNumber: dto.siNumber?.trim() || null,
+            product: dto.product?.trim() || null,
             odometer: dto.odometer,
             isFullTank: dto.isFullTank,
             filledBy: dto.filledBy.trim(),
@@ -372,6 +550,485 @@ export class FuelService {
     );
   }
 
+  async previewImport(buffer: Buffer) {
+    const workbook = await parseFuelImportWorkbook(buffer);
+    const parsedRows = workbook.rows;
+    const vehicles = await this.prisma.vehicle.findMany({
+      where: { deletedAt: null, isActive: true },
+      select: { id: true, plateNumber: true, odometer: true },
+    });
+    const byPlate = new Map(
+      vehicles.map((vehicle) => [normalizedPlate(vehicle.plateNumber), vehicle]),
+    );
+    const rows = parsedRows.map((row) => {
+      const vehicle = byPlate.get(normalizedPlate(row.plateNumber));
+      const errors = this.importRowErrors(row, vehicle?.id ?? null);
+      return {
+        ...row,
+        vehicleId: vehicle?.id ?? null,
+        stationId: '',
+        filledBy: '',
+        isFullTank: null,
+        errors,
+        status: errors.length ? 'ERROR' : 'READY',
+      };
+    });
+
+    const addPreviewError = (row: (typeof rows)[number], message: string) => {
+      if (!row.errors.includes(message)) row.errors.push(message);
+      row.status = 'ERROR';
+    };
+    const vehicleById = new Map(vehicles.map((vehicle) => [vehicle.id, vehicle]));
+    const duplicateCandidates = new Map<string, (typeof rows)[number][]>();
+    for (const row of rows) {
+      if (
+        !row.vehicleId ||
+        !isoDate(row.date) ||
+        row.odometer === null ||
+        row.liters === null ||
+        row.pricePerLiter === null
+      )
+        continue;
+      const identity = [
+        row.sheetName,
+        row.vehicleId,
+        row.date,
+        row.odometer,
+        row.liters,
+        row.pricePerLiter,
+        row.poNumber.toLowerCase(),
+        row.siNumber.toLowerCase(),
+      ].join('|');
+      duplicateCandidates.set(identity, [
+        ...(duplicateCandidates.get(identity) ?? []),
+        row,
+      ]);
+    }
+    for (const duplicates of duplicateCandidates.values()) {
+      if (duplicates.length > 1)
+        duplicates.forEach((row) =>
+          addPreviewError(row, 'Duplicate transaction in this workbook.'),
+        );
+    }
+
+    const vehicleIds = [...new Set(rows.flatMap((row) =>
+      row.vehicleId ? [row.vehicleId] : [],
+    ))];
+    const history = vehicleIds.length
+      ? await this.prisma.fuelFillUp.findMany({
+          where: { vehicleId: { in: vehicleIds }, isVoided: false },
+          select: { vehicleId: true, entryDate: true, odometer: true },
+        })
+      : [];
+    type OdometerPoint = {
+      date: string;
+      odometer: number;
+      row?: (typeof rows)[number];
+    };
+    const odometerPoints = new Map<string, OdometerPoint[]>();
+    for (const entry of history) {
+      const points = odometerPoints.get(entry.vehicleId) ?? [];
+      points.push({
+        date: entry.entryDate.toISOString().slice(0, 10),
+        odometer: entry.odometer,
+      });
+      odometerPoints.set(entry.vehicleId, points);
+    }
+    for (const row of rows) {
+      if (!row.vehicleId || !isoDate(row.date) || row.odometer === null)
+        continue;
+      const vehicle = vehicleById.get(row.vehicleId);
+      if (!vehicle) continue;
+      if (row.date === currentFuelDate()) {
+        const latestOdometer = (odometerPoints.get(row.vehicleId) ?? [])
+          .reduce((latest, point) => Math.max(latest, point.odometer), 0);
+        if (row.odometer < Math.max(vehicle.odometer, latestOdometer))
+          addPreviewError(
+            row,
+            `Odometer cannot be lower than the current reading (${Math.max(vehicle.odometer, latestOdometer)} km).`,
+          );
+      }
+      const points = odometerPoints.get(row.vehicleId) ?? [];
+      points.push({ date: row.date, odometer: row.odometer, row });
+      odometerPoints.set(row.vehicleId, points);
+    }
+    for (const points of odometerPoints.values()) {
+      points.sort((a, b) => a.date.localeCompare(b.date) || a.odometer - b.odometer);
+      for (let index = 1; index < points.length; index++) {
+        const previous = points[index - 1];
+        const current = points[index];
+        if (current.date > previous.date && current.odometer < previous.odometer) {
+          if (previous.row)
+            addPreviewError(
+              previous.row,
+              'Odometer conflicts with the vehicle fuel history or another workbook row.',
+            );
+          if (current.row)
+            addPreviewError(
+              current.row,
+              'Odometer conflicts with the vehicle fuel history or another workbook row.',
+            );
+        }
+      }
+    }
+    return {
+      rows,
+      sheets: [...new Set(rows.map((row) => row.sheetName))],
+      skippedSheets: workbook.skippedSheets,
+    };
+  }
+
+  async listImportDrafts(actor: FuelActor) {
+    this.require(actor, 'OPERATIONS');
+    const drafts = await this.prisma.fuelImportDraft.findMany({
+      where: { ownerAuthUserId: actor.sub },
+      select: {
+        id: true,
+        sourceName: true,
+        rows: true,
+        updatedAt: true,
+      },
+      orderBy: { updatedAt: 'desc' },
+      take: 1000,
+    });
+    return drafts.map((draft) => {
+      const rows = Array.isArray(draft.rows) ? draft.rows : [];
+      return {
+        id: draft.id,
+        sourceName: draft.sourceName,
+        rowCount: rows.length,
+        sheetNames: importDraftSheetNames(rows),
+        updatedAt: draft.updatedAt.toISOString(),
+      };
+    });
+  }
+
+  async getImportDraft(id: string, actor: FuelActor) {
+    this.require(actor, 'OPERATIONS');
+    const draft = await this.prisma.fuelImportDraft.findFirst({
+      where: { id, ownerAuthUserId: actor.sub },
+    });
+    if (!draft) throw new NotFoundException('Fuel import draft not found.');
+    return {
+      id: draft.id,
+      sourceName: draft.sourceName,
+      rows: Array.isArray(draft.rows) ? draft.rows : [],
+      createdAt: draft.createdAt.toISOString(),
+      updatedAt: draft.updatedAt.toISOString(),
+    };
+  }
+
+  async createImportDraft(
+    sourceName: string,
+    rawRows: unknown[],
+    actor: FuelActor,
+  ) {
+    this.require(actor, 'OPERATIONS');
+    const name = sourceName.trim().slice(0, 255);
+    if (!name)
+      throw new BadRequestException('Enter a name for the fuel import draft.');
+    const draft = await this.prisma.fuelImportDraft.create({
+      data: {
+        ownerAuthUserId: actor.sub,
+        sourceName: name,
+        rows: normalizeImportDraftRows(rawRows),
+      },
+    });
+    return this.getImportDraft(draft.id, actor);
+  }
+
+  async updateImportDraft(
+    id: string,
+    sourceName: string,
+    rawRows: unknown[],
+    actor: FuelActor,
+  ) {
+    this.require(actor, 'OPERATIONS');
+    const name = sourceName.trim().slice(0, 255);
+    if (!name)
+      throw new BadRequestException('Enter a name for the fuel import draft.');
+    const result = await this.prisma.fuelImportDraft.updateMany({
+      where: { id, ownerAuthUserId: actor.sub },
+      data: {
+        sourceName: name,
+        rows: normalizeImportDraftRows(rawRows),
+      },
+    });
+    if (!result.count)
+      throw new NotFoundException('Fuel import draft not found.');
+    return this.getImportDraft(id, actor);
+  }
+
+  async deleteImportDraft(id: string, actor: FuelActor) {
+    this.require(actor, 'OPERATIONS');
+    const result = await this.prisma.fuelImportDraft.deleteMany({
+      where: { id, ownerAuthUserId: actor.sub },
+    });
+    if (!result.count)
+      throw new NotFoundException('Fuel import draft not found.');
+    return { deleted: true };
+  }
+
+  async saveImportRows(rawRows: unknown[], actor: FuelActor) {
+    this.require(actor, 'OPERATIONS');
+    if (!Array.isArray(rawRows) || rawRows.length < 1 || rawRows.length > 1000)
+      throw new BadRequestException(
+        'Submit between 1 and 1,000 fuel rows to save.',
+      );
+
+    const vehicles = await this.prisma.vehicle.findMany({
+      where: { deletedAt: null, isActive: true },
+      select: { id: true, plateNumber: true },
+    });
+    const vehicleByPlate = new Map(
+      vehicles.map((vehicle) => [normalizedPlate(vehicle.plateNumber), vehicle]),
+    );
+    const stations = await this.prisma.fuelStation.findMany({
+      where: { isActive: true },
+      select: { id: true },
+    });
+    const activeStationIds = new Set(stations.map((station) => station.id));
+
+    const rows: FuelImportSaveRow[] = rawRows.map((raw, index) => {
+      const row =
+        typeof raw === 'object' && raw !== null
+          ? (raw as Record<string, unknown>)
+          : {};
+      const plateNumber = importText(row.plateNumber);
+      const vehicle = vehicleByPlate.get(normalizedPlate(plateNumber));
+      const candidate: FuelImportSaveRow = {
+        key: importText(row.key).slice(0, 200) || `row-${index + 1}`,
+        sheetName: importText(row.sheetName).slice(0, 100),
+        worksheetRow:
+          Number.isInteger(row.worksheetRow) && Number(row.worksheetRow) > 0
+            ? Number(row.worksheetRow)
+            : index + 1,
+        plateNumber,
+        stationId: importText(row.stationId),
+        date: importText(row.date),
+        odometer: importNumber(row.odometer),
+        liters: importNumber(row.liters),
+        pricePerLiter: importNumber(row.pricePerLiter),
+        filledBy: importText(row.filledBy),
+        isFullTank: typeof row.isFullTank === 'boolean' ? row.isFullTank : null,
+        poNumber: importText(row.poNumber),
+        siNumber: importText(row.siNumber),
+        product: importText(row.product),
+        vehicleId: vehicle?.id ?? null,
+        errors: [],
+        status: 'READY',
+      };
+      candidate.errors.push(
+        ...this.importRowErrors(candidate, candidate.vehicleId),
+      );
+      if (!candidate.stationId || !activeStationIds.has(candidate.stationId))
+        candidate.errors.push('Select an active registered fuel station.');
+      if (candidate.odometer === null ||
+          !Number.isInteger(candidate.odometer) ||
+          candidate.odometer < 0 ||
+          candidate.odometer > 2147483647)
+        candidate.errors.push('Enter a valid whole-number odometer reading.');
+      if (candidate.liters === null ||
+          candidate.liters <= 0 ||
+          candidate.liters > 99_999_999.99 ||
+          Math.abs(candidate.liters * 100 - Math.round(candidate.liters * 100)) > 1e-8)
+        candidate.errors.push('Liters must be between 0.01 and 99,999,999.99 with at most two decimal places.');
+      if (candidate.pricePerLiter === null ||
+          candidate.pricePerLiter <= 0 ||
+          candidate.pricePerLiter > 99_999_999.99 ||
+          Math.abs(candidate.pricePerLiter * 100 - Math.round(candidate.pricePerLiter * 100)) > 1e-8)
+        candidate.errors.push('Unit price must be between 0.01 and 99,999,999.99 with at most two decimal places.');
+      if (candidate.liters !== null && candidate.pricePerLiter !== null &&
+          Math.round(candidate.liters * candidate.pricePerLiter * 100) / 100 >
+            9_999_999_999.99)
+        candidate.errors.push('Calculated total cost exceeds the supported limit.');
+      if (candidate.filledBy.length > 100)
+        candidate.errors.push('Filled-by name must be 100 characters or fewer.');
+      if (candidate.isFullTank === null)
+        candidate.errors.push('Confirm whether this was a full or partial tank.');
+      for (const [label, value] of [
+        ['PO number', candidate.poNumber],
+        ['SI number', candidate.siNumber],
+        ['Product', candidate.product],
+      ] as const) {
+        if (value.length > 100)
+          candidate.errors.push(`${label} must be 100 characters or fewer.`);
+      }
+      if (candidate.errors.length) candidate.status = 'ERROR';
+      return candidate;
+    });
+
+    const duplicateKeys = new Map<string, FuelImportSaveRow[]>();
+    for (const row of rows) {
+      if (!row.vehicleId || !row.stationId || !row.date ||
+          row.odometer === null || row.liters === null ||
+          row.pricePerLiter === null) continue;
+      const key = [
+        row.vehicleId,
+        row.stationId,
+        row.date,
+        row.odometer,
+        row.liters,
+        row.pricePerLiter,
+        row.poNumber.toLowerCase(),
+        row.siNumber.toLowerCase(),
+      ].join('|');
+      duplicateKeys.set(key, [...(duplicateKeys.get(key) ?? []), row]);
+    }
+    for (const duplicates of duplicateKeys.values()) {
+      if (duplicates.length > 1) {
+        for (const row of duplicates) {
+          row.errors.push('This transaction is duplicated in the submitted workbook.');
+          row.status = 'ERROR';
+        }
+      }
+    }
+
+    const saveOrder = rows
+      .map((row, index) => ({ row, index }))
+      .filter(({ row }) => row.status === 'READY')
+      .sort((a, b) =>
+        a.row.date.localeCompare(b.row.date) ||
+        (a.row.odometer ?? 0) - (b.row.odometer ?? 0) ||
+        a.index - b.index,
+      );
+    for (const { row } of saveOrder) {
+      try {
+        const duplicate = await this.findDuplicateImportRow(row);
+        if (duplicate) {
+          row.errors.push('A matching fuel fill-up is already recorded.');
+          row.status = 'ERROR';
+          continue;
+        }
+        const entry = await this.create(
+          {
+            vehicleId: row.vehicleId!,
+            stationId: row.stationId,
+            date: row.date,
+            liters: row.liters!,
+            pricePerLiter: row.pricePerLiter!,
+            odometer: row.odometer!,
+            filledBy: row.filledBy,
+            isFullTank: row.isFullTank!,
+            poNumber: row.poNumber || undefined,
+            siNumber: row.siNumber || undefined,
+            product: row.product || undefined,
+          },
+          actor,
+          undefined,
+          true,
+        );
+        row.status = 'SAVED';
+        row.fillUpId = entry.id;
+      } catch (error) {
+        row.status = 'ERROR';
+        row.errors.push(importHttpError(error));
+        if (!(error instanceof BadRequestException))
+          this.logger.error(
+            'Fuel statement import row failed.',
+            error instanceof Error ? error.stack : undefined,
+          );
+      }
+    }
+    return {
+      saved: rows.filter((row) => row.status === 'SAVED').length,
+      failed: rows.filter((row) => row.status === 'ERROR').length,
+      rows,
+    };
+  }
+
+  private importRowErrors(
+    row: Pick<ParsedFuelImportRow, 'plateNumber' | 'date' | 'liters' | 'pricePerLiter'>,
+    vehicleId: string | null,
+  ): string[] {
+    const errors: string[] = [];
+    if (!row.plateNumber || !vehicleId)
+      errors.push('Select an active registered vehicle by plate number.');
+    if (!isoDate(row.date))
+      errors.push('Enter a valid transaction date.');
+    else if (row.date > currentFuelDate())
+      errors.push('Fuel-up date cannot be in the future.');
+    if (row.liters === null || row.liters <= 0)
+      errors.push('Enter positive liters.');
+    if (row.pricePerLiter === null || row.pricePerLiter <= 0)
+      errors.push('Enter a positive unit price.');
+    return errors;
+  }
+
+  private async findDuplicateImportRow(row: FuelImportSaveRow) {
+    const identity: Prisma.FuelFillUpWhereInput[] = [];
+    if (row.siNumber)
+      identity.push({
+        siNumber: row.siNumber,
+        entryDate: new Date(`${row.date}T00:00:00.000Z`),
+        odometer: row.odometer!,
+        liters: row.liters!,
+        pricePerLiter: row.pricePerLiter!,
+        stationId: row.stationId,
+      });
+    if (row.poNumber)
+      identity.push({
+        poNumber: row.poNumber,
+        entryDate: new Date(`${row.date}T00:00:00.000Z`),
+        odometer: row.odometer!,
+        liters: row.liters!,
+        pricePerLiter: row.pricePerLiter!,
+        stationId: row.stationId,
+      });
+    identity.push({
+      entryDate: new Date(`${row.date}T00:00:00.000Z`),
+      odometer: row.odometer!,
+      liters: row.liters!,
+      pricePerLiter: row.pricePerLiter!,
+      stationId: row.stationId,
+    });
+    return this.prisma.fuelFillUp.findFirst({
+      where: {
+        vehicleId: row.vehicleId!,
+        isVoided: false,
+        OR: identity,
+      },
+      select: { id: true },
+    });
+  }
+
+  private async validateHistoricalOdometer(
+    vehicleId: string,
+    dto: FuelFillUpDto,
+    latestByOdometer: { odometer: number } | null,
+    masterOdometer: number,
+  ) {
+    const date = new Date(`${dto.date}T00:00:00.000Z`);
+    if (dto.date === currentFuelDate()) {
+      const minimum = Math.max(masterOdometer, latestByOdometer?.odometer ?? 0);
+      if (dto.odometer < minimum)
+        throw new BadRequestException(
+          `Odometer cannot be lower than the current reading (${minimum} km).`,
+        );
+      return;
+    }
+    const [previous, next] = await Promise.all([
+      this.prisma.fuelFillUp.findFirst({
+        where: { vehicleId, isVoided: false, entryDate: { lt: date } },
+        orderBy: [{ entryDate: 'desc' }, { odometer: 'desc' }],
+        select: { odometer: true },
+      }),
+      this.prisma.fuelFillUp.findFirst({
+        where: { vehicleId, isVoided: false, entryDate: { gt: date } },
+        orderBy: [{ entryDate: 'asc' }, { odometer: 'asc' }],
+        select: { odometer: true },
+      }),
+    ]);
+    if (previous && dto.odometer < previous.odometer)
+      throw new BadRequestException(
+        `Odometer must be at least ${previous.odometer} km to follow the earlier fill-up.`,
+      );
+    if (next && dto.odometer > next.odometer)
+      throw new BadRequestException(
+        `Odometer must be no greater than ${next.odometer} km to precede the later fill-up.`,
+      );
+  }
+
   async getReceiptAttachment(fillUpId: string, actor: FuelActor) {
     this.require(actor, 'OPERATIONS');
     const attachment = await this.prisma.fuelReceiptAttachment.findUnique({
@@ -469,6 +1126,13 @@ export class FuelService {
     const now = Date.now();
     return rows.map((a) => ({
       ...a,
+      fillUp: {
+        ...a.fillUp,
+        station: {
+          ...a.fillUp.station,
+          name: a.fillUp.stationNameSnapshot,
+        },
+      },
       efficiency: money(a.efficiency),
       rollingAverage: money(a.rollingAverage),
       severity:
@@ -857,8 +1521,11 @@ export class FuelService {
       liters: money(entry.liters),
       pricePerLiter: money(entry.pricePerLiter),
       totalCost: money(entry.totalCost),
+      poNumber: entry.poNumber,
+      siNumber: entry.siNumber,
+      product: entry.product,
       odometer: entry.odometer,
-      station: entry.station?.name ?? '',
+      station: entry.stationNameSnapshot,
       stationId: entry.stationId,
       filledBy: entry.filledBy,
       isFullTank: entry.isFullTank,

@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -34,9 +35,30 @@ import {
   FuelExportDto,
   FuelFillUpDto,
   FuelStationDto,
+  UpdateFuelStationDto,
   UpdateFuelAnomalyThresholdDto,
   VoidFuelDto,
 } from './fuel.dto';
+import {
+  FuelImportDraftDto,
+  SaveFuelImportDto,
+} from './dto/fuel-import.dto';
+
+function fuelImportUploadInterceptor() {
+  return FileInterceptor('file', {
+    limits: { fileSize: 5 * 1024 * 1024 },
+    fileFilter: (_req, file, callback) => {
+      if (!file.originalname.toLowerCase().endsWith('.xlsx')) {
+        callback(
+          new BadRequestException('Upload an .xlsx fuel statement workbook.'),
+          false,
+        );
+        return;
+      }
+      callback(null, true);
+    },
+  });
+}
 
 function fuelReceiptUploadInterceptor() {
   return FileInterceptor('file', {
@@ -78,6 +100,11 @@ export class FuelController {
     return this.fuel.listStations();
   }
   @Roles(UserRole.OPERATIONS)
+  @Get('stations/management')
+  stationsForManagement() {
+    return this.fuel.listStationsForManagement();
+  }
+  @Roles(UserRole.OPERATIONS)
   @Post('stations')
   createStation(@Body() body: FuelStationDto) {
     return this.fuel.createStation(body.name);
@@ -86,9 +113,9 @@ export class FuelController {
   @Patch('stations/:id')
   setStation(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() body: { isActive: boolean },
+    @Body() body: UpdateFuelStationDto,
   ) {
-    return this.fuel.setStationActive(id, body.isActive);
+    return this.fuel.updateStation(id, body);
   }
 
   @Roles(UserRole.ADMIN, UserRole.OPERATIONS)
@@ -123,6 +150,74 @@ export class FuelController {
     @Req() req: { user: FuelActor },
   ) {
     return this.receiptScanner.scan(file, req.user.sub);
+  }
+
+  @Roles(UserRole.OPERATIONS)
+  @Post('import/preview')
+  @UseInterceptors(fuelImportUploadInterceptor())
+  previewImport(
+    @UploadedFile() file: { buffer: Buffer } | undefined,
+  ) {
+    if (!file)
+      throw new BadRequestException('Upload an .xlsx fuel statement workbook.');
+    return this.fuel.previewImport(file.buffer);
+  }
+
+  @Roles(UserRole.OPERATIONS)
+  @Post('import')
+  saveImport(
+    @Body() dto: SaveFuelImportDto,
+    @Req() req: { user: FuelActor },
+  ) {
+    return this.fuel.saveImportRows(dto.rows, req.user);
+  }
+
+  @Roles(UserRole.OPERATIONS)
+  @Get('import/drafts')
+  listImportDrafts(@Req() req: { user: FuelActor }) {
+    return this.fuel.listImportDrafts(req.user);
+  }
+
+  @Roles(UserRole.OPERATIONS)
+  @Get('import/drafts/:id')
+  getImportDraft(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: { user: FuelActor },
+  ) {
+    return this.fuel.getImportDraft(id, req.user);
+  }
+
+  @Roles(UserRole.OPERATIONS)
+  @Post('import/drafts')
+  createImportDraft(
+    @Body() dto: FuelImportDraftDto,
+    @Req() req: { user: FuelActor },
+  ) {
+    return this.fuel.createImportDraft(dto.sourceName, dto.rows, req.user);
+  }
+
+  @Roles(UserRole.OPERATIONS)
+  @Patch('import/drafts/:id')
+  updateImportDraft(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: FuelImportDraftDto,
+    @Req() req: { user: FuelActor },
+  ) {
+    return this.fuel.updateImportDraft(
+      id,
+      dto.sourceName,
+      dto.rows,
+      req.user,
+    );
+  }
+
+  @Roles(UserRole.OPERATIONS)
+  @Delete('import/drafts/:id')
+  deleteImportDraft(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: { user: FuelActor },
+  ) {
+    return this.fuel.deleteImportDraft(id, req.user);
   }
 
   @Roles(UserRole.OPERATIONS)

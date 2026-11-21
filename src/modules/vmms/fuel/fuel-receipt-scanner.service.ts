@@ -36,6 +36,8 @@ export type FuelReceiptScanResult = {
   liters: FuelReceiptSuggestion<number>;
   pricePerLiter: FuelReceiptSuggestion<number>;
   printedTotal: FuelReceiptSuggestion<number>;
+  product: FuelReceiptSuggestion<string>;
+  siNumber: FuelReceiptSuggestion<string>;
 };
 
 function record(value: unknown): JsonRecord | undefined {
@@ -107,14 +109,22 @@ function minimumConfidence(values: Array<number | null>): number | null {
 function getFuelLineSuggestions(fields: JsonRecord) {
   const items = record(fields.Items)?.valueArray;
   if (!Array.isArray(items))
-    return { liters: null, pricePerLiter: null, confidence: null };
+    return {
+      liters: null,
+      pricePerLiter: null,
+      confidence: null,
+      product: null,
+      productConfidence: null,
+    };
 
   const candidates = items.flatMap((item) => {
     const itemFields = record(record(item)?.valueObject);
     if (!itemFields) return [];
     const description = stringValue(itemFields.Description) ?? '';
     if (
-      !/\b(diesel|gasoline|petrol|unleaded|premium|fuel)\b/i.test(description)
+      !/\b(diesel|gasoline|petrol|unleaded|premium|fuel|dsl)\b|techron/i.test(
+        description,
+      )
     )
       return [];
 
@@ -125,6 +135,8 @@ function getFuelLineSuggestions(fields: JsonRecord) {
       return [];
     return [
       {
+        description,
+        descriptionConfidence: confidenceOf(itemFields.Description),
         quantity,
         price,
         confidence: minimumConfidence([
@@ -136,14 +148,36 @@ function getFuelLineSuggestions(fields: JsonRecord) {
   });
 
   if (!candidates.length)
-    return { liters: null, pricePerLiter: null, confidence: null };
+    return {
+      liters: null,
+      pricePerLiter: null,
+      confidence: null,
+      product: null,
+      productConfidence: null,
+    };
   const unitPrice = candidates[0].price;
   if (
     candidates.some(
       (candidate) => Math.abs(candidate.price - unitPrice) >= 0.005,
     )
   )
-    return { liters: null, pricePerLiter: null, confidence: null };
+    return {
+      liters: null,
+      pricePerLiter: null,
+      confidence: null,
+      product: null,
+      productConfidence: null,
+    };
+
+  const products = new Set(
+    candidates.map((candidate) =>
+      candidate.description.toLowerCase().replace(/\s+/g, ' ').trim(),
+    ),
+  );
+  const product =
+    products.size === 1 && candidates[0].description.length <= 100
+      ? candidates[0].description
+      : null;
 
   return {
     liters: candidates.reduce(
@@ -154,7 +188,41 @@ function getFuelLineSuggestions(fields: JsonRecord) {
     confidence: minimumConfidence(
       candidates.map((candidate) => candidate.confidence),
     ),
+    product,
+    productConfidence: product
+      ? minimumConfidence(
+          candidates.map((candidate) => candidate.descriptionConfidence),
+        )
+      : null,
   };
+}
+
+function salesInvoiceSuggestion(
+  fields: JsonRecord,
+  analyzeResult: JsonRecord,
+): FuelReceiptSuggestion<string> {
+  for (const name of [
+    'SalesInvoiceNumber',
+    'SalesInvoiceId',
+    'InvoiceNumber',
+    'InvoiceId',
+  ]) {
+    const field = fields[name];
+    const value = stringValue(field);
+    if (value && value.length <= 100)
+      return suggestion(value, confidenceOf(field));
+  }
+
+  const content = analyzeResult.content;
+  if (typeof content === 'string') {
+    const match =
+      /(?:sales\s+invoice|invoice)[ \t]*(?:no\.?|number|#)[ \t]*[:#]?[ \t]*([A-Z0-9][A-Z0-9/-]{2,})/i.exec(
+        content,
+      );
+    if (match && match[1].length <= 100)
+      return suggestion(match[1], null);
+  }
+  return suggestion<string>(null, null);
 }
 
 function mapReceiptResult(payload: unknown): FuelReceiptScanResult {
@@ -163,7 +231,7 @@ function mapReceiptResult(payload: unknown): FuelReceiptScanResult {
   const fields = Array.isArray(documents)
     ? record(record(documents[0])?.fields)
     : undefined;
-  if (!fields)
+  if (!analyzeResult || !fields)
     throw new BadRequestException(
       'The receipt could not be read. Enter the fuel details manually.',
     );
@@ -178,6 +246,8 @@ function mapReceiptResult(payload: unknown): FuelReceiptScanResult {
     liters: suggestion(fuelLines.liters, fuelLines.confidence),
     pricePerLiter: suggestion(fuelLines.pricePerLiter, fuelLines.confidence),
     printedTotal: suggestion(numberValue(total), confidenceOf(total)),
+    product: suggestion(fuelLines.product, fuelLines.productConfidence),
+    siNumber: salesInvoiceSuggestion(fields, analyzeResult),
   };
   if (Object.values(result).every((field) => field.value === null))
     throw new BadRequestException(

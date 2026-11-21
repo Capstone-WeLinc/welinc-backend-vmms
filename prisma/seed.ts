@@ -7,7 +7,6 @@ import { seedUsers } from './seeds/users.seed';
 import { seedVehicles } from './seeds/vehicles.seed';
 import { seedWorkOrders } from './seeds/work-orders.seed';
 import { seedVmms } from './seeds/vmms.seed';
-import { seedFuelSamples } from './seeds/fuel-samples.seed';
 
 const pool = new pg.Pool({ connectionString: process.env['DATABASE_URL'] });
 const prisma = new PrismaClient({ adapter: new PrismaPg(pool) });
@@ -30,11 +29,6 @@ async function main() {
     console.log('VMMS sample fleet seeded from suite people.json.');
   }
 
-  if (process.env['NODE_ENV'] === 'production') {
-    console.log('Fuel demo data skipped in production.');
-    return;
-  }
-  await seedFuelSamples(prisma, { fromStandardSeed: true });
 }
 
 main().catch((error) => {

@@ -204,16 +204,32 @@ model FuelAnomalyThresholdAudit {
   @@map("fuel_anomaly_threshold_audits")
 }
 
+model FuelImportDraft {
+  id              String   @id @default(uuid()) @db.Uuid
+  ownerAuthUserId String   @map("owner_auth_user_id") @db.VarChar(255)
+  sourceName      String   @map("source_name") @db.VarChar(255)
+  rows            Json     @default("[]") @db.JsonB
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([ownerAuthUserId, updatedAt])
+  @@map("fuel_import_drafts")
+}
+
 model FuelFillUp {
-  id              String          @id @default(uuid()) @db.Uuid
-  vehicleId       String          @map("vehicle_id") @db.Uuid
-  stationId       String          @map("station_id") @db.Uuid
-  filledBy        String          @map("filled_by") @db.VarChar(100)
+  id                  String          @id @default(uuid()) @db.Uuid
+  vehicleId           String          @map("vehicle_id") @db.Uuid
+  stationId           String          @map("station_id") @db.Uuid
+  stationNameSnapshot String          @map("station_name_snapshot") @db.VarChar(100)
+  filledBy            String          @map("filled_by") @db.VarChar(100)
   enteredById     String          @map("entered_by_id") @db.Uuid
   entryDate       DateTime        @map("entry_date") @db.Date
   liters          Decimal         @db.Decimal(10, 2)
   pricePerLiter   Decimal         @map("price_per_liter") @db.Decimal(10, 2)
   totalCost       Decimal         @map("total_cost") @db.Decimal(12, 2)
+  poNumber        String?         @map("po_number") @db.VarChar(100)
+  siNumber        String?         @map("si_number") @db.VarChar(100)
+  product         String?         @db.VarChar(100)
   odometer        Int
   isFullTank      Boolean         @default(false) @map("is_full_tank")
   isVoided        Boolean         @default(false) @map("is_voided")
