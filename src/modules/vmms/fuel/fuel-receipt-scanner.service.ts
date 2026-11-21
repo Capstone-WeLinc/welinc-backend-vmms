@@ -7,7 +7,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { DefaultAzureCredential } from '@azure/identity';
+import { createRequire } from 'node:module';
 import type { Env } from '../../../config/env';
 import {
   type FuelReceiptFile,
@@ -20,6 +20,7 @@ const MAX_SCANS_PER_ACTOR_PER_MINUTE = 5;
 const MAX_CONCURRENT_SCANS = 2;
 const DOCUMENT_INTELLIGENCE_SCOPE =
   'https://cognitiveservices.azure.com/.default';
+const loadFromProject = createRequire(`${process.cwd()}/package.json`);
 
 type JsonRecord = Record<string, unknown>;
 
@@ -198,7 +199,9 @@ function unavailable(
 @Injectable()
 export class FuelReceiptScannerService {
   private readonly logger = new Logger(FuelReceiptScannerService.name);
-  private readonly credential = new DefaultAzureCredential();
+  private credential: {
+    getToken(scope: string): Promise<{ token: string } | null>;
+  } | null = null;
   private activeScans = 0;
   private readonly scanTimes = new Map<string, number[]>();
 
@@ -283,9 +286,13 @@ export class FuelReceiptScannerService {
 
   private async identityAuthHeaders(): Promise<Record<string, string>> {
     try {
-      const token = await this.credential.getToken(
-        DOCUMENT_INTELLIGENCE_SCOPE,
-      );
+      if (!this.credential) {
+        const { DefaultAzureCredential } = loadFromProject(
+          '@azure/identity',
+        ) as typeof import('@azure/identity');
+        this.credential = new DefaultAzureCredential();
+      }
+      const token = await this.credential.getToken(DOCUMENT_INTELLIGENCE_SCOPE);
       if (!token?.token) throw unavailable();
       return { Authorization: `Bearer ${token.token}` };
     } catch (error) {
