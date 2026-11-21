@@ -12,7 +12,11 @@ function isLocalDevOrigin(origin: string): boolean {
 }
 
 async function bootstrap() {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    bodyParser: false,
+  });
+  app.useBodyParser('json', { limit: '2mb' });
+  app.useBodyParser('urlencoded', { extended: true, limit: '100kb' });
   const config = app.get<ConfigService<Env, true>>(ConfigService);
   app.set('trust proxy', config.get('TRUST_PROXY_HOPS', { infer: true }));
   app.use(cookieParser());

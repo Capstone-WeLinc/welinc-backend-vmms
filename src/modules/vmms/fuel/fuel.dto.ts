@@ -6,9 +6,11 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  MaxLength,
   Max,
   Min,
   MinLength,
+  ValidateIf,
 } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
 
@@ -30,6 +32,9 @@ export class FuelFillUpDto {
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0.01)
   pricePerLiter!: number;
+  @IsOptional() @IsString() @MaxLength(100) poNumber?: string;
+  @IsOptional() @IsString() @MaxLength(100) siNumber?: string;
+  @IsOptional() @IsString() @MaxLength(100) product?: string;
   @Type(() => Number) @IsInt() @Min(0) @Max(2147483647) odometer!: number;
   @Transform(({ value }) => multipartBoolean(value))
   @IsBoolean()
@@ -48,6 +53,17 @@ export class FuelAcknowledgmentDto {
 }
 export class FuelStationDto {
   @IsString() @MinLength(1) name!: string;
+}
+export class UpdateFuelStationDto {
+  @ValidateIf((_object, value) => value !== undefined)
+  @IsString()
+  @MinLength(1)
+  @MaxLength(100)
+  name?: string;
+
+  @ValidateIf((_object, value) => value !== undefined)
+  @IsBoolean()
+  isActive?: boolean;
 }
 export class FuelExportDto {
   @IsString() @MinLength(1) format!: string;
