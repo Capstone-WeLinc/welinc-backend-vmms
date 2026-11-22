@@ -44,14 +44,20 @@ describe('Next maintenance cycle after approval', () => {
           .mockResolvedValue({ ...completed, status: 'DONE' }),
         update: jest
           .fn()
-          .mockImplementation(async ({ data }) => ({ ...completed, ...data })),
+          .mockImplementation(async ({ data }) => ({
+            ...completed,
+            ...data,
+            completedAt: new Date('2026-01-31T00:00:00Z'),
+          })),
         upsert: jest.fn().mockImplementation(async ({ create }) => ({
           id: 'next',
           ...create,
         })),
       },
       vehicle: {
-        findFirst: jest.fn().mockResolvedValue({ odometer: 26000 }),
+        findFirst: jest
+          .fn()
+          .mockResolvedValue({ odometer: 26000, garageId: 'garage' }),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       $transaction: jest
@@ -98,28 +104,36 @@ describe('Next maintenance cycle after approval', () => {
     expect(next.intervalType).toBe('QUARTERLY');
     expect(scheduleDue(next).dueDate).toBe('2026-04-30');
   });
-  it.each([
-    [26000, 25000, 26000],
-    [24000, 25000, 24000],
-    [0, 25000, 0],
-    [26000, null, 26000],
-  ])(
-    'uses only the Operations-confirmed master reading (%s, %s)',
-    async (vehicle, recorded, expected) => {
-      tx.vehicle.findFirst.mockResolvedValue(
-        vehicle === null ? null : { odometer: vehicle },
-      );
-      const next = await recur(service, tx, {
+  it('uses the submitted reading for the threshold and the master reading for the next cycle', async () => {
+    tx.vehicle.findFirst.mockResolvedValue({
+      odometer: 26000,
+      garageId: 'garage',
+    });
+    const next = await recur(service, tx, {
+      triggerType: 'ODOMETER',
+      odometerReading: 25000,
+    });
+    expect(next.startingReferenceReadingKm).toBe(25000);
+    expect(next.odometerReading).toBe(26000);
+    expect(scheduleDue(next).dueOdometer).toBe(30000);
+  });
+  it('rejects a master reading behind the submitted service reading', async () => {
+    tx.vehicle.findFirst.mockResolvedValue({
+      odometer: 24000,
+      garageId: 'garage',
+    });
+    await expect(
+      recur(service, tx, {
         triggerType: 'ODOMETER',
-        odometerReading: recorded,
-      });
-      expect(next.startingReferenceReadingKm).toBe(expected);
-      expect(next.odometerReading).toBe(expected);
-      expect(scheduleDue(next).dueOdometer).toBe(expected + 5000);
-    },
-  );
+        odometerReading: 25000,
+      }),
+    ).rejects.toThrow('master odometer is behind');
+  });
   it('refuses to invent a missing odometer reading', async () => {
-    tx.vehicle.findFirst.mockResolvedValue(null);
+    tx.vehicle.findFirst.mockResolvedValue({
+      odometer: null,
+      garageId: 'garage',
+    });
     await expect(
       recur(service, tx, {
         triggerType: 'ODOMETER',
