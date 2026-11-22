@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseUUIDPipe,
@@ -71,5 +72,11 @@ export class VmmsConfigController {
     @Body() body: { name?: string; isActive?: boolean },
   ) {
     return this.configService.updateOutsourcedProvider(id, body);
+  }
+
+  @Roles(UserRole.OPERATIONS)
+  @Delete('outsourced-providers/:id')
+  deleteOutsourcedProvider(@Param('id', ParseUUIDPipe) id: string) {
+    return this.configService.deleteOutsourcedProvider(id);
   }
 }

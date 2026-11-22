@@ -3049,10 +3049,13 @@ export class MaintenanceSchedulesService {
       throw new BadRequestException(
         'Choose a registered outsourced service provider.',
       );
+    const isExistingProvider =
+      previous?.outsourcedProvider?.trim().toLowerCase() ===
+      requested.toLowerCase();
     const provider = await client.outsourcedProvider.findFirst({
       where: {
         name: { equals: requested, mode: 'insensitive' },
-        isActive: true,
+        ...(!isExistingProvider ? { isActive: true } : {}),
       },
       select: { name: true },
     });

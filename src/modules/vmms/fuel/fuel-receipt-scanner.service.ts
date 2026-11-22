@@ -100,10 +100,7 @@ function parsedNumberText(raw: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function numberValue(
-  field: unknown,
-  decimalHint: 'liters' | 'price' | null = null,
-): number | null {
+function numberValue(field: unknown): number | null {
   const value = record(field);
   if (!value) return null;
   const currency = record(value.valueCurrency);
@@ -112,8 +109,12 @@ function numberValue(
       ? currency.currencyCode.toUpperCase()
       : null;
   if (currencyCode && !['PHP', '₱'].includes(currencyCode)) return null;
-  const printedValue =
-    parsedNumberText(value.content) ?? parsedNumberText(value.valueString);
+  const printedText =
+    typeof value.content === 'string' &&
+    parsedNumberText(value.content) !== null
+      ? value.content
+      : value.valueString;
+  const printedValue = parsedNumberText(printedText);
   if (printedValue !== null) return printedValue;
 
   const currencyAmount = currency?.amount;
@@ -123,19 +124,9 @@ function numberValue(
       : typeof currencyAmount === 'number'
         ? currencyAmount
         : null;
-  if (
-    typeof numericValue !== 'number' ||
-    !Number.isFinite(numericValue)
-  )
-    return null;
-
-  if (decimalHint === 'liters' && numericValue >= 1000) {
-    return Number((numericValue / 100).toFixed(2));
-  }
-  if (decimalHint === 'price' && numericValue >= 1000) {
-    return Number((numericValue / 100).toFixed(2));
-  }
-  return numericValue;
+  return typeof numericValue === 'number' && Number.isFinite(numericValue)
+    ? numericValue
+    : null;
 }
 
 function dateValue(field: unknown): string | null {
@@ -173,9 +164,9 @@ function getFuelLineSuggestions(fields: JsonRecord) {
     )
       return [];
 
-    const quantity = numberValue(itemFields.Quantity, 'liters');
+    const quantity = numberValue(itemFields.Quantity);
     const priceField = itemFields.Price ?? itemFields.UnitPrice;
-    const price = numberValue(priceField, 'price');
+    const price = numberValue(priceField);
     if (quantity === null || price === null || quantity <= 0 || price <= 0)
       return [];
     return [

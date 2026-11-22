@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { PrismaService } from '../../../shared/prisma.service.js';
+import { PrismaService } from '../../../shared/prisma.service';
 import { SystemType } from '@prisma/client';
 
 @Injectable()
@@ -45,10 +45,27 @@ export class VmmsConfigService {
   }
 
   async listOutsourcedProviders() {
-    return this.prisma.outsourcedProvider.findMany({
+    const providers = await this.prisma.outsourcedProvider.findMany({
       orderBy: [{ isActive: 'desc' }, { name: 'asc' }],
       select: { id: true, name: true, isActive: true },
     });
+    const usageRows = await this.prisma.maintenanceSchedule.groupBy({
+      by: ['outsourcedProvider'],
+      where: { outsourcedProvider: { not: null } },
+      _count: { _all: true },
+    });
+    const usageCounts = new Map<string, number>();
+    for (const row of usageRows) {
+      if (row.outsourcedProvider) {
+        const key = row.outsourcedProvider.toLowerCase();
+        usageCounts.set(key, (usageCounts.get(key) ?? 0) + row._count._all);
+      }
+    }
+
+    return providers.map((provider) => ({
+      ...provider,
+      usageCount: usageCounts.get(provider.name.toLowerCase()) ?? 0,
+    }));
   }
 
   async createOutsourcedProvider(rawName: string) {
@@ -92,7 +109,13 @@ export class VmmsConfigService {
     }
 
     const name = input.name?.trim();
-    if (name && name.toLocaleLowerCase() !== current.name.toLocaleLowerCase()) {
+    if (name && name !== current.name) {
+      const usageCount = await this.countOutsourcedProviderUsage(current.name);
+      if (usageCount > 0) {
+        throw new ConflictException(
+          'A provider used by maintenance schedules cannot be renamed. Change its active status instead.',
+        );
+      }
       const duplicate = await this.prisma.outsourcedProvider.findFirst({
         where: { id: { not: id }, name: { equals: name, mode: 'insensitive' } },
         select: { id: true },
@@ -107,6 +130,34 @@ export class VmmsConfigService {
         ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
       },
       select: { id: true, name: true, isActive: true },
+    });
+  }
+
+  async deleteOutsourcedProvider(id: string) {
+    const current = await this.prisma.outsourcedProvider.findUnique({
+      where: { id },
+      select: { id: true, name: true },
+    });
+    if (!current) throw new NotFoundException('Outsourced provider not found.');
+
+    const usageCount = await this.countOutsourcedProviderUsage(current.name);
+    if (usageCount > 0) {
+      throw new ConflictException(
+        'A provider used by maintenance schedules cannot be deleted. Change its active status instead.',
+      );
+    }
+
+    return this.prisma.outsourcedProvider.delete({
+      where: { id },
+      select: { id: true, name: true, isActive: true },
+    });
+  }
+
+  private countOutsourcedProviderUsage(name: string) {
+    return this.prisma.maintenanceSchedule.count({
+      where: {
+        outsourcedProvider: { equals: name, mode: 'insensitive' },
+      },
     });
   }
 
