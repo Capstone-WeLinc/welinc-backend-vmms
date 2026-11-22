@@ -47,6 +47,9 @@ describe('Schedule checklist assignment', () => {
           .fn()
           .mockImplementation(async ({ data }) => ({ ...previous, ...data })),
       },
+      maintenanceScheduleRescheduleAudit: {
+        create: jest.fn().mockResolvedValue({}),
+      },
       $transaction: jest
         .fn()
         .mockImplementation(async (callback) => callback(db)),
@@ -110,6 +113,31 @@ describe('Schedule checklist assignment', () => {
     });
     expect(db.checklistTemplate.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: template.id, deletedAt: null } }),
+    );
+  });
+  it('records an actor and previous/new due dates when Operations reschedules', async () => {
+    const actor = {
+      sub: 'operations-1',
+      name: 'Operations User',
+      email: 'operations@example.test',
+      roles: [{ system: 'VMMS', role: 'OPERATIONS' }],
+    };
+
+    await service.update(
+      previous.id,
+      { ...input, targetDueDate: '2099-03-01' },
+      actor,
+    );
+
+    expect(db.maintenanceScheduleRescheduleAudit.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          scheduleId: previous.id,
+          actorId: actor.sub,
+          source: 'MANUAL_UPDATE',
+          previousTargetDueDate: previous.targetDueDate,
+        }),
+      }),
     );
   });
   it('repairs an unlinked Pending schedule when explicitly saved', async () => {

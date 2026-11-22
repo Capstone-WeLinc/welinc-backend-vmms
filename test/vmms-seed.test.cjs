@@ -8,6 +8,8 @@ const { seedVmms } = require('../prisma/seeds/vmms.seed');
 test('VMMS seed preserves fixtures without duplicate pending recurrence', async () => {
   const rows = [];
   const templateUpserts = [];
+  const templateRows = new Map();
+  const checklistItems = new Map();
   const normalize = value => value.replace(/^ +| +$/g, '').toLowerCase();
   const sameIdentity = (a, b) => normalize(a.vehicleId) === normalize(b.vehicleId)
     && normalize(a.title) === normalize(b.title);
@@ -22,21 +24,39 @@ test('VMMS seed preserves fixtures without duplicate pending recurrence', async 
     })) },
     user: { findMany: async () => [{ id: 'chief-user', name: 'Chief Mechanic', email: 'chief@example.test' }] },
     checklistTemplate: {
-      findUnique: async () => null,
+      findUnique: async ({ where }) => templateRows.get(where.type) ?? null,
       upsert: async args => {
         templateUpserts.push(args);
-        return { id: args.create.type, ...args.create };
+        const existing = templateRows.get(args.where.type);
+        const row = existing ?? { id: args.create.type, ...args.create };
+        templateRows.set(args.where.type, row);
+        return row;
       },
     },
-    checklistItem: { createMany: async () => ({ count: 5 }) },
+    checklistItem: {
+      findMany: async ({ where }) => checklistItems.get(where.checklistTemplateId) ?? [],
+      createMany: async ({ data }) => {
+        const existing = checklistItems.get(data[0].checklistTemplateId) ?? [];
+        checklistItems.set(data[0].checklistTemplateId, [
+          ...existing,
+          ...data.map(({ text }) => ({ text })),
+        ]);
+        return { count: data.length };
+      },
+    },
     maintenanceSchedule: {
-      deleteMany: async () => { rows.length = 0; },
-      create: async ({ data }) => {
+      count: async () => rows.length,
+      upsert: async ({ where, create }) => {
+        const existing = where.id
+          ? rows.find(row => row.id === where.id)
+          : rows.find(row => row.previousScheduleId === where.previousScheduleId);
+        if (existing) return existing;
+        const data = create;
         if (data.status === 'PENDING') {
           assert.ok(!rows.some(row => row.status === 'PENDING' && sameIdentity(row, data)),
             `Duplicate pending schedule: ${data.vehicleId} / ${data.title}`);
         }
-        const row = { id: String(rows.length + 1), ...data };
+        const row = { ...data };
         rows.push(row);
         return row;
       },
@@ -47,7 +67,7 @@ test('VMMS seed preserves fixtures without duplicate pending recurrence', async 
   await seedVmms(prisma);
 
   assert.equal(templateUpserts.length, 5);
-  for (const template of templateUpserts) assert.equal(template.update.deletedAt, null);
+  for (const template of templateUpserts) assert.deepEqual(template.update, {});
   assert.equal(rows.filter(row => !row.previousScheduleId).length, 48);
   const garageByPlate = new Map([
     ['NDG 5821', 'Marikina'], ['CAK 9043', 'Sta. Rosa'], ['WOB 2947', 'Pulilan'],
@@ -67,4 +87,9 @@ test('VMMS seed preserves fixtures without duplicate pending recurrence', async 
     assert.equal(previous.status, 'COMPLETED');
     assert.ok(sameIdentity(previous, row));
   }
+
+  const firstRunCount = rows.length;
+  await seedVmms(prisma);
+  assert.equal(rows.length, firstRunCount);
+  assert.equal(templateUpserts.length, 5);
 });

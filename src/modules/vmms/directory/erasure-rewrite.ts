@@ -54,6 +54,18 @@ export const ERASURE_COPY_COLUMNS = [
     emailColumn: 'reviewed_by_email',
   },
   {
+    table: 'maintenance_schedule_extensions',
+    idColumn: 'actor_id',
+    nameColumn: 'actor_name',
+    emailColumn: 'actor_email',
+  },
+  {
+    table: 'maintenance_schedule_extensions',
+    idColumn: 'reviewed_by_id',
+    nameColumn: 'reviewed_by_name',
+    emailColumn: 'reviewed_by_email',
+  },
+  {
     table: 'maintenance_log_edit_unlocks',
     idColumn: 'actor_id',
     nameColumn: 'actor_name',
@@ -67,6 +79,18 @@ export const ERASURE_COPY_COLUMNS = [
   },
   {
     table: 'maintenance_log_edit_audits',
+    idColumn: 'actor_id',
+    nameColumn: 'actor_name',
+    emailColumn: 'actor_email',
+  },
+  {
+    table: 'maintenance_schedule_extension_audits',
+    idColumn: 'actor_id',
+    nameColumn: 'actor_name',
+    emailColumn: 'actor_email',
+  },
+  {
+    table: 'maintenance_schedule_reschedule_audits',
     idColumn: 'actor_id',
     nameColumn: 'actor_name',
     emailColumn: 'actor_email',

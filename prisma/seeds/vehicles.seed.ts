@@ -1,11 +1,17 @@
 import { PrismaClient, VehicleStatus } from '@prisma/client';
+import { seedId } from './seed-id';
+import { suiteSeedPeople } from './users.seed';
 
 export async function seedVehicles(prisma: PrismaClient) {
   console.log('Creating sample vehicles...');
 
   const garageNames = ['Marikina', 'Sta. Rosa', 'Pulilan'] as const;
   const garages = await prisma.garage.findMany({
-    where: { name: { in: [...garageNames] } },
+    where: {
+      name: { in: [...garageNames] },
+      isActive: true,
+      deletedAt: null,
+    },
     select: { id: true, name: true },
   });
   const garageIds = new Map(garages.map((garage) => [garage.name, garage.id]));
@@ -45,7 +51,7 @@ export async function seedVehicles(prisma: PrismaClient) {
       engineType: 'Diesel',
       truckSizeCategory: 'Light Duty',
       status: VehicleStatus.AVAILABLE,
-      odometer: 31500,
+      odometer: 35000,
       garageName: 'Pulilan',
     },
     {
@@ -56,7 +62,7 @@ export async function seedVehicles(prisma: PrismaClient) {
       engineType: 'Diesel',
       truckSizeCategory: 'Light Duty',
       status: VehicleStatus.AVAILABLE,
-      odometer: 18000,
+      odometer: 19000,
       garageName: 'Marikina',
     },
     {
@@ -91,20 +97,58 @@ export async function seedVehicles(prisma: PrismaClient) {
       }
       return prisma.vehicle.upsert({
         where: { plateNumber: vehicle.plateNumber },
-        update: {
-          make: vehicle.make,
-          model: vehicle.model,
-          year: vehicle.year,
-          engineType: vehicle.engineType,
-          truckSizeCategory: vehicle.truckSizeCategory,
-          status: vehicle.status,
-          odometer: vehicle.odometer,
+        update: {},
+        create: {
+          ...vehicle,
+          id: seedId(`vehicle:${vehicle.plateNumber}`),
           garageId,
         },
-        create: { ...vehicle, garageId },
       });
     }),
   );
+
+  const newVehicles = vehicles.filter(
+    (vehicle) => vehicle.id === seedId(`vehicle:${vehicle.plateNumber}`),
+  );
+  if (newVehicles.length) {
+    const operationsPerson = suiteSeedPeople().find(
+      (person) =>
+        person.state === 'active' &&
+        person.roles.some(
+          (role) => role.system === 'VMMS' && role.role === 'OPERATIONS',
+        ),
+    );
+    if (!operationsPerson)
+      throw new Error(
+        'Cannot seed odometer history without an active VMMS Operations identity.',
+      );
+
+    const auditRows = newVehicles.flatMap((vehicle) => {
+      const anchor = new Date(vehicle.createdAt);
+      anchor.setUTCHours(12, 0, 0, 0);
+      return [60, 30, 0].map((daysAgo, index) => {
+        const createdAt = new Date(anchor);
+        createdAt.setUTCDate(createdAt.getUTCDate() - daysAgo);
+        return {
+          id: seedId(`odometer:${vehicle.plateNumber}:${index}`),
+          vehicleId: vehicle.id,
+          userId: operationsPerson.id,
+          email: operationsPerson.email.toLowerCase(),
+          action: 'ODOMETER_UPDATED',
+          fieldName: 'odometer',
+          previousValue: String(
+            vehicle.odometer - (3 - index) * 3000,
+          ),
+          newValue: String(vehicle.odometer - (2 - index) * 3000),
+          createdAt,
+        };
+      });
+    });
+    await prisma.vehicleAuditLog.createMany({
+      data: auditRows,
+      skipDuplicates: true,
+    });
+  }
 
   console.log(`  Created ${vehicles.length} sample vehicles\n`);
   return vehicles;
