@@ -50,6 +50,9 @@ describe('Schedule checklist assignment', () => {
       maintenanceScheduleRescheduleAudit: {
         create: jest.fn().mockResolvedValue({}),
       },
+      outsourcedProvider: {
+        findFirst: jest.fn(),
+      },
       $transaction: jest
         .fn()
         .mockImplementation(async (callback) => callback(db)),
@@ -139,6 +142,41 @@ describe('Schedule checklist assignment', () => {
         }),
       }),
     );
+  });
+  it('keeps an unchanged inactive provider on an existing schedule only', async () => {
+    const provider = { name: 'Northside Service' };
+    previous.accountType = 'OUTSOURCED';
+    previous.outsourcedProvider = provider.name;
+    db.outsourcedProvider.findFirst.mockResolvedValue(provider);
+
+    await service.update(previous.id, {
+      ...input,
+      accountType: 'OUTSOURCED',
+      outsourcedProvider: provider.name,
+    });
+
+    expect(db.outsourcedProvider.findFirst).toHaveBeenCalledWith({
+      where: {
+        name: { equals: provider.name, mode: 'insensitive' },
+      },
+      select: { name: true },
+    });
+
+    db.outsourcedProvider.findFirst.mockResolvedValue(null);
+    await expect(
+      service.create({
+        ...input,
+        accountType: 'OUTSOURCED',
+        outsourcedProvider: provider.name,
+      }),
+    ).rejects.toThrow('Choose an active provider from the registered list.');
+    expect(db.outsourcedProvider.findFirst).toHaveBeenLastCalledWith({
+      where: {
+        name: { equals: provider.name, mode: 'insensitive' },
+        isActive: true,
+      },
+      select: { name: true },
+    });
   });
   it('repairs an unlinked Pending schedule when explicitly saved', async () => {
     previous.checklistTemplateId = null;
