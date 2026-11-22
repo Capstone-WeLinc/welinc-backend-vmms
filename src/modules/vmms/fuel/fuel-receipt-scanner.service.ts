@@ -100,7 +100,10 @@ function parsedNumberText(raw: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function numberValue(field: unknown): number | null {
+function numberValue(
+  field: unknown,
+  decimalHint: 'liters' | 'price' | null = null,
+): number | null {
   const value = record(field);
   if (!value) return null;
   const currency = record(value.valueCurrency);
@@ -120,9 +123,19 @@ function numberValue(field: unknown): number | null {
       : typeof currencyAmount === 'number'
         ? currencyAmount
         : null;
-  return typeof numericValue === 'number' && Number.isFinite(numericValue)
-    ? numericValue
-    : null;
+  if (
+    typeof numericValue !== 'number' ||
+    !Number.isFinite(numericValue)
+  )
+    return null;
+
+  if (decimalHint === 'liters' && numericValue >= 1000) {
+    return Number((numericValue / 100).toFixed(2));
+  }
+  if (decimalHint === 'price' && numericValue >= 1000) {
+    return Number((numericValue / 100).toFixed(2));
+  }
+  return numericValue;
 }
 
 function dateValue(field: unknown): string | null {
@@ -160,9 +173,9 @@ function getFuelLineSuggestions(fields: JsonRecord) {
     )
       return [];
 
-    const quantity = numberValue(itemFields.Quantity);
+    const quantity = numberValue(itemFields.Quantity, 'liters');
     const priceField = itemFields.Price ?? itemFields.UnitPrice;
-    const price = numberValue(priceField);
+    const price = numberValue(priceField, 'price');
     if (quantity === null || price === null || quantity <= 0 || price <= 0)
       return [];
     return [
