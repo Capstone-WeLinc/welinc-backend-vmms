@@ -29,6 +29,8 @@ import { CancelMaintenanceScheduleDto } from './dto/cancel-maintenance-schedule.
 import { UpdateWorkOrderPriorityDto } from './dto/update-work-order-priority.dto';
 import { UpdateMaintenanceLogDto } from './dto/update-maintenance-log.dto';
 import { ReviewMaintenanceCancellationDto } from './dto/review-maintenance-cancellation.dto';
+import { CreateMaintenanceScheduleExtensionDto } from './dto/create-maintenance-schedule-extension.dto';
+import { ReviewMaintenanceScheduleExtensionDto } from './dto/review-maintenance-schedule-extension.dto';
 
 type WorkOrderUploadFile = {
   originalname: string;
@@ -78,8 +80,66 @@ export class MaintenanceSchedulesController {
   async update(
     @Param('id') id: string,
     @Body() body: CreateMaintenanceScheduleDto,
+    @Req() req: { user: ScheduleActor },
   ) {
-    return this.maintenanceSchedulesService.update(id, body);
+    return this.maintenanceSchedulesService.update(id, body, req.user);
+  }
+
+  @Roles(UserRole.MECHANIC)
+  @Post(':id/extensions')
+  async requestExtension(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: CreateMaintenanceScheduleExtensionDto,
+    @Req() req: { user: ScheduleActor },
+  ) {
+    return this.maintenanceSchedulesService.requestExtension(
+      id,
+      body,
+      req.user,
+    );
+  }
+
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.OPERATIONS,
+    UserRole.CHIEF_MECHANIC,
+    UserRole.MECHANIC,
+  )
+  @Get(':id/extensions')
+  async extensionHistory(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: { user: ScheduleActor },
+  ) {
+    return this.maintenanceSchedulesService.getExtensionHistory(id, req.user);
+  }
+
+  @Roles(UserRole.ADMIN)
+  @Get('extensions/pending')
+  async pendingExtensions(
+    @Query('cursor', new ParseUUIDPipe({ optional: true })) cursor: string | undefined,
+    @Req() req: { user: ScheduleActor },
+  ) {
+    return this.maintenanceSchedulesService.findPendingExtensionRequests(
+      req.user,
+      cursor,
+    );
+  }
+
+  @Roles(UserRole.ADMIN)
+  @Post(':id/extensions/:requestId/review')
+  async reviewExtension(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('requestId', ParseUUIDPipe) requestId: string,
+    @Body() body: ReviewMaintenanceScheduleExtensionDto,
+    @Req() req: { user: ScheduleActor },
+  ) {
+    return this.maintenanceSchedulesService.reviewExtensionRequest(
+      id,
+      requestId,
+      body.decision,
+      body.reason,
+      req.user,
+    );
   }
 
   @Roles(UserRole.ADMIN, UserRole.OPERATIONS)

@@ -72,6 +72,34 @@ function stringValue(field: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+function parsedNumberText(raw: unknown): number | null {
+  if (typeof raw !== 'string') return null;
+  const match = /^[^\d+-]*?([+-]?\d[\d.,]*)[^\d]*$/.exec(raw.trim());
+  if (!match) return null;
+
+  const text = match[1];
+  const lastComma = text.lastIndexOf(',');
+  const lastPeriod = text.lastIndexOf('.');
+  let normalized = text;
+  if (lastComma >= 0 && lastPeriod >= 0) {
+    normalized =
+      lastComma > lastPeriod
+        ? text.replace(/\./g, '').replace(/,/g, '.')
+        : text.replace(/,/g, '');
+  } else if (lastComma >= 0) {
+    const decimalDigits = text.length - lastComma - 1;
+    normalized =
+      decimalDigits > 0 &&
+      decimalDigits <= 2 &&
+      text.indexOf(',') === lastComma
+        ? `${text.slice(0, lastComma).replace(/,/g, '')}.${text.slice(lastComma + 1)}`
+        : text.replace(/,/g, '');
+  }
+
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function numberValue(field: unknown): number | null {
   const value = record(field);
   if (!value) return null;
@@ -81,16 +109,20 @@ function numberValue(field: unknown): number | null {
       ? currency.currencyCode.toUpperCase()
       : null;
   if (currencyCode && !['PHP', '₱'].includes(currencyCode)) return null;
+  const printedValue =
+    parsedNumberText(value.content) ?? parsedNumberText(value.valueString);
+  if (printedValue !== null) return printedValue;
+
   const currencyAmount = currency?.amount;
-  const raw =
+  const numericValue =
     typeof value.valueNumber === 'number'
       ? value.valueNumber
       : typeof currencyAmount === 'number'
         ? currencyAmount
-        : value.valueString;
-  const parsed =
-    typeof raw === 'string' ? Number(raw.replace(/,/g, '').trim()) : raw;
-  return typeof parsed === 'number' && Number.isFinite(parsed) ? parsed : null;
+        : null;
+  return typeof numericValue === 'number' && Number.isFinite(numericValue)
+    ? numericValue
+    : null;
 }
 
 function dateValue(field: unknown): string | null {

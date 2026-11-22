@@ -10,8 +10,11 @@ import {
 import {
   AccountType,
   MaintenanceCancellationReviewStatus,
+  MaintenanceScheduleExtensionAuditEventType,
+  MaintenanceScheduleExtensionReviewStatus,
   MaintenanceSchedule,
   MaintenancePriority,
+  MaintenanceScheduleRescheduleSource,
   MaintenanceStatus,
   MaintenanceTriggerType,
   Prisma,
@@ -29,6 +32,7 @@ import {
 import { progressForClient, stateForStorage } from './work-order-state';
 import { scheduleScope, ScheduleActor } from './schedule-access';
 import { CreateMaintenanceScheduleDto } from './dto/create-maintenance-schedule.dto';
+import { CreateMaintenanceScheduleExtensionDto } from './dto/create-maintenance-schedule-extension.dto';
 import { UpdateMaintenanceLogDto } from './dto/update-maintenance-log.dto';
 import { scheduleDue } from './schedule-due';
 import { validateStartDate } from './schedule-start-date';
@@ -118,6 +122,77 @@ export class MaintenanceSchedulesService {
         'Completed and Cancelled work orders are locked. An Admin must unlock the maintenance log before editing.',
       );
     }
+  }
+
+  private assertMechanicActor(actor: ScheduleActor) {
+    if (
+      !actor?.sub ||
+      (actor.system && actor.system !== 'VMMS') ||
+      !actor.roles?.some(
+        (role) => role.system === 'VMMS' && role.role === 'MECHANIC',
+      )
+    ) {
+      throw new ForbiddenException(
+        'Only an authenticated VMMS Mechanic can request a schedule extension.',
+      );
+    }
+  }
+
+  private assertAdminActor(actor: ScheduleActor) {
+    if (
+      !actor?.sub ||
+      (actor.system && actor.system !== 'VMMS') ||
+      !actor.roles?.some(
+        (role) => role.system === 'VMMS' && role.role === 'ADMIN',
+      )
+    ) {
+      throw new ForbiddenException(
+        'Only a VMMS Admin can review extension requests.',
+      );
+    }
+  }
+
+  private isExtensionEligible(
+    schedule: Pick<MaintenanceSchedule, 'status' | 'workOrderProgress'>,
+  ) {
+    if (schedule.status === MaintenanceStatus.IN_PROGRESS) return true;
+    return (
+      schedule.status === MaintenanceStatus.OVERDUE &&
+      this.asProgressRecord(schedule.workOrderProgress).overdueFromStatus ===
+        MaintenanceStatus.IN_PROGRESS
+    );
+  }
+
+  private parseExtensionDate(value: unknown): Date {
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      throw new BadRequestException(
+        'A valid target due date in YYYY-MM-DD format is required.',
+      );
+    }
+    const date = new Date(`${value}T00:00:00.000Z`);
+    if (
+      !Number.isFinite(date.getTime()) ||
+      date.toISOString().slice(0, 10) !== value
+    ) {
+      throw new BadRequestException('The requested target due date is invalid.');
+    }
+    return date;
+  }
+
+  private manilaTodayDate(now: Date) {
+    return new Date(now.getTime() + 8 * 60 * 60 * 1000)
+      .toISOString()
+      .slice(0, 10);
+  }
+
+  private withoutOverdueMarker(
+    value: Prisma.JsonValue | null,
+  ): Prisma.InputJsonObject {
+    const progress =
+      value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    return Object.fromEntries(
+      Object.entries(progress).filter(([key]) => key !== 'overdueFromStatus'),
+    ) as Prisma.InputJsonObject;
   }
 
   private assertAttachmentWritable(schedule: MaintenanceSchedule) {
@@ -855,7 +930,11 @@ export class MaintenanceSchedulesService {
     };
   }
 
-  async update(id: string, data: CreateMaintenanceScheduleDto) {
+  async update(
+    id: string,
+    data: CreateMaintenanceScheduleDto,
+    actor?: ScheduleActor,
+  ) {
     if (data.status === 'CANCELLED')
       throw new BadRequestException(
         'Use the cancellation endpoint and provide a reason.',
@@ -975,6 +1054,32 @@ export class MaintenanceSchedulesService {
           },
         });
 
+        const datesChanged =
+          this.formatDateOnly(previous.startDate) !==
+            this.formatDateOnly(updated.startDate) ||
+          this.formatDateOnly(previous.targetDueDate) !==
+            this.formatDateOnly(updated.targetDueDate);
+        if (datesChanged) {
+          if (!actor?.sub || !actor.name || !actor.email) {
+            throw new ForbiddenException(
+              'An authenticated actor is required to reschedule maintenance.',
+            );
+          }
+          await tx.maintenanceScheduleRescheduleAudit.create({
+            data: {
+              scheduleId: id,
+              source: MaintenanceScheduleRescheduleSource.MANUAL_UPDATE,
+              actorId: actor.sub,
+              actorName: actor.name,
+              actorEmail: actor.email,
+              previousStartDate: previous.startDate,
+              newStartDate: updated.startDate,
+              previousTargetDueDate: previous.targetDueDate,
+              newTargetDueDate: updated.targetDueDate,
+            },
+          });
+        }
+
         const justCompleted =
           this.isCompleted(updated.status) &&
           !this.isCompleted(previous.status);
@@ -1036,6 +1141,429 @@ export class MaintenanceSchedulesService {
       laborCost: costs.laborCost,
       totalCost: costs.totalCost,
     };
+  }
+
+  async requestExtension(
+    id: string,
+    data: CreateMaintenanceScheduleExtensionDto,
+    actor: ScheduleActor,
+  ) {
+    this.assertMechanicActor(actor);
+    if (!actor.name?.trim() || !actor.email?.trim()) {
+      throw new ForbiddenException(
+        'An authenticated mechanic identity is required.',
+      );
+    }
+
+    const requestedDueDate = this.parseExtensionDate(data.requestedDueDate);
+    const reason = typeof data.reason === 'string' ? data.reason.trim() : '';
+    if (!reason || reason.length > 2000) {
+      throw new BadRequestException(
+        'A request reason of 1 to 2000 characters is required.',
+      );
+    }
+
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const schedule = await tx.maintenanceSchedule.findFirst({
+          where: { id, deletedAt: null },
+        });
+        if (!schedule) throw new NotFoundException('Work order not found.');
+        if (schedule.assignedMechanicId !== actor.sub) {
+          throw new ForbiddenException(
+            'Only the assigned mechanic can request a schedule extension.',
+          );
+        }
+        if (!this.isExtensionEligible(schedule)) {
+          throw new ConflictException(
+            'Extensions are available only while assigned work is in progress.',
+          );
+        }
+        if (!schedule.targetDueDate) {
+          throw new ConflictException(
+            'A schedule without a target due date cannot be extended.',
+          );
+        }
+        if (requestedDueDate <= schedule.targetDueDate) {
+          throw new BadRequestException(
+            'The requested target due date must be later than the current target due date.',
+          );
+        }
+
+        const [requestCount, pendingRequest] = await Promise.all([
+          tx.maintenanceScheduleExtension.count({ where: { scheduleId: id } }),
+          tx.maintenanceScheduleExtension.findFirst({
+            where: {
+              scheduleId: id,
+              reviewStatus: MaintenanceScheduleExtensionReviewStatus.PENDING,
+            },
+            select: { id: true },
+          }),
+        ]);
+        if (requestCount >= 2) {
+          throw new ConflictException(
+            'This schedule has reached its two extension request limit.',
+          );
+        }
+        if (pendingRequest) {
+          throw new ConflictException(
+            'An extension request is already pending for this schedule.',
+          );
+        }
+
+        const request = await tx.maintenanceScheduleExtension.create({
+          data: {
+            scheduleId: id,
+            actorId: actor.sub,
+            actorName: actor.name.trim(),
+            actorEmail: actor.email.trim(),
+            requestedDueDate,
+            reason,
+          },
+        });
+        await tx.maintenanceScheduleExtensionAudit.create({
+          data: {
+            scheduleId: id,
+            extensionId: request.id,
+            eventType: MaintenanceScheduleExtensionAuditEventType.REQUESTED,
+            actorId: actor.sub,
+            actorName: actor.name.trim(),
+            actorEmail: actor.email.trim(),
+            previousDueDate: schedule.targetDueDate,
+            requestedDueDate,
+            reason,
+            recordedAt: request.createdAt,
+          },
+        });
+
+        return {
+          id: request.id,
+          scheduleId: request.scheduleId,
+          requestedDueDate: this.formatDateOnly(request.requestedDueDate),
+          reason: request.reason,
+          reviewStatus: request.reviewStatus,
+          actorName: request.actorName,
+          requestedAt: request.createdAt.toISOString(),
+          reviewedAt: null,
+        };
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw new ConflictException(
+          'An extension request is already pending for this schedule.',
+        );
+      }
+      throw error;
+    }
+  }
+
+  async findPendingExtensionRequests(actor: ScheduleActor, cursor?: string) {
+    this.assertAdminActor(actor);
+    const pageSize = 50;
+    const requests = await this.prisma.maintenanceScheduleExtension.findMany({
+      where: {
+        reviewStatus: MaintenanceScheduleExtensionReviewStatus.PENDING,
+        schedule: { is: { deletedAt: null } },
+      },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      take: pageSize + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      select: {
+        id: true,
+        scheduleId: true,
+        actorName: true,
+        requestedDueDate: true,
+        reason: true,
+        createdAt: true,
+        schedule: {
+          select: {
+            workOrderNumber: true,
+            vehicleId: true,
+            title: true,
+            status: true,
+            targetDueDate: true,
+            assignedMechanic: true,
+          },
+        },
+      },
+    });
+    const hasMore = requests.length > pageSize;
+    const page = hasMore ? requests.slice(0, pageSize) : requests;
+
+    return {
+      items: page.map((request) => ({
+        id: request.id,
+        scheduleId: request.scheduleId,
+        actorName: request.actorName,
+        requestedDueDate: this.formatDateOnly(request.requestedDueDate),
+        reason: request.reason,
+        requestedAt: request.createdAt.toISOString(),
+        schedule: {
+          workOrderNumber: request.schedule.workOrderNumber,
+          vehicleId: request.schedule.vehicleId,
+          title: request.schedule.title,
+          status: request.schedule.status,
+          targetDueDate: this.formatDateOnly(request.schedule.targetDueDate),
+          assignedMechanic: request.schedule.assignedMechanic,
+        },
+      })),
+      nextCursor: hasMore ? page[page.length - 1]?.id ?? null : null,
+    };
+  }
+
+  async getExtensionHistory(id: string, actor: ScheduleActor) {
+    const scope = scheduleScope(actor);
+    const schedule = await this.prisma.maintenanceSchedule.findFirst({
+      where: { id, deletedAt: null, ...scope },
+      select: { id: true, targetDueDate: true },
+    });
+    if (!schedule) throw new NotFoundException('Work order not found.');
+
+    const [requests, extensionEvents, rescheduleEvents] = await Promise.all([
+      this.prisma.maintenanceScheduleExtension.findMany({
+        where: { scheduleId: id },
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true,
+          actorName: true,
+          requestedDueDate: true,
+          reason: true,
+          reviewStatus: true,
+          reviewedByName: true,
+          reviewReason: true,
+          createdAt: true,
+          reviewedAt: true,
+        },
+      }),
+      this.prisma.maintenanceScheduleExtensionAudit.findMany({
+        where: { scheduleId: id },
+        orderBy: { recordedAt: 'desc' },
+        select: {
+          extensionId: true,
+          eventType: true,
+          actorName: true,
+          previousDueDate: true,
+          requestedDueDate: true,
+          reason: true,
+          recordedAt: true,
+        },
+      }),
+      this.prisma.maintenanceScheduleRescheduleAudit.findMany({
+        where: { scheduleId: id },
+        orderBy: { changedAt: 'desc' },
+        select: {
+          source: true,
+          actorName: true,
+          previousStartDate: true,
+          newStartDate: true,
+          previousTargetDueDate: true,
+          newTargetDueDate: true,
+          changedAt: true,
+        },
+      }),
+    ]);
+
+    return {
+      currentTargetDueDate: this.formatDateOnly(schedule.targetDueDate),
+      requests: requests.map((request) => ({
+        id: request.id,
+        actorName: request.actorName,
+        requestedDueDate: this.formatDateOnly(request.requestedDueDate),
+        reason: request.reason,
+        reviewStatus: request.reviewStatus,
+        reviewedByName: request.reviewedByName,
+        reviewReason: request.reviewReason,
+        requestedAt: request.createdAt.toISOString(),
+        reviewedAt: request.reviewedAt?.toISOString() ?? null,
+      })),
+      extensionEvents: extensionEvents.map((event) => ({
+        extensionId: event.extensionId,
+        eventType: event.eventType,
+        actorName: event.actorName,
+        previousDueDate: this.formatDateOnly(event.previousDueDate),
+        requestedDueDate: this.formatDateOnly(event.requestedDueDate),
+        reason: event.reason,
+        recordedAt: event.recordedAt.toISOString(),
+      })),
+      rescheduleEvents: rescheduleEvents.map((event) => ({
+        source: event.source,
+        actorName: event.actorName,
+        previousStartDate: this.formatDateOnly(event.previousStartDate),
+        newStartDate: this.formatDateOnly(event.newStartDate),
+        previousTargetDueDate: this.formatDateOnly(
+          event.previousTargetDueDate,
+        ),
+        newTargetDueDate: this.formatDateOnly(event.newTargetDueDate),
+        changedAt: event.changedAt.toISOString(),
+      })),
+    };
+  }
+
+  async reviewExtensionRequest(
+    id: string,
+    requestId: string,
+    decision: 'APPROVE' | 'REJECT',
+    reviewReason: unknown,
+    actor: ScheduleActor,
+  ) {
+    this.assertAdminActor(actor);
+    if (!actor.name?.trim() || !actor.email?.trim()) {
+      throw new ForbiddenException('An authenticated Admin identity is required.');
+    }
+    if (decision !== 'APPROVE' && decision !== 'REJECT') {
+      throw new BadRequestException('A valid extension decision is required.');
+    }
+    const reason =
+      typeof reviewReason === 'string' ? reviewReason.trim() : '';
+    if (decision === 'REJECT' && (!reason || reason.length > 2000)) {
+      throw new BadRequestException(
+        'A rejection reason of 1 to 2000 characters is required.',
+      );
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const schedule = await tx.maintenanceSchedule.findFirst({
+        where: { id, deletedAt: null },
+      });
+      if (!schedule) throw new NotFoundException('Work order not found.');
+      const request = await tx.maintenanceScheduleExtension.findFirst({
+        where: {
+          id: requestId,
+          scheduleId: id,
+          reviewStatus: MaintenanceScheduleExtensionReviewStatus.PENDING,
+        },
+      });
+      if (!request) {
+        throw new NotFoundException('Pending extension request not found.');
+      }
+
+      const now = new Date();
+      let nextStatus = schedule.status;
+      if (decision === 'APPROVE') {
+        if (!this.isExtensionEligible(schedule)) {
+          throw new ConflictException(
+            'This schedule is no longer eligible for an extension.',
+          );
+        }
+        if (
+          !schedule.targetDueDate ||
+          request.requestedDueDate <= schedule.targetDueDate
+        ) {
+          throw new ConflictException(
+            'The requested date no longer extends the current target due date.',
+          );
+        }
+
+        const resumeWork =
+          schedule.status === MaintenanceStatus.OVERDUE &&
+          this.formatDateOnly(request.requestedDueDate)! >=
+            this.manilaTodayDate(now);
+        nextStatus = resumeWork
+          ? MaintenanceStatus.IN_PROGRESS
+          : schedule.status;
+        const update = await tx.maintenanceSchedule.updateMany({
+          where: {
+            id,
+            deletedAt: null,
+            status: schedule.status,
+            updatedAt: schedule.updatedAt,
+            targetDueDate: schedule.targetDueDate,
+          },
+          data: {
+            targetDueDate: request.requestedDueDate,
+            ...(resumeWork
+              ? {
+                  status: MaintenanceStatus.IN_PROGRESS,
+                  workOrderProgress: this.withoutOverdueMarker(
+                    schedule.workOrderProgress,
+                  ),
+                }
+              : {}),
+          },
+        });
+        if (update.count !== 1) {
+          throw new ConflictException(
+            'The schedule changed while the extension was being reviewed.',
+          );
+        }
+        await tx.maintenanceScheduleRescheduleAudit.create({
+          data: {
+            scheduleId: id,
+            extensionId: request.id,
+            source: MaintenanceScheduleRescheduleSource.EXTENSION_APPROVAL,
+            actorId: actor.sub,
+            actorName: actor.name.trim(),
+            actorEmail: actor.email.trim(),
+            previousStartDate: schedule.startDate,
+            newStartDate: schedule.startDate,
+            previousTargetDueDate: schedule.targetDueDate,
+            newTargetDueDate: request.requestedDueDate,
+            changedAt: now,
+          },
+        });
+      }
+
+      const reviewStatus =
+        decision === 'APPROVE'
+          ? MaintenanceScheduleExtensionReviewStatus.APPROVED
+          : MaintenanceScheduleExtensionReviewStatus.REJECTED;
+      const reviewed = await tx.maintenanceScheduleExtension.updateMany({
+        where: {
+          id: requestId,
+          scheduleId: id,
+          reviewStatus: MaintenanceScheduleExtensionReviewStatus.PENDING,
+        },
+        data: {
+          reviewStatus,
+          reviewedById: actor.sub,
+          reviewedByName: actor.name.trim(),
+          reviewedByEmail: actor.email.trim(),
+          reviewReason: decision === 'REJECT' ? reason : null,
+          reviewedAt: now,
+        },
+      });
+      if (reviewed.count !== 1) {
+        throw new ConflictException(
+          'This extension request has already been reviewed.',
+        );
+      }
+      await tx.maintenanceScheduleExtensionAudit.create({
+        data: {
+          scheduleId: id,
+          extensionId: request.id,
+          eventType:
+            decision === 'APPROVE'
+              ? MaintenanceScheduleExtensionAuditEventType.APPROVED
+              : MaintenanceScheduleExtensionAuditEventType.REJECTED,
+          actorId: actor.sub,
+          actorName: actor.name.trim(),
+          actorEmail: actor.email.trim(),
+          previousDueDate: schedule.targetDueDate,
+          requestedDueDate: request.requestedDueDate,
+          reason: decision === 'REJECT' ? reason : null,
+          recordedAt: now,
+        },
+      });
+
+      return {
+        id: request.id,
+        scheduleId: id,
+        reviewStatus,
+        requestedDueDate: this.formatDateOnly(request.requestedDueDate),
+        targetDueDate: this.formatDateOnly(
+          decision === 'APPROVE'
+            ? request.requestedDueDate
+            : schedule.targetDueDate,
+        ),
+        status: nextStatus,
+        reviewedByName: actor.name.trim(),
+        reviewReason: decision === 'REJECT' ? reason : null,
+        reviewedAt: now.toISOString(),
+      };
+    });
   }
 
   async updatePriority(
@@ -1911,7 +2439,20 @@ export class MaintenanceSchedulesService {
       actor,
       assignedItems,
     );
-    const normalizedProgress = workflow.progress as Prisma.InputJsonObject;
+    const workCompletedAt =
+      action === 'SUBMIT' ? new Date() : undefined;
+    const recordedWorkCompletedAt = this.asProgressRecord(
+      accessible.workOrderProgress,
+    ).workCompletedAt;
+    const progressToPersist = workCompletedAt
+      ? {
+          ...workflow.progress,
+          workCompletedAt: workCompletedAt.toISOString(),
+        }
+      : typeof recordedWorkCompletedAt === 'string'
+        ? { ...workflow.progress, workCompletedAt: recordedWorkCompletedAt }
+        : workflow.progress;
+    const normalizedProgress = progressToPersist as Prisma.InputJsonObject;
     const progressRecord = workflow.progress;
     const serviceOdometer = progressRecord.serviceOdometerReading;
     if (action === 'SUBMIT') {
@@ -1995,7 +2536,7 @@ export class MaintenanceSchedulesService {
 
     const payload: Record<string, any> = {
       status: workflow.status,
-      ...stateForStorage(workflow.progress, workflow.status),
+      ...stateForStorage(progressToPersist, workflow.status),
       ...(workflow.status === MaintenanceStatus.COMPLETED
         ? { completedAt: new Date() }
         : {}),
@@ -2021,7 +2562,7 @@ export class MaintenanceSchedulesService {
 
     if (normalizedProgress !== undefined) {
       payload.workOrderProgress = {
-        ...stateForStorage(workflow.progress, workflow.status)
+        ...stateForStorage(progressToPersist, workflow.status)
           .workOrderProgress,
         chiefMechanic: accessible.chiefMechanic ?? '',
       };
@@ -2562,40 +3103,73 @@ export class MaintenanceSchedulesService {
         'Configure a positive odometer interval before approving recurring maintenance.',
       );
     }
-    const vehicle = odometerRecurring
-      ? await tx.vehicle.findFirst({
-          where: { plateNumber: schedule.vehicleId, deletedAt: null },
-          select: { odometer: true },
-        })
-      : null;
-    const nextOdometer =
-      vehicle && Number.isInteger(vehicle.odometer) && vehicle.odometer >= 0
-        ? vehicle.odometer
-        : null;
-    if (odometerRecurring && nextOdometer === null) {
+    const vehicle = await tx.vehicle.findFirst({
+      where: {
+        plateNumber: schedule.vehicleId,
+        isActive: true,
+        deletedAt: null,
+      },
+      select: { odometer: true, garageId: true },
+    });
+    if (!vehicle || !vehicle.garageId) {
       throw new BadRequestException(
-        'Record a current odometer reading before approving recurring maintenance.',
+        'The assigned truck must be active and have a registered garage before approving recurring maintenance.',
       );
     }
-    if (odometerRecurring)
-      validateScheduleMileage(
-        {
-          vehicleId: schedule.vehicleId,
-          title: schedule.title,
-          triggerType: MaintenanceTriggerType.ODOMETER,
-          odometerReading: String(nextOdometer),
-          startingReferenceReadingKm: String(nextOdometer),
-          intervalKm: String(schedule.intervalKm),
-        },
-        undefined,
-        nextOdometer,
+    if (
+      !Number.isInteger(vehicle.odometer) ||
+      vehicle.odometer < 0 ||
+      vehicle.odometer > 2147483647
+    ) {
+      throw new BadRequestException(
+        'Record a valid current odometer reading before approving recurring maintenance.',
       );
+    }
 
-    // Date-only references use Philippine business days, like schedule events.
-    // Store the cycle reference, not its due date: consumers add one interval.
-    const completionDay = new Date(schedule.updatedAt.getTime() + 8 * 3600_000)
-      .toISOString()
-      .slice(0, 10);
+    const progress = this.asProgressRecord(schedule.workOrderProgress);
+    const completionOdometer =
+      progress.serviceOdometerReading ?? schedule.odometerReading;
+    if (
+      odometerRecurring &&
+      (typeof completionOdometer !== 'number' ||
+        !Number.isSafeInteger(completionOdometer) ||
+        completionOdometer <= 0 ||
+        completionOdometer > 2147483647)
+    ) {
+      throw new BadRequestException(
+        'Record a valid odometer reading at service submission before approving recurring maintenance.',
+      );
+    }
+    if (
+      odometerRecurring &&
+      vehicle.odometer < (completionOdometer as number)
+    ) {
+      throw new BadRequestException(
+        'The truck master odometer is behind the recorded service odometer; reconcile the reading before approving recurring maintenance.',
+      );
+    }
+    if (
+      odometerRecurring &&
+      (completionOdometer as number) + schedule.intervalKm! > 2147483647
+    ) {
+      throw new BadRequestException(
+        'The next odometer threshold exceeds the supported mileage range.',
+      );
+    }
+
+    const rawWorkCompletedAt = progress.workCompletedAt;
+    const workCompletedAt =
+      typeof rawWorkCompletedAt === 'string' &&
+      Number.isFinite(Date.parse(rawWorkCompletedAt))
+        ? new Date(rawWorkCompletedAt)
+        : (schedule.completedAt ?? schedule.updatedAt);
+    // Older completed records lack a submission timestamp; their approval time is the best available anchor.
+    const completionDay = this.formatDateOnly(workCompletedAt);
+    if (!completionDay) {
+      throw new BadRequestException(
+        'A valid work-completion date is required before approving recurring maintenance.',
+      );
+    }
     const referenceDate = new Date(`${completionDay}T00:00:00.000Z`);
     const timeInterval = getTimeInterval(schedule) ?? {
       value: 3,
@@ -2618,7 +3192,6 @@ export class MaintenanceSchedulesService {
       create: {
         vehicleId: schedule.vehicleId,
         title: schedule.title,
-        garageId: schedule.garageId,
         status: MaintenanceStatus.PENDING,
         priority: schedule.priority,
         assignedMechanic: schedule.assignedMechanic,
@@ -2628,13 +3201,16 @@ export class MaintenanceSchedulesService {
         accountType: schedule.accountType,
         outsourcedProvider: schedule.outsourcedProvider,
         checklistTemplateId: schedule.checklistTemplateId,
-        odometerReading: nextOdometer,
+        garageId: vehicle.garageId,
+        odometerReading: vehicle.odometer,
         triggerType: schedule.triggerType,
         intervalKm: schedule.intervalKm,
         bufferDistanceKm: odometerRecurring
           ? (schedule.bufferDistanceKm ?? 0)
           : schedule.bufferDistanceKm,
-        startingReferenceReadingKm: odometerRecurring ? nextOdometer : null,
+        startingReferenceReadingKm: odometerRecurring
+          ? (completionOdometer as number)
+          : null,
         intervalType: schedule.intervalType,
         startReferenceDate: timeRecurring ? referenceDate : null,
         previousScheduleId: schedule.id,

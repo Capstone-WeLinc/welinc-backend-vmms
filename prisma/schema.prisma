@@ -69,6 +69,23 @@ enum MaintenanceCancellationReviewStatus {
   LEGACY
 }
 
+enum MaintenanceScheduleExtensionReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum MaintenanceScheduleExtensionAuditEventType {
+  REQUESTED
+  APPROVED
+  REJECTED
+}
+
+enum MaintenanceScheduleRescheduleSource {
+  MANUAL_UPDATE
+  EXTENSION_APPROVAL
+}
+
 enum MaintenanceTriggerType {
   MANUAL
   ODOMETER
@@ -89,17 +106,17 @@ enum MaintenanceIntervalType {
 // ==========================================
 
 model Notification {
-  id        String   @id @default(uuid()) @db.Uuid
-  userId    String   @map("user_id") @db.Uuid
-  title     String   @db.VarChar(200)
-  message   String   @db.Text
-  type      String   @default("info") @db.VarChar(30)
-  dedupeKey              String?              @unique @map("dedupe_key") @db.VarChar(255)
-  maintenanceScheduleId  String?              @map("maintenance_schedule_id") @db.Uuid
-  maintenanceSchedule    MaintenanceSchedule? @relation(fields: [maintenanceScheduleId], references: [id], onDelete: SetNull)
-  isRead                 Boolean              @default(false) @map("is_read")
-  createdAt              DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt              DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id                    String               @id @default(uuid()) @db.Uuid
+  userId                String               @map("user_id") @db.Uuid
+  title                 String               @db.VarChar(200)
+  message               String               @db.Text
+  type                  String               @default("info") @db.VarChar(30)
+  dedupeKey             String?              @unique @map("dedupe_key") @db.VarChar(255)
+  maintenanceScheduleId String?              @map("maintenance_schedule_id") @db.Uuid
+  maintenanceSchedule   MaintenanceSchedule? @relation(fields: [maintenanceScheduleId], references: [id], onDelete: SetNull)
+  isRead                Boolean              @default(false) @map("is_read")
+  createdAt             DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   @@index([userId, isRead, createdAt])
   @@map("notifications")
@@ -117,29 +134,29 @@ model ScheduledFleetReport {
 }
 
 model Vehicle {
-  id                String            @id @default(uuid()) @db.Uuid
-  plateNumber       String            @unique @map("plate_number") @db.VarChar(20)
-  make              String?           @db.VarChar(80)
-  model             String            @db.VarChar(100)
-  year              Int?
-  engineType        String?           @map("engine_type") @db.VarChar(50)
-  truckSizeCategory String?           @map("truck_size_category") @db.VarChar(50)
-  capacity          Int               @default(0) @map("capacity")
-  status            VehicleStatus     @default(AVAILABLE)
-  odometer          Int               @default(0)
-  defaultMaintenanceIntervalKm Int?  @map("default_maintenance_interval_km")
-  defaultMaintenanceBufferKm   Int?  @map("default_maintenance_buffer_km")
-  garageId          String?           @map("garage_id") @db.Uuid
-  workOrders        WorkOrder[]
-  isActive          Boolean           @default(true) @map("is_active")
-  deletedAt         DateTime?         @map("deleted_at") @db.Timestamptz(6)
-  createdAt         DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt         DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
-  auditLogs         VehicleAuditLog[]
-  fuelFillUps       FuelFillUp[]
-  fuelAnomalies    FuelAnomaly[]
-  maintenanceDefaults VehicleMaintenanceDefault[]
-  garage            Garage?           @relation(fields: [garageId], references: [id], onDelete: Restrict)
+  id                           String                      @id @default(uuid()) @db.Uuid
+  plateNumber                  String                      @unique @map("plate_number") @db.VarChar(20)
+  make                         String?                     @db.VarChar(80)
+  model                        String                      @db.VarChar(100)
+  year                         Int?
+  engineType                   String?                     @map("engine_type") @db.VarChar(50)
+  truckSizeCategory            String?                     @map("truck_size_category") @db.VarChar(50)
+  capacity                     Int                         @default(0) @map("capacity")
+  status                       VehicleStatus               @default(AVAILABLE)
+  odometer                     Int                         @default(0)
+  defaultMaintenanceIntervalKm Int?                        @map("default_maintenance_interval_km")
+  defaultMaintenanceBufferKm   Int?                        @map("default_maintenance_buffer_km")
+  garageId                     String?                     @map("garage_id") @db.Uuid
+  workOrders                   WorkOrder[]
+  isActive                     Boolean                     @default(true) @map("is_active")
+  deletedAt                    DateTime?                   @map("deleted_at") @db.Timestamptz(6)
+  createdAt                    DateTime                    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                    DateTime                    @updatedAt @map("updated_at") @db.Timestamptz(6)
+  auditLogs                    VehicleAuditLog[]
+  fuelFillUps                  FuelFillUp[]
+  fuelAnomalies                FuelAnomaly[]
+  maintenanceDefaults          VehicleMaintenanceDefault[]
+  garage                       Garage?                     @relation(fields: [garageId], references: [id], onDelete: Restrict)
 
   @@index([deletedAt])
   @@map("vehicles")
@@ -171,33 +188,33 @@ model OutsourcedProvider {
 }
 
 model FuelStation {
-  id        String        @id @default(uuid()) @db.Uuid
-  name      String        @unique @db.VarChar(100)
-  isActive  Boolean       @default(true) @map("is_active")
-  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id        String       @id @default(uuid()) @db.Uuid
+  name      String       @unique @db.VarChar(100)
+  isActive  Boolean      @default(true) @map("is_active")
+  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
   fillUps   FuelFillUp[]
 
   @@map("fuel_stations")
 }
 
 model FuelAnomalySetting {
-  id              String   @id @default("default") @db.VarChar(40)
+  id               String   @id @default("default") @db.VarChar(40)
   thresholdPercent Decimal  @default(20) @map("threshold_percent") @db.Decimal(5, 2)
-  updatedById     String?  @map("updated_by_id") @db.Uuid
-  updatedByEmail  String?  @map("updated_by_email") @db.VarChar(255)
-  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  updatedById      String?  @map("updated_by_id") @db.Uuid
+  updatedByEmail   String?  @map("updated_by_email") @db.VarChar(255)
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   @@map("fuel_anomaly_settings")
 }
 
 model FuelAnomalyThresholdAudit {
-  id                 String   @id @default(uuid()) @db.Uuid
-  actorId            String   @map("actor_id") @db.Uuid
-  actorEmail         String   @map("actor_email") @db.VarChar(255)
-  previousThreshold  Decimal? @map("previous_threshold") @db.Decimal(5, 2)
-  newThreshold       Decimal  @map("new_threshold") @db.Decimal(5, 2)
-  changedAt          DateTime @default(now()) @map("changed_at") @db.Timestamptz(6)
+  id                String   @id @default(uuid()) @db.Uuid
+  actorId           String   @map("actor_id") @db.Uuid
+  actorEmail        String   @map("actor_email") @db.VarChar(255)
+  previousThreshold Decimal? @map("previous_threshold") @db.Decimal(5, 2)
+  newThreshold      Decimal  @map("new_threshold") @db.Decimal(5, 2)
+  changedAt         DateTime @default(now()) @map("changed_at") @db.Timestamptz(6)
 
   @@index([changedAt])
   @@index([actorId, changedAt])
@@ -217,32 +234,32 @@ model FuelImportDraft {
 }
 
 model FuelFillUp {
-  id                  String          @id @default(uuid()) @db.Uuid
-  vehicleId           String          @map("vehicle_id") @db.Uuid
-  stationId           String          @map("station_id") @db.Uuid
-  stationNameSnapshot String          @map("station_name_snapshot") @db.VarChar(100)
-  filledBy            String          @map("filled_by") @db.VarChar(100)
-  enteredById     String          @map("entered_by_id") @db.Uuid
-  entryDate       DateTime        @map("entry_date") @db.Date
-  liters          Decimal         @db.Decimal(10, 2)
-  pricePerLiter   Decimal         @map("price_per_liter") @db.Decimal(10, 2)
-  totalCost       Decimal         @map("total_cost") @db.Decimal(12, 2)
-  poNumber        String?         @map("po_number") @db.VarChar(100)
-  siNumber        String?         @map("si_number") @db.VarChar(100)
-  product         String?         @db.VarChar(100)
-  odometer        Int
-  isFullTank      Boolean         @default(false) @map("is_full_tank")
-  isVoided        Boolean         @default(false) @map("is_voided")
-  voidReason      String?         @map("void_reason") @db.Text
-  voidedById      String?         @map("voided_by_id") @db.Uuid
-  voidedAt        DateTime?       @map("voided_at") @db.Timestamptz(6)
-  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt       DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
-  vehicle         Vehicle         @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
-  station         FuelStation     @relation(fields: [stationId], references: [id], onDelete: Restrict)
-  anomaly         FuelAnomaly?
-  audits          FuelAuditLog[]
-  receipt         FuelReceiptAttachment?
+  id                  String                 @id @default(uuid()) @db.Uuid
+  vehicleId           String                 @map("vehicle_id") @db.Uuid
+  stationId           String                 @map("station_id") @db.Uuid
+  stationNameSnapshot String                 @map("station_name_snapshot") @db.VarChar(100)
+  filledBy            String                 @map("filled_by") @db.VarChar(100)
+  enteredById         String                 @map("entered_by_id") @db.Uuid
+  entryDate           DateTime               @map("entry_date") @db.Date
+  liters              Decimal                @db.Decimal(10, 2)
+  pricePerLiter       Decimal                @map("price_per_liter") @db.Decimal(10, 2)
+  totalCost           Decimal                @map("total_cost") @db.Decimal(12, 2)
+  poNumber            String?                @map("po_number") @db.VarChar(100)
+  siNumber            String?                @map("si_number") @db.VarChar(100)
+  product             String?                @db.VarChar(100)
+  odometer            Int
+  isFullTank          Boolean                @default(false) @map("is_full_tank")
+  isVoided            Boolean                @default(false) @map("is_voided")
+  voidReason          String?                @map("void_reason") @db.Text
+  voidedById          String?                @map("voided_by_id") @db.Uuid
+  voidedAt            DateTime?              @map("voided_at") @db.Timestamptz(6)
+  createdAt           DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime               @updatedAt @map("updated_at") @db.Timestamptz(6)
+  vehicle             Vehicle                @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  station             FuelStation            @relation(fields: [stationId], references: [id], onDelete: Restrict)
+  anomaly             FuelAnomaly?
+  audits              FuelAuditLog[]
+  receipt             FuelReceiptAttachment?
 
   @@index([vehicleId, entryDate, createdAt])
   @@index([isVoided, entryDate])
@@ -250,27 +267,27 @@ model FuelFillUp {
 }
 
 model FuelAnomaly {
-  id              String          @id @default(uuid()) @db.Uuid
-  fillUpId        String          @unique @map("fill_up_id") @db.Uuid
-  vehicleId       String          @map("vehicle_id") @db.Uuid
-  efficiency      Decimal         @db.Decimal(10, 2)
-  rollingAverage  Decimal         @map("rolling_average") @db.Decimal(10, 2)
-  status          String          @default("OPEN") @db.VarChar(20)
-  note            String?         @db.Text
-  notedAt         DateTime?       @map("noted_at") @db.Timestamptz(6)
-  notedById       String?         @map("noted_by_id") @db.Uuid
-  acknowledgedAt DateTime?       @map("acknowledged_at") @db.Timestamptz(6)
-  acknowledgedById String?        @map("acknowledged_by_id") @db.Uuid
-  acknowledgment  String?         @db.Text
-  attachments     FuelAnomalyAttachment[]
-  resolvedAt      DateTime?       @map("resolved_at") @db.Timestamptz(6)
-  resolvedById    String?         @map("resolved_by_id") @db.Uuid
-  notifiedDay1At  DateTime?       @map("notified_day_1_at") @db.Timestamptz(6)
-  notifiedDay3At  DateTime?       @map("notified_day_3_at") @db.Timestamptz(6)
-  notifiedDay7At  DateTime?       @map("notified_day_7_at") @db.Timestamptz(6)
-  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
-  fillUp          FuelFillUp      @relation(fields: [fillUpId], references: [id], onDelete: Restrict)
-  vehicle         Vehicle         @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  id               String                  @id @default(uuid()) @db.Uuid
+  fillUpId         String                  @unique @map("fill_up_id") @db.Uuid
+  vehicleId        String                  @map("vehicle_id") @db.Uuid
+  efficiency       Decimal                 @db.Decimal(10, 2)
+  rollingAverage   Decimal                 @map("rolling_average") @db.Decimal(10, 2)
+  status           String                  @default("OPEN") @db.VarChar(20)
+  note             String?                 @db.Text
+  notedAt          DateTime?               @map("noted_at") @db.Timestamptz(6)
+  notedById        String?                 @map("noted_by_id") @db.Uuid
+  acknowledgedAt   DateTime?               @map("acknowledged_at") @db.Timestamptz(6)
+  acknowledgedById String?                 @map("acknowledged_by_id") @db.Uuid
+  acknowledgment   String?                 @db.Text
+  attachments      FuelAnomalyAttachment[]
+  resolvedAt       DateTime?               @map("resolved_at") @db.Timestamptz(6)
+  resolvedById     String?                 @map("resolved_by_id") @db.Uuid
+  notifiedDay1At   DateTime?               @map("notified_day_1_at") @db.Timestamptz(6)
+  notifiedDay3At   DateTime?               @map("notified_day_3_at") @db.Timestamptz(6)
+  notifiedDay7At   DateTime?               @map("notified_day_7_at") @db.Timestamptz(6)
+  createdAt        DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  fillUp           FuelFillUp              @relation(fields: [fillUpId], references: [id], onDelete: Restrict)
+  vehicle          Vehicle                 @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
 
   @@index([status, createdAt])
   @@map("fuel_anomalies")
@@ -304,15 +321,15 @@ model FuelReceiptAttachment {
 }
 
 model FuelAuditLog {
-  id           String      @id @default(uuid()) @db.Uuid
-  fillUpId     String?     @map("fill_up_id") @db.Uuid
-  actorId      String      @map("actor_id") @db.Uuid
-  actorEmail   String      @map("actor_email") @db.VarChar(255)
-  action       String      @db.VarChar(40)
-  reason       String?     @db.Text
-  details      Json?
-  createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
-  fillUp       FuelFillUp? @relation(fields: [fillUpId], references: [id], onDelete: Restrict)
+  id         String      @id @default(uuid()) @db.Uuid
+  fillUpId   String?     @map("fill_up_id") @db.Uuid
+  actorId    String      @map("actor_id") @db.Uuid
+  actorEmail String      @map("actor_email") @db.VarChar(255)
+  action     String      @db.VarChar(40)
+  reason     String?     @db.Text
+  details    Json?
+  createdAt  DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  fillUp     FuelFillUp? @relation(fields: [fillUpId], references: [id], onDelete: Restrict)
 
   @@index([fillUpId, createdAt])
   @@index([actorId, createdAt])
@@ -320,17 +337,17 @@ model FuelAuditLog {
 }
 
 model Mechanic {
-  id           String   @id @default(uuid()) @db.Uuid
-  userId       String?  @unique @map("user_id") @db.Uuid // welinc-auth person id; intentionally no foreign key
-  email        String?  @db.VarChar(255)
-  role         String?  @db.VarChar(30)
+  id             String   @id @default(uuid()) @db.Uuid
+  userId         String?  @unique @map("user_id") @db.Uuid // welinc-auth person id; intentionally no foreign key
+  email          String?  @db.VarChar(255)
+  role           String?  @db.VarChar(30)
   temporaryRoles String[] @default([]) @map("temporary_roles")
-  name         String   @db.VarChar(100)
-  isOutsourced Boolean  @default(false) @map("is_outsourced")
-  shopName     String?  @map("shop_name") @db.VarChar(100) // For outsourced "Other" shop names
-  isActive     Boolean  @default(true) @map("is_active")
-  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  name           String   @db.VarChar(100)
+  isOutsourced   Boolean  @default(false) @map("is_outsourced")
+  shopName       String?  @map("shop_name") @db.VarChar(100) // For outsourced "Other" shop names
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   workOrders WorkOrder[] @relation("WorkOrderMechanics")
 
@@ -456,14 +473,14 @@ model VehicleAuditLog {
 }
 
 model ChecklistTemplate {
-  id        String                @id @default(uuid()) @db.Uuid
-  type      String                @db.VarChar(100) // Oil Change, Brake Inspection, etc.
-  items     ChecklistItem[]
-  schedules MaintenanceSchedule[]
+  id              String                      @id @default(uuid()) @db.Uuid
+  type            String                      @db.VarChar(100) // Oil Change, Brake Inspection, etc.
+  items           ChecklistItem[]
+  schedules       MaintenanceSchedule[]
   vehicleDefaults VehicleMaintenanceDefault[]
-  deletedAt DateTime?             @map("deleted_at") @db.Timestamptz(6)
-  createdAt DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt       DateTime?                   @map("deleted_at") @db.Timestamptz(6)
+  createdAt       DateTime                    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime                    @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   @@unique([type])
   @@index([deletedAt])
@@ -542,11 +559,14 @@ model MaintenanceSchedule {
   notifications             MaintenanceNotification[]
   systemNotifications       Notification[]
   cancellations             MaintenanceScheduleCancellation[]
+  extensions                MaintenanceScheduleExtension[]
+  extensionAudits           MaintenanceScheduleExtensionAudit[]
+  rescheduleAudits          MaintenanceScheduleRescheduleAudit[]
   maintenanceLogEditUnlocks MaintenanceLogEditUnlock[]
   maintenanceLogEditAudits  MaintenanceLogEditAudit[]
-  checklistTemplate         ChecklistTemplate?                @relation(fields: [checklistTemplateId], references: [id], onDelete: SetNull)
-  previousSchedule          MaintenanceSchedule?              @relation("MaintenanceScheduleRecurrence", fields: [previousScheduleId], references: [id], onDelete: SetNull)
-  nextSchedule              MaintenanceSchedule?              @relation("MaintenanceScheduleRecurrence")
+  checklistTemplate         ChecklistTemplate?                   @relation(fields: [checklistTemplateId], references: [id], onDelete: SetNull)
+  previousSchedule          MaintenanceSchedule?                 @relation("MaintenanceScheduleRecurrence", fields: [previousScheduleId], references: [id], onDelete: SetNull)
+  nextSchedule              MaintenanceSchedule?                 @relation("MaintenanceScheduleRecurrence")
 
   @@index([chiefMechanicId])
   @@index([assignedMechanicId])
@@ -578,50 +598,115 @@ model MaintenanceCostingThresholdAudit {
   @@map("maintenance_costing_threshold_audit")
 }
 
-// ==========================================
-// AUTH TOKENS
-// ==========================================
-
 model MaintenanceScheduleCancellation {
-  id             String              @id @default(uuid()) @db.Uuid
-  scheduleId     String              @map("schedule_id") @db.Uuid
-  actorId        String              @map("actor_id") @db.Uuid
-  actorName      String              @map("actor_name") @db.VarChar(100)
-  actorEmail     String              @map("actor_email") @db.VarChar(255)
-  reason         String              @db.Text
-  previousStatus MaintenanceStatus   @map("previous_status")
-  reviewStatus   MaintenanceCancellationReviewStatus @default(APPROVED) @map("review_status")
-  reviewedById   String?             @map("reviewed_by_id") @db.Uuid
-  reviewedByName String?             @map("reviewed_by_name") @db.VarChar(100)
-  reviewedByEmail String?            @map("reviewed_by_email") @db.VarChar(255)
-  reviewReason   String?             @map("review_reason") @db.Text
-  reviewedAt     DateTime?           @map("reviewed_at") @db.Timestamptz(6)
-  createdAt      DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
-  schedule       MaintenanceSchedule @relation(fields: [scheduleId], references: [id], onDelete: Restrict)
+  id              String                              @id @default(uuid()) @db.Uuid
+  scheduleId      String                              @map("schedule_id") @db.Uuid
+  actorId         String                              @map("actor_id") @db.Uuid
+  actorName       String                              @map("actor_name") @db.VarChar(100)
+  actorEmail      String                              @map("actor_email") @db.VarChar(255)
+  reason          String                              @db.Text
+  previousStatus  MaintenanceStatus                   @map("previous_status")
+  reviewStatus    MaintenanceCancellationReviewStatus @default(APPROVED) @map("review_status")
+  reviewedById    String?                             @map("reviewed_by_id") @db.Uuid
+  reviewedByName  String?                             @map("reviewed_by_name") @db.VarChar(100)
+  reviewedByEmail String?                             @map("reviewed_by_email") @db.VarChar(255)
+  reviewReason    String?                             @map("review_reason") @db.Text
+  reviewedAt      DateTime?                           @map("reviewed_at") @db.Timestamptz(6)
+  createdAt       DateTime                            @default(now()) @map("created_at") @db.Timestamptz(6)
+  schedule        MaintenanceSchedule                 @relation(fields: [scheduleId], references: [id], onDelete: Restrict)
 
   @@index([scheduleId, createdAt])
   @@index([reviewStatus, createdAt])
   @@map("maintenance_schedule_cancellations")
 }
 
+model MaintenanceScheduleExtension {
+  id               String                                   @id @default(uuid()) @db.Uuid
+  scheduleId       String                                   @map("schedule_id") @db.Uuid
+  actorId          String                                   @map("actor_id") @db.Uuid
+  actorName        String                                   @map("actor_name") @db.VarChar(100)
+  actorEmail       String                                   @map("actor_email") @db.VarChar(255)
+  requestedDueDate DateTime                                 @map("requested_due_date") @db.Date
+  reason           String                                   @db.Text
+  reviewStatus     MaintenanceScheduleExtensionReviewStatus @default(PENDING) @map("review_status")
+  reviewedById     String?                                  @map("reviewed_by_id") @db.Uuid
+  reviewedByName   String?                                  @map("reviewed_by_name") @db.VarChar(100)
+  reviewedByEmail  String?                                  @map("reviewed_by_email") @db.VarChar(255)
+  reviewReason     String?                                  @map("review_reason") @db.Text
+  reviewedAt       DateTime?                                @map("reviewed_at") @db.Timestamptz(6)
+  createdAt        DateTime                                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime                                 @updatedAt @map("updated_at") @db.Timestamptz(6)
+  schedule         MaintenanceSchedule                      @relation(fields: [scheduleId], references: [id], onDelete: Restrict)
+  audits           MaintenanceScheduleExtensionAudit[]
+  rescheduleAudits MaintenanceScheduleRescheduleAudit[]
+
+  @@index([scheduleId, createdAt])
+  @@index([reviewStatus, createdAt])
+  @@index([reviewedById, reviewedAt])
+  @@map("maintenance_schedule_extensions")
+}
+
+model MaintenanceScheduleExtensionAudit {
+  id               String                                     @id @default(uuid()) @db.Uuid
+  scheduleId       String                                     @map("schedule_id") @db.Uuid
+  extensionId      String                                     @map("extension_id") @db.Uuid
+  eventType        MaintenanceScheduleExtensionAuditEventType @map("event_type")
+  actorId          String                                     @map("actor_id") @db.Uuid
+  actorName        String                                     @map("actor_name") @db.VarChar(100)
+  actorEmail       String                                     @map("actor_email") @db.VarChar(255)
+  previousDueDate  DateTime?                                  @map("previous_due_date") @db.Date
+  requestedDueDate DateTime                                   @map("requested_due_date") @db.Date
+  reason           String?                                    @db.Text
+  recordedAt       DateTime                                   @default(now()) @map("recorded_at") @db.Timestamptz(6)
+  schedule         MaintenanceSchedule                        @relation(fields: [scheduleId], references: [id], onDelete: Restrict)
+  extension        MaintenanceScheduleExtension               @relation(fields: [extensionId], references: [id], onDelete: Restrict)
+
+  @@index([scheduleId, recordedAt])
+  @@index([extensionId, recordedAt])
+  @@index([actorId, recordedAt])
+  @@map("maintenance_schedule_extension_audits")
+}
+
+model MaintenanceScheduleRescheduleAudit {
+  id                    String                              @id @default(uuid()) @db.Uuid
+  scheduleId            String                              @map("schedule_id") @db.Uuid
+  extensionId           String?                             @map("extension_id") @db.Uuid
+  source                MaintenanceScheduleRescheduleSource
+  actorId               String                              @map("actor_id") @db.Uuid
+  actorName             String                              @map("actor_name") @db.VarChar(100)
+  actorEmail            String                              @map("actor_email") @db.VarChar(255)
+  previousStartDate     DateTime?                           @map("previous_start_date") @db.Date
+  newStartDate          DateTime?                           @map("new_start_date") @db.Date
+  previousTargetDueDate DateTime?                           @map("previous_target_due_date") @db.Date
+  newTargetDueDate      DateTime?                           @map("new_target_due_date") @db.Date
+  changedAt             DateTime                            @default(now()) @map("changed_at") @db.Timestamptz(6)
+  schedule              MaintenanceSchedule                 @relation(fields: [scheduleId], references: [id], onDelete: Restrict)
+  extension             MaintenanceScheduleExtension?       @relation(fields: [extensionId], references: [id], onDelete: Restrict)
+
+  @@index([scheduleId, changedAt])
+  @@index([extensionId])
+  @@index([actorId, changedAt])
+  @@map("maintenance_schedule_reschedule_audits")
+}
+
 model MaintenanceLogEditUnlock {
-  id         String                    @id @default(uuid()) @db.Uuid
-  scheduleId String                    @map("schedule_id") @db.Uuid
-  actorId    String                    @map("actor_id") @db.Uuid
-  actorName  String                    @map("actor_name") @db.VarChar(100)
-  actorEmail String                    @map("actor_email") @db.VarChar(255)
-  reason     String                    @db.Text
-  reviewStatus MaintenanceCancellationReviewStatus @default(PENDING) @map("review_status")
-  reviewedById String?                  @map("reviewed_by_id") @db.Uuid
-  reviewedByName String?                @map("reviewed_by_name") @db.VarChar(100)
-  reviewedByEmail String?               @map("reviewed_by_email") @db.VarChar(255)
-  reviewReason String?                  @map("review_reason") @db.Text
-  reviewedAt DateTime?                  @map("reviewed_at") @db.Timestamptz(6)
-  activatedAt DateTime?                 @map("activated_at") @db.Timestamptz(6)
-  createdAt  DateTime                  @default(now()) @map("created_at") @db.Timestamptz(6)
-  consumedAt DateTime?                 @map("consumed_at") @db.Timestamptz(6)
-  schedule   MaintenanceSchedule       @relation(fields: [scheduleId], references: [id], onDelete: Restrict)
-  audits     MaintenanceLogEditAudit[]
+  id              String                              @id @default(uuid()) @db.Uuid
+  scheduleId      String                              @map("schedule_id") @db.Uuid
+  actorId         String                              @map("actor_id") @db.Uuid
+  actorName       String                              @map("actor_name") @db.VarChar(100)
+  actorEmail      String                              @map("actor_email") @db.VarChar(255)
+  reason          String                              @db.Text
+  reviewStatus    MaintenanceCancellationReviewStatus @default(PENDING) @map("review_status")
+  reviewedById    String?                             @map("reviewed_by_id") @db.Uuid
+  reviewedByName  String?                             @map("reviewed_by_name") @db.VarChar(100)
+  reviewedByEmail String?                             @map("reviewed_by_email") @db.VarChar(255)
+  reviewReason    String?                             @map("review_reason") @db.Text
+  reviewedAt      DateTime?                           @map("reviewed_at") @db.Timestamptz(6)
+  activatedAt     DateTime?                           @map("activated_at") @db.Timestamptz(6)
+  createdAt       DateTime                            @default(now()) @map("created_at") @db.Timestamptz(6)
+  consumedAt      DateTime?                           @map("consumed_at") @db.Timestamptz(6)
+  schedule        MaintenanceSchedule                 @relation(fields: [scheduleId], references: [id], onDelete: Restrict)
+  audits          MaintenanceLogEditAudit[]
 
   @@index([scheduleId, createdAt])
   @@index([reviewStatus, createdAt])
@@ -649,19 +734,23 @@ model MaintenanceLogEditAudit {
 }
 
 model MaintenanceNotification {
-  id            String              @id @default(uuid()) @db.Uuid
-  userId        String              @map("user_id") @db.Uuid
-  scheduleId    String              @map("schedule_id") @db.Uuid
-  kind          String              @db.VarChar(20)
-  message       String              @db.Text
-  createdAt     DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
-  readAt        DateTime?           @map("read_at") @db.Timestamptz(6)
-  schedule      MaintenanceSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  id         String              @id @default(uuid()) @db.Uuid
+  userId     String              @map("user_id") @db.Uuid
+  scheduleId String              @map("schedule_id") @db.Uuid
+  kind       String              @db.VarChar(20)
+  message    String              @db.Text
+  createdAt  DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  readAt     DateTime?           @map("read_at") @db.Timestamptz(6)
+  schedule   MaintenanceSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
 
   @@unique([userId, scheduleId, kind])
   @@index([userId, createdAt])
   @@map("maintenance_notifications")
 }
+
+// ==========================================
+// AUTH TOKENS
+// ==========================================
 
 model DirectorySyncState {
   id           String    @id

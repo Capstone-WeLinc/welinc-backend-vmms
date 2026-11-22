@@ -7,12 +7,20 @@ import {
   MaintenanceTriggerType,
   MaintenanceIntervalType,
 } from '@prisma/client';
+import { seedId } from './seed-id';
 
 export async function seedVmms(prisma: PrismaClient) {
   console.log('Creating checklist templates for VMMS...');
+  if (await prisma.maintenanceSchedule.count()) {
+    console.log('  Existing schedules found; preserving all VMMS seed rows.\n');
+    return;
+  }
 
   // Fetch relations from DB
-  const garages = await prisma.garage.findMany({ orderBy: { name: 'asc' } });
+  const garages = await prisma.garage.findMany({
+    where: { isActive: true, deletedAt: null },
+    orderBy: { name: 'asc' },
+  });
   const seededVehiclePlates = ['NDG 5821', 'CAK 9043', 'WOB 2947', 'PXW 382', 'TGD 908', 'NRE 471'];
   const vehicleRows = await prisma.vehicle.findMany({ where: { plateNumber: { in: seededVehiclePlates } } });
   const vehiclesByPlate = new Map(vehicleRows.map((vehicle) => [vehicle.plateNumber, vehicle]));
@@ -20,7 +28,14 @@ export async function seedVmms(prisma: PrismaClient) {
   if (missingPlate) throw new Error(`Cannot seed maintenance schedules: sample vehicle "${missingPlate}" is missing.`);
   const vehicles = seededVehiclePlates.map((plate) => vehiclesByPlate.get(plate)!);
   const seededMechanicNames = ['Juan dela Cruz', 'Pedro Santos', 'Rommel Cruz', 'Isabel Reyes', 'Carl Santos'];
-  const mechanicRows = await prisma.mechanic.findMany({ where: { name: { in: seededMechanicNames }, isOutsourced: false }, orderBy: { name: 'asc' } });
+  const mechanicRows = await prisma.mechanic.findMany({
+    where: {
+      name: { in: seededMechanicNames },
+      isActive: true,
+      isOutsourced: false,
+    },
+    orderBy: { name: 'asc' },
+  });
   const mechanicsByName = new Map(mechanicRows.map((mechanic) => [mechanic.name, mechanic]));
   const missingMechanic = seededMechanicNames.find((name) => !mechanicsByName.has(name));
   if (missingMechanic) throw new Error(`Cannot seed maintenance schedules: in-house mechanic "${missingMechanic}" is missing.`);
@@ -99,28 +114,36 @@ export async function seedVmms(prisma: PrismaClient) {
     const existing = await prisma.checklistTemplate.findUnique({
       where: { type: templateData.type },
     });
-
-    if (existing) {
-      await prisma.checklistItem.deleteMany({
-        where: { checklistTemplateId: existing.id },
-      });
-    }
+    if (existing?.deletedAt)
+      throw new Error(
+        `Cannot seed checklist "${templateData.type}": its registered template is soft-deleted.`,
+      );
 
     const t = await prisma.checklistTemplate.upsert({
       where: { type: templateData.type },
-      update: { deletedAt: null },
+      update: {},
       create: {
         type: templateData.type,
       },
     });
 
-    await prisma.checklistItem.createMany({
-      data: templateData.items.map((text, index) => ({
-        checklistTemplateId: t.id,
-        text,
-        order: index,
-      })),
+    const existingItems = await prisma.checklistItem.findMany({
+      where: { checklistTemplateId: t.id },
+      select: { text: true },
     });
+    const existingTexts = new Set(existingItems.map((item) => item.text));
+    const missingItems = templateData.items.filter(
+      (text) => !existingTexts.has(text),
+    );
+    if (missingItems.length) {
+      await prisma.checklistItem.createMany({
+        data: missingItems.map((text) => ({
+          checklistTemplateId: t.id,
+          text,
+          order: templateData.items.indexOf(text),
+        })),
+      });
+    }
 
     seededTemplates.push(t);
   }
@@ -128,9 +151,6 @@ export async function seedVmms(prisma: PrismaClient) {
   console.log(`  Created ${seededTemplates.length} checklist templates for VMMS\n`);
 
   console.log('Creating sample maintenance schedules for VMMS...');
-
-  // Clean old schedules first
-  await prisma.maintenanceSchedule.deleteMany();
 
   const oilChangeTemplate = seededTemplates.find(t => t.type === 'Oil Change');
   const brakeInspectionTemplate = seededTemplates.find(t => t.type === 'Brake Inspection');
@@ -163,6 +183,33 @@ export async function seedVmms(prisma: PrismaClient) {
     }
     return userId;
   };
+
+  const manilaCalendarDate = (date: Date) => {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Manila',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(date);
+    const year = parts.find((part) => part.type === 'year')?.value;
+    const month = parts.find((part) => part.type === 'month')?.value;
+    const day = parts.find((part) => part.type === 'day')?.value;
+    if (!year || !month || !day) {
+      throw new Error(
+        'Cannot determine the Manila calendar date for maintenance fixtures.',
+      );
+    }
+    return new Date(`${year}-${month}-${day}T00:00:00.000Z`);
+  };
+  const maintenanceFixtureAnchor = new Date('2026-08-25T00:00:00.000Z');
+  const maintenanceFixtureOffset =
+    manilaCalendarDate(new Date()).getTime() -
+    maintenanceFixtureAnchor.getTime();
+  const shiftMaintenanceFixtureDate = (date: Date) =>
+    new Date(date.getTime() + maintenanceFixtureOffset);
+  const shiftOptionalMaintenanceFixtureDate = (
+    date: Date | null | undefined,
+  ) => (date == null ? date : shiftMaintenanceFixtureDate(date));
 
   const maintenanceSchedulesData = [
     {
@@ -1184,49 +1231,34 @@ export async function seedVmms(prisma: PrismaClient) {
     const vehicle = vehicles.find((entry) => entry.plateNumber === schedule.vehicleId);
     if (!vehicle?.garageId) throw new Error(`Cannot seed schedule for ${schedule.vehicleId}: vehicle garage assignment is missing.`);
     const chiefMechanic = chiefMechanics[index % chiefMechanics.length];
+    const seedIdentity = [
+      schedule.vehicleId,
+      schedule.title,
+      schedule.createdAt.toISOString(),
+    ].join(':');
     return {
-    ...schedule,
-    garageId: vehicle.garageId,
-    startDate: schedule.createdAt,
-    chiefMechanicId: chiefMechanic.userId!,
-    chiefMechanic: chiefMechanic.name,
-    assignedMechanicId: resolveSeedMechanicId(
-      schedule.assignedMechanic,
-      schedule.accountType,
-    ),
-  }; });
+      ...schedule,
+      seedIdentity,
+      createdAt: shiftMaintenanceFixtureDate(schedule.createdAt),
+      startReferenceDate: shiftOptionalMaintenanceFixtureDate(
+        schedule.startReferenceDate,
+      ),
+      garageId: vehicle.garageId,
+      startDate: shiftMaintenanceFixtureDate(schedule.createdAt),
+      chiefMechanicId: chiefMechanic.userId!,
+      chiefMechanic: chiefMechanic.name,
+      assignedMechanicId: resolveSeedMechanicId(
+        schedule.assignedMechanic,
+        schedule.accountType,
+      ),
+    };
+  });
 
   const assertCompletedScheduleHasProgress = (schedule: any) => {
     if (schedule.status === MaintenanceStatus.COMPLETED && schedule.workOrderProgress == null) {
       throw new Error(
         `Completed maintenance schedule for vehicle ${schedule.vehicleId} must include workOrderProgress in seed data.`,
       );
-    }
-  };
-
-  const getNextMaintenanceDate = (date: Date, intervalType?: MaintenanceIntervalType | null) => {
-    const next = new Date(date);
-    switch (intervalType) {
-      case MaintenanceIntervalType.DAILY:
-        next.setUTCDate(next.getUTCDate() + 1);
-        return next;
-      case MaintenanceIntervalType.WEEKLY:
-        next.setUTCDate(next.getUTCDate() + 7);
-        return next;
-      case MaintenanceIntervalType.MONTHLY:
-        next.setUTCMonth(next.getUTCMonth() + 1);
-        return next;
-      case MaintenanceIntervalType.QUARTERLY:
-        next.setUTCMonth(next.getUTCMonth() + 3);
-        return next;
-      case MaintenanceIntervalType.SEMI_ANNUALLY:
-        next.setUTCMonth(next.getUTCMonth() + 6);
-        return next;
-      case MaintenanceIntervalType.ANNUALLY:
-        next.setUTCFullYear(next.getUTCFullYear() + 1);
-        return next;
-      default:
-        return null;
     }
   };
 
@@ -1240,57 +1272,120 @@ export async function seedVmms(prisma: PrismaClient) {
       .map(pendingScheduleKey),
   );
 
-  let recurringIdx = 0;
   const createNextSeedMaintenanceSchedule = async (completedSchedule: any) => {
     const triggerType = completedSchedule.triggerType;
-    const isOdometerRecurring = triggerType === MaintenanceTriggerType.ODOMETER && completedSchedule.intervalKm != null && completedSchedule.intervalKm > 0;
-    const isTimeRecurring = triggerType === MaintenanceTriggerType.TIME && Boolean(completedSchedule.intervalType);
+    const isOdometerRecurring = triggerType === MaintenanceTriggerType.ODOMETER;
+    const isTimeRecurring = triggerType === MaintenanceTriggerType.TIME;
 
     if (!isOdometerRecurring && !isTimeRecurring) return null;
+    if (
+      isOdometerRecurring &&
+      (!Number.isSafeInteger(completedSchedule.intervalKm) ||
+        completedSchedule.intervalKm <= 0)
+    ) {
+      throw new Error(
+        `Cannot seed recurring maintenance for ${completedSchedule.vehicleId}: odometer interval must be a positive whole number.`,
+      );
+    }
 
-    const nextDate = getNextMaintenanceDate((completedSchedule.startReferenceDate ?? completedSchedule.createdAt), completedSchedule.intervalType) ?? (completedSchedule.startReferenceDate ?? completedSchedule.createdAt);
-    const nextOdometer = completedSchedule.odometerReading != null && completedSchedule.intervalKm != null
-      ? completedSchedule.odometerReading + completedSchedule.intervalKm
-      : completedSchedule.odometerReading;
-
-    recurringIdx += 1;
-    let seedStatus: MaintenanceStatus = MaintenanceStatus.PENDING;
-    if (recurringIdx <= 2) {
-      seedStatus = MaintenanceStatus.OVERDUE;
-    } else if (recurringIdx <= 4) {
-      seedStatus = MaintenanceStatus.DUE;
+    const progress = (completedSchedule.workOrderProgress ?? {}) as Record<
+      string,
+      unknown
+    >;
+    const completionOdometer =
+      progress.serviceOdometerReading ?? completedSchedule.odometerReading;
+    const rawCompletionDate = progress.workCompletedAt;
+    const completionDate =
+      typeof rawCompletionDate === 'string' &&
+      Number.isFinite(Date.parse(rawCompletionDate))
+        ? new Date(rawCompletionDate)
+        : (completedSchedule.completedAt ?? completedSchedule.createdAt);
+    const referenceDate = manilaCalendarDate(completionDate);
+    const timeInterval = getTimeInterval(completedSchedule) ?? {
+      value: 3,
+      unit: 'MONTHS' as const,
+    };
+    const recurrenceIntervalType = isTimeRecurring
+      ? Object.values(MaintenanceIntervalType).find((intervalType) => {
+          const preset = getTimeInterval({ intervalType });
+          return (
+            preset?.value === timeInterval.value &&
+            preset.unit === timeInterval.unit
+          );
+        }) ?? null
+      : completedSchedule.intervalType;
+    const vehicle = vehicles.find(
+      (entry) => entry.plateNumber === completedSchedule.vehicleId,
+    );
+    if (!vehicle?.garageId) {
+      throw new Error(
+        `Cannot seed recurring maintenance for ${completedSchedule.vehicleId}: active vehicle garage assignment is missing.`,
+      );
+    }
+    if (
+      isOdometerRecurring &&
+      (typeof completionOdometer !== 'number' ||
+        !Number.isSafeInteger(completionOdometer) ||
+        completionOdometer <= 0 ||
+        completionOdometer + completedSchedule.intervalKm > 2147483647)
+    ) {
+      throw new Error(
+        `Cannot seed recurring maintenance for ${completedSchedule.vehicleId}: service odometer or next threshold is invalid.`,
+      );
+    }
+    if (
+      isOdometerRecurring &&
+      vehicle.odometer < (completionOdometer as number)
+    ) {
+      throw new Error(
+        `Cannot seed recurring maintenance for ${completedSchedule.vehicleId}: vehicle odometer is behind the completed service reading.`,
+      );
     }
 
     const pendingKey = pendingScheduleKey(completedSchedule);
-    if (seedStatus === MaintenanceStatus.PENDING && pendingScheduleKeys.has(pendingKey)) {
+    if (pendingScheduleKeys.has(pendingKey)) {
       return null;
     }
 
-    const nextSchedule = await prisma.maintenanceSchedule.create({
-      data: {
+    const nextSchedule = await prisma.maintenanceSchedule.upsert({
+      where: { previousScheduleId: completedSchedule.id },
+      update: {},
+      create: {
+        id: seedId(`recurrence:${completedSchedule.id}`),
         vehicleId: completedSchedule.vehicleId,
-        startDate: nextDate,
-        targetDueDate: sampleTargetDueDate({ ...completedSchedule, startReferenceDate: nextDate, startDate: nextDate, createdAt: nextDate }),
+        startDate: referenceDate,
+        targetDueDate: sampleTargetDueDate({
+          ...completedSchedule,
+          startReferenceDate: referenceDate,
+          startDate: referenceDate,
+          createdAt: referenceDate,
+          timeIntervalValue: isTimeRecurring ? timeInterval.value : null,
+          timeIntervalUnit: isTimeRecurring ? timeInterval.unit : null,
+        }),
         title: completedSchedule.title,
-        status: seedStatus,
+        status: MaintenanceStatus.PENDING,
         assignedMechanic: completedSchedule.assignedMechanic,
         assignedMechanicId: completedSchedule.assignedMechanicId,
         chiefMechanicId: completedSchedule.chiefMechanicId,
         chiefMechanic: completedSchedule.chiefMechanic,
         accountType: completedSchedule.accountType,
         checklistTemplateId: completedSchedule.checklistTemplateId,
-        garageId: completedSchedule.garageId,
-        odometerReading: nextOdometer,
+        garageId: vehicle.garageId,
+        odometerReading: vehicle.odometer,
         triggerType: completedSchedule.triggerType,
         intervalKm: completedSchedule.intervalKm,
         bufferDistanceKm: completedSchedule.bufferDistanceKm,
-        startingReferenceReadingKm: completedSchedule.odometerReading,
-        intervalType: completedSchedule.intervalType,
-        startReferenceDate: nextDate,
+        startingReferenceReadingKm: isOdometerRecurring
+          ? completionOdometer
+          : null,
+        intervalType: recurrenceIntervalType,
+        timeIntervalValue: isTimeRecurring ? timeInterval.value : null,
+        timeIntervalUnit: isTimeRecurring ? timeInterval.unit : null,
+        startReferenceDate: isTimeRecurring ? referenceDate : null,
         previousScheduleId: completedSchedule.id,
       },
     });
-    if (seedStatus === MaintenanceStatus.PENDING) pendingScheduleKeys.add(pendingKey);
+    pendingScheduleKeys.add(pendingKey);
     return nextSchedule;
   };
 
@@ -1305,7 +1400,7 @@ export async function seedVmms(prisma: PrismaClient) {
     }
     const scheduleData = { ...schedule } as Record<string, any>;
     delete scheduleData.maintenanceClass;
-    scheduleData.targetDueDate = scheduleData.targetDueDate ?? sampleTargetDueDate(scheduleData);
+    delete scheduleData.seedIdentity;
     scheduleData.targetDueDate = scheduleData.targetDueDate ?? sampleTargetDueDate(scheduleData);
     const [generatedLog] = isMaintenanceLog
       ? await prisma.$queryRaw<Array<{ logNumber: string }>>`
@@ -1328,14 +1423,21 @@ export async function seedVmms(prisma: PrismaClient) {
             (schedule.workOrderProgress as Record<string, unknown> | undefined)?.maintenanceRemarks ??
             `Sample maintenance record: ${schedule.title} service completed.`,
           serviceOdometerReading: schedule.odometerReading,
+          workCompletedAt:
+            (schedule.workOrderProgress as Record<string, unknown> | undefined)?.workCompletedAt ??
+            schedule.createdAt.toISOString(),
           laborCost: schedule.laborCost ?? 0,
         } : {}),
       }, schedule.status),
     };
-    const createdSchedule = await prisma.maintenanceSchedule.create({
-      data: (schedule.status === MaintenanceStatus.COMPLETED
-        ? { ...persistedSchedule, completedAt: schedule.createdAt }
-        : persistedSchedule) as any,
+    const fixtureKey = schedule.seedIdentity;
+    const createData = (schedule.status === MaintenanceStatus.COMPLETED
+      ? { ...persistedSchedule, completedAt: schedule.createdAt }
+      : persistedSchedule) as any;
+    const createdSchedule = await prisma.maintenanceSchedule.upsert({
+      where: { id: seedId(`schedule:${fixtureKey}`) },
+      update: {},
+      create: { ...createData, id: seedId(`schedule:${fixtureKey}`) },
     });
     createdMaintenanceSchedulesCount += 1;
 
