@@ -888,6 +888,104 @@ export class VehiclesService {
     return outcome.vehicle;
   }
 
+  async bulkUpdateOdometer(
+    items: Array<{ vehicleId: string; odometer: number }>,
+    actor: VehicleAuditActor,
+  ) {
+    if (!Array.isArray(items) || items.length === 0 || items.length > 1000) {
+      throw new BadRequestException(
+        'Submit between 1 and 1,000 odometer updates to save.',
+      );
+    }
+
+    const seenVehicleIds = new Set<string>();
+    const duplicateVehicleIds = new Set<string>();
+    for (const item of items) {
+      if (seenVehicleIds.has(item.vehicleId)) duplicateVehicleIds.add(item.vehicleId);
+      seenVehicleIds.add(item.vehicleId);
+    }
+
+    const results: Array<{
+      vehicleId: string;
+      odometer: number;
+      currentOdometer: number | null;
+      status: 'UPDATED' | 'UNCHANGED' | 'ERROR';
+      message?: string;
+    }> = [];
+    let updated = 0;
+    let unchanged = 0;
+    let failed = 0;
+
+    for (const item of items) {
+      if (duplicateVehicleIds.has(item.vehicleId)) {
+        results.push({
+          vehicleId: item.vehicleId,
+          odometer: item.odometer,
+          currentOdometer: null,
+          status: 'ERROR',
+          message: 'Vehicle is duplicated in this request.',
+        });
+        failed += 1;
+        continue;
+      }
+
+      if (
+        !Number.isSafeInteger(item.odometer) ||
+        item.odometer < 1 ||
+        item.odometer > 2147483647
+      ) {
+        results.push({
+          vehicleId: item.vehicleId,
+          odometer: item.odometer,
+          currentOdometer: null,
+          status: 'ERROR',
+          message: 'Enter a positive whole-number odometer reading.',
+        });
+        failed += 1;
+        continue;
+      }
+
+      try {
+        const outcome = await this.prisma.$transaction((tx) =>
+          this.updateOdometerInTransaction(tx, item.vehicleId, item.odometer, actor),
+        );
+        const status = outcome.changed ? 'UPDATED' : 'UNCHANGED';
+        results.push({
+          vehicleId: item.vehicleId,
+          odometer: item.odometer,
+          currentOdometer: outcome.vehicle.odometer,
+          status,
+        });
+        if (outcome.changed) updated += 1;
+        else unchanged += 1;
+      } catch (error) {
+        if (
+          error instanceof BadRequestException ||
+          error instanceof NotFoundException ||
+          error instanceof ConflictException
+        ) {
+          const current = await this.prisma.vehicle.findUnique({
+            where: { id: item.vehicleId },
+            select: { odometer: true, deletedAt: true },
+          });
+          results.push({
+            vehicleId: item.vehicleId,
+            odometer: item.odometer,
+            currentOdometer:
+              current && !current.deletedAt ? current.odometer : null,
+            status: 'ERROR',
+            message: error.message,
+          });
+          failed += 1;
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    return { updated, unchanged, failed, results };
+  }
+
   private async updateOdometerInTransaction(
     tx: Prisma.TransactionClient,
     id: string,
