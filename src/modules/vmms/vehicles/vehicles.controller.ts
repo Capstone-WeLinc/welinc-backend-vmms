@@ -26,6 +26,7 @@ import {
   type VehicleImportRow,
 } from './vehicles.service';
 import { CreateVehicleDto } from './dto/create-vehicle.dto';
+import { BulkUpdateOdometerDto } from './dto/bulk-update-odometer.dto';
 import { SaveOdometerImportDto } from './dto/save-odometer-import.dto';
 import { UpdateOdometerDto } from './dto/update-odometer.dto';
 import { UpdateVehicleDto } from './dto/update-vehicle.dto';
@@ -122,6 +123,15 @@ export class VehiclesController {
     @Req() req: { user: VehicleAuditActor },
   ) {
     return this.vehiclesService.saveOdometerImportRows(dto.rows, req.user);
+  }
+
+  @Roles(UserRole.OPERATIONS)
+  @Post('odometer/bulk')
+  async bulkUpdateOdometer(
+    @Body() dto: BulkUpdateOdometerDto,
+    @Req() req: { user: VehicleAuditActor },
+  ) {
+    return this.vehiclesService.bulkUpdateOdometer(dto.items, req.user);
   }
 
   @Roles(UserRole.OPERATIONS)

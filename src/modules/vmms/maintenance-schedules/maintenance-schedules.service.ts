@@ -43,6 +43,20 @@ import {
   addTimeInterval,
 } from './time-interval';
 import { validateTargetDueDate } from './schedule-target-date';
+
+type CanonicalScheduleLike = {
+  status?: MaintenanceStatus | string | null;
+  triggerType?: MaintenanceTriggerType | string | null;
+  intervalType?: string | null;
+  targetDueDate?: Date | string | null;
+  startReferenceDate?: Date | string | null;
+  timeIntervalValue?: number | null;
+  timeIntervalUnit?: string | null;
+  startingReferenceReadingKm?: number | null;
+  odometerReading?: number | null;
+  intervalKm?: number | null;
+  bufferDistanceKm?: number | null;
+};
 import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { extname } from 'node:path';
@@ -639,6 +653,8 @@ export class MaintenanceSchedulesService {
           totalCost: schedule.totalCost,
         });
 
+        const canonical = this.canonicalScheduleFields(schedule);
+
         return {
           id: schedule.id,
           workOrderNumber: schedule.workOrderNumber,
@@ -646,11 +662,13 @@ export class MaintenanceSchedulesService {
           vehicleId: schedule.vehicleId,
           title: schedule.title,
           status: schedule.status,
+          computedStatus: canonical.computedStatus,
           priority: schedule.priority,
           cancellations: schedule.cancellations ?? [],
           maintenanceLogUnlockRequests:
             schedule.maintenanceLogEditUnlocks ?? [],
-          ...scheduleDue(schedule),
+          dueDate: canonical.dueDate,
+          dueOdometer: canonical.dueOdometer,
           date: this.formatDateOnly(schedule.createdAt),
           startDate: this.formatDateOnly(schedule.startDate),
           targetDueDate: this.formatDateOnly(schedule.targetDueDate),
@@ -717,6 +735,8 @@ export class MaintenanceSchedulesService {
         buffer_distance_km?: number | null;
         starting_reference_reading_km?: number | null;
         interval_type?: string | null;
+        time_interval_value?: number | null;
+        time_interval_unit?: string | null;
         start_reference_date?: Date | string | null;
         previous_schedule_id?: string | null;
         work_order_progress?: Prisma.JsonValue | null;
@@ -740,7 +760,7 @@ export class MaintenanceSchedulesService {
         ? 'WHERE deleted_at IS NULL'
         : '';
       const rows = await this.prisma.$queryRawUnsafe<RawScheduleRow[]>(
-        `SELECT id, ${optionalColumn('work_order_number')} AS work_order_number, ${optionalColumn('log_number')} AS log_number, ${optionalColumn('vehicle_id')} AS vehicleId, title, status, ${optionalColumn('priority')} AS priority, ${optionalColumn('created_at')} AS created_at, ${optionalColumn('start_date')} AS start_date, ${optionalColumn('target_due_date')} AS target_due_date, ${optionalColumn('scheduled_date')} AS scheduled_date, assigned_mechanic, ${optionalColumn('chief_mechanic_id')} AS chief_mechanic_id, ${optionalColumn('chief_mechanic')} AS chief_mechanic, account_type, ${optionalColumn('outsourced_provider')} AS outsourced_provider, checklist_template_id, ${optionalColumn('garage_id')} AS garage_id, odometer_reading, trigger_type, ${optionalColumn('interval_km')} AS interval_km, ${optionalColumn('buffer_distance_km')} AS buffer_distance_km, ${optionalColumn('starting_reference_reading_km')} AS starting_reference_reading_km, ${optionalColumn('interval_type')} AS interval_type, ${optionalColumn('start_reference_date')} AS start_reference_date, ${optionalColumn('previous_schedule_id')} AS previous_schedule_id, ${optionalColumn('work_order_progress')} AS work_order_progress, ${optionalColumn('approval_status')} AS approval_status, ${optionalColumn('parts_cost')} AS parts_cost, ${optionalColumn('labor_cost')} AS labor_cost, ${optionalColumn('total_cost')} AS total_cost FROM maintenance_schedules ${whereClause} ORDER BY ${dateOrder} DESC`,
+        `SELECT id, ${optionalColumn('work_order_number')} AS work_order_number, ${optionalColumn('log_number')} AS log_number, ${optionalColumn('vehicle_id')} AS vehicleId, title, status, ${optionalColumn('priority')} AS priority, ${optionalColumn('created_at')} AS created_at, ${optionalColumn('start_date')} AS start_date, ${optionalColumn('target_due_date')} AS target_due_date, ${optionalColumn('scheduled_date')} AS scheduled_date, assigned_mechanic, ${optionalColumn('chief_mechanic_id')} AS chief_mechanic_id, ${optionalColumn('chief_mechanic')} AS chief_mechanic, account_type, ${optionalColumn('outsourced_provider')} AS outsourced_provider, checklist_template_id, ${optionalColumn('garage_id')} AS garage_id, odometer_reading, trigger_type, ${optionalColumn('interval_km')} AS interval_km, ${optionalColumn('buffer_distance_km')} AS buffer_distance_km, ${optionalColumn('starting_reference_reading_km')} AS starting_reference_reading_km, ${optionalColumn('interval_type')} AS interval_type, ${optionalColumn('time_interval_value')} AS time_interval_value, ${optionalColumn('time_interval_unit')} AS time_interval_unit, ${optionalColumn('start_reference_date')} AS start_reference_date, ${optionalColumn('previous_schedule_id')} AS previous_schedule_id, ${optionalColumn('work_order_progress')} AS work_order_progress, ${optionalColumn('approval_status')} AS approval_status, ${optionalColumn('parts_cost')} AS parts_cost, ${optionalColumn('labor_cost')} AS labor_cost, ${optionalColumn('total_cost')} AS total_cost FROM maintenance_schedules ${whereClause} ORDER BY ${dateOrder} DESC`,
       );
 
       return rows.map((r) => {
@@ -750,6 +770,20 @@ export class MaintenanceSchedulesService {
           totalCost: r.total_cost,
         });
 
+        const canonical = this.canonicalScheduleFields({
+          status: r.status ?? MaintenanceStatus.PENDING,
+          triggerType: r.trigger_type,
+          intervalType: r.interval_type,
+          targetDueDate: r.target_due_date ?? null,
+          startReferenceDate: r.start_reference_date ?? null,
+          timeIntervalValue: r.time_interval_value ?? null,
+          timeIntervalUnit: r.time_interval_unit ?? null,
+          startingReferenceReadingKm: r.starting_reference_reading_km ?? null,
+          odometerReading: r.odometer_reading ?? null,
+          intervalKm: r.interval_km ?? null,
+          bufferDistanceKm: r.buffer_distance_km ?? null,
+        });
+
         return {
           id: String(r.id),
           workOrderNumber: r.work_order_number ?? null,
@@ -757,11 +791,13 @@ export class MaintenanceSchedulesService {
           vehicleId: r.vehicleId ?? '',
           title: r.title ?? '',
           status: r.status ?? MaintenanceStatus.PENDING,
+          computedStatus: canonical.computedStatus,
           priority: r.priority ?? MaintenancePriority.MEDIUM,
           date: this.formatDateOnly(r.created_at ?? r.scheduled_date ?? null),
           startDate: this.formatDateOnly(r.start_date ?? null),
           targetDueDate: this.formatDateOnly(r.target_due_date ?? null),
-          dueDate: this.formatDateOnly(r.target_due_date ?? null),
+          dueDate: canonical.dueDate,
+          dueOdometer: canonical.dueOdometer,
           assignedMechanic: r.assigned_mechanic ?? null,
           assignedDriver: r.assigned_mechanic ?? null,
           chiefMechanicId: r.chief_mechanic_id ?? null,
@@ -888,6 +924,7 @@ export class MaintenanceSchedulesService {
       laborCost: schedule.laborCost,
       totalCost: schedule.totalCost,
     });
+    const canonical = this.canonicalScheduleFields(schedule);
 
     return {
       id: schedule.id,
@@ -896,10 +933,13 @@ export class MaintenanceSchedulesService {
       vehicleId: schedule.vehicleId,
       title: schedule.title,
       status: schedule.status,
+      computedStatus: canonical.computedStatus,
       priority: schedule.priority,
       date: schedule.createdAt.toISOString().slice(0, 10),
       startDate: this.formatDateOnly(schedule.startDate),
       targetDueDate: this.formatDateOnly(schedule.targetDueDate),
+      dueDate: canonical.dueDate,
+      dueOdometer: canonical.dueOdometer,
       assignedMechanic: schedule.assignedMechanic,
       assignedMechanicId: schedule.assignedMechanicId,
       assignedDriver: schedule.assignedMechanic,
@@ -1104,6 +1144,7 @@ export class MaintenanceSchedulesService {
       laborCost: schedule.laborCost,
       totalCost: schedule.totalCost,
     });
+    const canonical = this.canonicalScheduleFields(schedule);
 
     return {
       id: schedule.id,
@@ -1111,10 +1152,13 @@ export class MaintenanceSchedulesService {
       vehicleId: schedule.vehicleId,
       title: schedule.title,
       status: schedule.status,
+      computedStatus: canonical.computedStatus,
       priority: schedule.priority,
       date: this.formatDateOnly(schedule.createdAt),
       startDate: this.formatDateOnly(schedule.startDate),
       targetDueDate: this.formatDateOnly(schedule.targetDueDate),
+      dueDate: canonical.dueDate,
+      dueOdometer: canonical.dueOdometer,
       assignedMechanic: schedule.assignedMechanic,
       assignedMechanicId: schedule.assignedMechanicId,
       assignedDriver: schedule.assignedMechanic,
@@ -2630,13 +2674,28 @@ export class MaintenanceSchedulesService {
       laborCost: schedule.laborCost,
       totalCost: schedule.totalCost,
     });
+    const canonical = this.canonicalScheduleFields(schedule);
+    const nextCanonical = nextSchedule
+      ? this.canonicalScheduleFields(nextSchedule)
+      : null;
 
     return {
       id: schedule.id,
       logNumber: schedule.logNumber,
       status: schedule.status,
+      computedStatus: canonical.computedStatus,
+      targetDueDate: this.formatDateOnly(schedule.targetDueDate),
+      dueDate: canonical.dueDate,
+      dueOdometer: canonical.dueOdometer,
       nextSchedule: nextSchedule
-        ? { id: nextSchedule.id, ...scheduleDue(nextSchedule) }
+        ? {
+            id: nextSchedule.id,
+            status: nextSchedule.status,
+            computedStatus: nextCanonical?.computedStatus,
+            targetDueDate: this.formatDateOnly(nextSchedule.targetDueDate),
+            dueDate: nextCanonical?.dueDate ?? null,
+            dueOdometer: nextCanonical?.dueOdometer ?? null,
+          }
         : null,
       approvalStatus: schedule.approvalStatus,
       workOrderProgress: progressForClient(schedule),
@@ -2860,6 +2919,67 @@ export class MaintenanceSchedulesService {
 
   private isCompleted(status: MaintenanceStatus): boolean {
     return status === MaintenanceStatus.COMPLETED;
+  }
+
+  private toDateOrNull(value: Date | string | null | undefined): Date | null {
+    if (value == null) return null;
+    if (value instanceof Date) {
+      return Number.isNaN(value.getTime()) ? null : value;
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      const parsed = new Date(`${value}T00:00:00.000Z`);
+      return Number.isNaN(parsed.getTime()) ? null : parsed;
+    }
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  private manilaDateString(now = new Date()): string {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Manila',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(now);
+  }
+
+  private canonicalScheduleFields(schedule: CanonicalScheduleLike) {
+    const normalized = {
+      triggerType: (schedule.triggerType ?? null) as MaintenanceTriggerType | null,
+      intervalType: (schedule.intervalType ?? null) as string | null,
+      targetDueDate: this.toDateOrNull(schedule.targetDueDate),
+      startReferenceDate: this.toDateOrNull(schedule.startReferenceDate),
+      timeIntervalValue: schedule.timeIntervalValue ?? null,
+      timeIntervalUnit: schedule.timeIntervalUnit ?? null,
+      startingReferenceReadingKm: schedule.startingReferenceReadingKm ?? null,
+      odometerReading: schedule.odometerReading ?? null,
+      intervalKm: schedule.intervalKm ?? null,
+      bufferDistanceKm: schedule.bufferDistanceKm ?? null,
+    };
+
+    const due = scheduleDue(normalized as any);
+    const status = (schedule.status ?? MaintenanceStatus.PENDING) as MaintenanceStatus;
+    let computedStatus: MaintenanceStatus = status;
+
+    if (
+      status === MaintenanceStatus.PENDING ||
+      status === MaintenanceStatus.DUE ||
+      status === MaintenanceStatus.OVERDUE
+    ) {
+      if (normalized.triggerType === MaintenanceTriggerType.TIME && due.dueDate) {
+        const today = this.manilaDateString();
+        if (today < due.dueDate) computedStatus = MaintenanceStatus.PENDING;
+        else if (today === due.dueDate) computedStatus = MaintenanceStatus.DUE;
+        else computedStatus = MaintenanceStatus.OVERDUE;
+      }
+      // Odometer-derived PENDING/DUE/OVERDUE requires current vehicle odometer; preserve stored status when unavailable.
+    }
+
+    return {
+      dueDate: due.dueDate,
+      dueOdometer: due.dueOdometer,
+      computedStatus,
+    };
   }
 
   private formatDateOnly(value: Date | string | null): string | null {
