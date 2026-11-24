@@ -32,11 +32,7 @@ export class SettingsCatalogService {
   }
 
   private requireRead(actor: SettingsCatalogActor) {
-    const allowed = actor.roles.some(
-      ({ system, role }) =>
-        system === 'VMMS' && ['ADMIN', 'OPERATIONS'].includes(role),
-    );
-    if (!allowed)
+    if (!this.isAdmin(actor))
       throw new ForbiddenException('You do not have access to settings.');
   }
 
