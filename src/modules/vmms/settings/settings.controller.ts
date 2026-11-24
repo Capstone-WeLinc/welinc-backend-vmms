@@ -23,7 +23,7 @@ import {
 export class SettingsCatalogController {
   constructor(private readonly settings: SettingsCatalogService) {}
 
-  @Roles(UserRole.ADMIN, UserRole.OPERATIONS)
+  @Roles(UserRole.ADMIN)
   @Get('catalog')
   getCatalog(@Req() req: { user: SettingsCatalogActor }) {
     return this.settings.getCatalog(req.user);
