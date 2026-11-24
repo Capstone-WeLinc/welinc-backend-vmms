@@ -10,7 +10,6 @@ type BusinessAuditRecord = {
   id: string;
   source: 'business';
   category:
-    | 'work_order'
     | 'vehicle'
     | 'fuel'
     | 'maintenance_schedule'
@@ -71,8 +70,6 @@ export class AuditController {
     response.setHeader('Cache-Control', 'no-store');
     const take = 100;
     const [
-      workOrders,
-      shopChanges,
       vehicles,
       fuel,
       cancellations,
@@ -80,32 +77,6 @@ export class AuditController {
       editUnlocks,
       edits,
     ] = await Promise.all([
-      this.prisma.auditLog.findMany({
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-        take,
-        select: {
-          id: true,
-          email: true,
-          action: true,
-          fieldName: true,
-          previousValue: true,
-          newValue: true,
-          createdAt: true,
-          workOrder: { select: { workOrderNumber: true } },
-        },
-      }),
-      this.prisma.shopChangeLog.findMany({
-        orderBy: [{ changedAt: 'desc' }, { id: 'desc' }],
-        take,
-        select: {
-          id: true,
-          changedByName: true,
-          previousValue: true,
-          newValue: true,
-          changedAt: true,
-          workOrder: { select: { workOrderNumber: true } },
-        },
-      }),
       this.prisma.vehicleAuditLog.findMany({
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take,
@@ -186,35 +157,6 @@ export class AuditController {
     ]);
 
     const records: BusinessAuditRecord[] = [
-      ...workOrders.map((row) =>
-        record(
-          row.id,
-          row.email,
-          row.action,
-          `Work order ${row.workOrder.workOrderNumber}`,
-          row.createdAt,
-          {
-            category: 'work_order',
-            details: row.fieldName,
-            previousValue: row.previousValue,
-            newValue: row.newValue,
-          },
-        ),
-      ),
-      ...shopChanges.map((row) =>
-        record(
-          row.id,
-          row.changedByName,
-          'SHOP_CHANGED',
-          `Work order ${row.workOrder.workOrderNumber}`,
-          row.changedAt,
-          {
-            category: 'work_order',
-            previousValue: row.previousValue,
-            newValue: row.newValue,
-          },
-        ),
-      ),
       ...vehicles.map((row) =>
         record(
           row.id,

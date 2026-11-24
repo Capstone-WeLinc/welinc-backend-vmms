@@ -31,13 +31,18 @@ import { SaveOdometerImportDto } from './dto/save-odometer-import.dto';
 import { UpdateOdometerDto } from './dto/update-odometer.dto';
 import { UpdateVehicleDto } from './dto/update-vehicle.dto';
 import { UpdateVehicleMaintenanceDefaultsDto } from './dto/update-vehicle-maintenance-defaults.dto';
+import { VrmsRepairReadsService } from '../integrations/vrms/vrms-repair-reads.service';
+import type { ScheduleActor } from '../maintenance-schedules/schedule-access';
 
 @Controller('vehicles')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @RoleSystem(SystemType.VMMS)
 @Roles(UserRole.OPERATIONS)
 export class VehiclesController {
-  constructor(private readonly vehiclesService: VehiclesService) {}
+  constructor(
+    private readonly vehiclesService: VehiclesService,
+    private readonly repairReads: VrmsRepairReadsService,
+  ) {}
 
   @Roles(
     UserRole.ADMIN,
@@ -54,6 +59,22 @@ export class VehiclesController {
   @Get(':id/audit')
   async auditHistory(@Param('id', ParseUUIDPipe) id: string) {
     return this.vehiclesService.findAuditHistory(id);
+  }
+
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.OPERATIONS,
+    UserRole.CHIEF_MECHANIC,
+    UserRole.MECHANIC,
+  )
+  @Get(':id/repair-history')
+  async repairHistory(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('cursor') cursor: string | undefined,
+    @Query('limit') limit: string | undefined,
+    @Req() req: { user: ScheduleActor },
+  ) {
+    return this.repairReads.readVehicleHistory(id, req.user, cursor, limit);
   }
 
   @Roles(UserRole.OPERATIONS)

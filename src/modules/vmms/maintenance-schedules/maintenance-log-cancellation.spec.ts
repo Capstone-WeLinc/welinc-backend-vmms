@@ -45,6 +45,9 @@ describe('Admin maintenance-log cancellation', () => {
         findFirst: jest
           .fn()
           .mockResolvedValue({ id: 'vehicle-1', status: 'UNDER_MAINTENANCE' }),
+        findUniqueOrThrow: jest
+          .fn()
+          .mockResolvedValue({ id: 'vehicle-1', status: 'AVAILABLE' }),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       $transaction: jest
@@ -107,7 +110,12 @@ describe('Admin maintenance-log cancellation', () => {
         status: MaintenanceStatus.CANCELLED,
       });
       expect(prisma.vehicle.updateMany).toHaveBeenCalledWith(
-        expect.objectContaining({ data: { status: 'AVAILABLE' } }),
+        expect.objectContaining({
+          data: {
+            status: 'AVAILABLE',
+            availabilityVersion: { increment: 1 },
+          },
+        }),
       );
     },
   );

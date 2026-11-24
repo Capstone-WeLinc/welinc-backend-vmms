@@ -34,12 +34,6 @@ export const ERASURE_COPY_COLUMNS = [
     idColumn: 'updated_by_id',
     emailColumn: 'updated_by_email',
   },
-  {
-    table: 'shop_change_logs',
-    idColumn: 'changed_by_user_id',
-    nameColumn: 'changed_by_name',
-  },
-  { table: 'audit_logs', idColumn: 'user_id', emailColumn: 'email' },
   { table: 'vehicle_audit_logs', idColumn: 'user_id', emailColumn: 'email' },
   {
     table: 'maintenance_schedule_cancellations',

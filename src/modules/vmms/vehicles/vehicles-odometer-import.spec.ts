@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import { PrismaService } from '../../../shared/prisma.service';
+import { BmsFleetChangesService } from '../integrations/bms/bms-fleet-changes.service';
 import { VehiclesService } from './vehicles.service';
 
 describe('VehiclesService odometer import', () => {
@@ -13,7 +14,12 @@ describe('VehiclesService odometer import', () => {
       updateMany: jest.fn(),
     },
   };
-  const service = new VehiclesService(prisma as unknown as PrismaService);
+  const fleetChanges = { recordChange: jest.fn() };
+  const service = new VehiclesService(
+    prisma as unknown as PrismaService,
+    {} as any,
+    fleetChanges as unknown as BmsFleetChangesService,
+  );
   const actor = { sub: 'operations-user', email: 'ops@example.test' };
   const workbook = (values: unknown[][]) => {
     const sheet = XLSX.utils.aoa_to_sheet(values);
@@ -27,6 +33,7 @@ describe('VehiclesService odometer import', () => {
     prisma.$transaction.mockImplementation((callback) => callback(prisma));
     prisma.maintenanceSchedule.findMany.mockResolvedValue([]);
     prisma.vehicleAuditLog.createMany.mockResolvedValue({ count: 1 });
+    fleetChanges.recordChange.mockResolvedValue(undefined);
   });
 
   it('previews valid, invalid, inactive, unknown, and duplicate rows', async () => {

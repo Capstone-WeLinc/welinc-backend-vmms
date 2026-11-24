@@ -7,7 +7,12 @@ describe('maintenance vehicle status synchronization', () => {
   let beforeWrite: (() => void) | undefined;
   let service: MaintenanceSchedulesService;
   let prisma: {
-    vehicle: { findFirst: jest.Mock; updateMany: jest.Mock; update: jest.Mock };
+    vehicle: {
+      findFirst: jest.Mock;
+      findUniqueOrThrow: jest.Mock;
+      updateMany: jest.Mock;
+      update: jest.Mock;
+    };
     maintenanceSchedule: { findFirst: jest.Mock; update: jest.Mock };
     $transaction: jest.Mock;
   };
@@ -55,6 +60,7 @@ describe('maintenance vehicle status synchronization', () => {
         findFirst: jest.fn(async () =>
           vehicle.deletedAt ? null : { ...vehicle },
         ),
+        findUniqueOrThrow: jest.fn(async () => ({ ...vehicle })),
         update: jest.fn(),
         // Model the database's conditional write against the *current* row,
         // not the snapshot returned by findFirst. beforeWrite simulates VRMS.
@@ -63,7 +69,8 @@ describe('maintenance vehicle status synchronization', () => {
           if (
             where.id !== vehicle.id ||
             ('deletedAt' in where && where.deletedAt !== vehicle.deletedAt) ||
-            where.status?.not === vehicle.status
+            where.status?.not === vehicle.status ||
+            where.NOT?.status === vehicle.status
           )
             return { count: 0 };
           vehicle.status = data.status;
@@ -90,7 +97,7 @@ describe('maintenance vehicle status synchronization', () => {
 
   it.each(transitions)(
     '%s preserves repair status set between read and write',
-    async (status, initial) => {
+    async (status, initial, target) => {
       vehicle.status = initial;
       beforeWrite = () => {
         vehicle.status = VehicleStatus.UNDER_REPAIR;
@@ -101,6 +108,7 @@ describe('maintenance vehicle status synchronization', () => {
           id: 'vehicle-1',
           deletedAt: null,
           status: { not: VehicleStatus.UNDER_REPAIR },
+          NOT: { status: target },
         },
         data: {
           status:
@@ -108,6 +116,7 @@ describe('maintenance vehicle status synchronization', () => {
             status === MaintenanceStatus.DONE
               ? VehicleStatus.UNDER_MAINTENANCE
               : VehicleStatus.AVAILABLE,
+          availabilityVersion: { increment: 1 },
         },
       });
       expect(vehicle.status).toBe(VehicleStatus.UNDER_REPAIR);

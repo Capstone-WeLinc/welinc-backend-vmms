@@ -7,6 +7,7 @@ import { JwtAuthGuard } from '../../../auth/guards/jwt-auth.guard';
 import { UnauthorizedException } from '@nestjs/common';
 import { MaintenanceSchedulesController } from './maintenance-schedules.controller';
 import { MaintenanceSchedulesService } from './maintenance-schedules.service';
+import { VrmsRepairReadsService } from '../integrations/vrms/vrms-repair-reads.service';
 
 type Role = { role: UserRole; system: SystemType };
 const vmms = (role: UserRole): Role => ({ role, system: SystemType.VMMS });
@@ -43,7 +44,10 @@ describe('scheduling HTTP permissions', () => {
   beforeAll(async () => {
     const module = await Test.createTestingModule({
       controllers: [MaintenanceSchedulesController],
-      providers: [{ provide: MaintenanceSchedulesService, useValue: service }],
+      providers: [
+        { provide: MaintenanceSchedulesService, useValue: service },
+        { provide: VrmsRepairReadsService, useValue: {} },
+      ],
     })
       .overrideGuard(JwtAuthGuard)
       .useValue({

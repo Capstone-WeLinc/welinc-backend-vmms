@@ -26,6 +26,11 @@ export const envSchema = z.object({
   AUTH_ISSUER: required,
   AUTH_JWKS_URL: url,
   AUTH_INTERNAL_URL: url,
+  SUITE_GATEWAY_INTERNAL_URL: z.preprocess(
+    blank,
+    z.url({ protocol: /^https?$/ }).default('http://api-gateway:3000'),
+  ),
+  VMMS_REPAIR_REFERRAL_MAX_AGE_HOURS: integer(24, 1, 168),
   AUTH_CLIENT_ID: required,
   AUTH_CLIENT_PRIVATE_KEY: required,
   WEB_APP_URL: url,

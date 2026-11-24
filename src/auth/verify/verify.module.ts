@@ -28,6 +28,21 @@ export const DIRECTORY_TOKENS = Symbol('DIRECTORY_TOKENS');
 /** This service's token for its permission matrix (suite spec 0013, AC-29): `scope=permissions.read`. */
 export const PERMISSIONS_TOKENS = Symbol('PERMISSIONS_TOKENS');
 
+/** VMMS's token for VRMS repair-referral writes. */
+export const VRMS_REFERRAL_TOKENS = Symbol('VRMS_REFERRAL_TOKENS');
+
+/** VMMS's token for VRMS repair status and history reads. */
+export const VRMS_HISTORY_TOKENS = Symbol('VRMS_HISTORY_TOKENS');
+
+/** VMMS's token for a live VRMS repair-ticket status read. */
+export const VRMS_STATUS_TOKENS = Symbol('VRMS_STATUS_TOKENS');
+
+/** VMMS's token for BMS vehicle-availability events. */
+export const BMS_AVAILABILITY_TOKENS = Symbol('BMS_AVAILABILITY_TOKENS');
+
+/** VMMS's token for BMS fleet-change invalidations. */
+export const BMS_FLEET_CHANGE_TOKENS = Symbol('BMS_FLEET_CHANGE_TOKENS');
+
 /** The audience this service accepts. Change it when copying the folder (`VMMS`, `BMS`). */
 export const SERVICE_AUDIENCE = 'VMMS';
 
@@ -115,6 +130,81 @@ export function readVerifyConfig(
         });
       },
     },
+    {
+      provide: VRMS_REFERRAL_TOKENS,
+      inject: [VERIFY_CONFIG, ASSERTION_SIGNER],
+      useFactory: (verify: VerifyConfig, signer: AssertionSigner) => {
+        const logger = new Logger('ServiceToken');
+        return new ServiceTokenClient({
+          tokenUrl: `${verify.internalUrl}/auth/token`,
+          signer,
+          audience: 'VRMS',
+          scope: 'repair.referral.write',
+          onError: (reason) =>
+            logger.warn(`could not get a VRMS referral token: ${reason}`),
+        });
+      },
+    },
+    {
+      provide: VRMS_HISTORY_TOKENS,
+      inject: [VERIFY_CONFIG, ASSERTION_SIGNER],
+      useFactory: (verify: VerifyConfig, signer: AssertionSigner) => {
+        const logger = new Logger('ServiceToken');
+        return new ServiceTokenClient({
+          tokenUrl: `${verify.internalUrl}/auth/token`,
+          signer,
+          audience: 'VRMS',
+          scope: 'repair.history.read',
+          onError: (reason) =>
+            logger.warn(`could not get a VRMS history token: ${reason}`),
+        });
+      },
+    },
+    {
+      provide: VRMS_STATUS_TOKENS,
+      inject: [VERIFY_CONFIG, ASSERTION_SIGNER],
+      useFactory: (verify: VerifyConfig, signer: AssertionSigner) => {
+        const logger = new Logger('ServiceToken');
+        return new ServiceTokenClient({
+          tokenUrl: `${verify.internalUrl}/auth/token`,
+          signer,
+          audience: 'VRMS',
+          scope: 'repair.status.read',
+          onError: (reason) =>
+            logger.warn(`could not get a VRMS status token: ${reason}`),
+        });
+      },
+    },
+    {
+      provide: BMS_AVAILABILITY_TOKENS,
+      inject: [VERIFY_CONFIG, ASSERTION_SIGNER],
+      useFactory: (verify: VerifyConfig, signer: AssertionSigner) => {
+        const logger = new Logger('ServiceToken');
+        return new ServiceTokenClient({
+          tokenUrl: `${verify.internalUrl}/auth/token`,
+          signer,
+          audience: 'BMS',
+          scope: 'fleet.availability.write',
+          onError: (reason) =>
+            logger.warn(`could not get a BMS availability token: ${reason}`),
+        });
+      },
+    },
+    {
+      provide: BMS_FLEET_CHANGE_TOKENS,
+      inject: [VERIFY_CONFIG, ASSERTION_SIGNER],
+      useFactory: (verify: VerifyConfig, signer: AssertionSigner) => {
+        const logger = new Logger('ServiceToken');
+        return new ServiceTokenClient({
+          tokenUrl: `${verify.internalUrl}/auth/token`,
+          signer,
+          audience: 'BMS',
+          scope: 'fleet.change.write',
+          onError: (reason) =>
+            logger.warn(`could not get a BMS fleet-change token: ${reason}`),
+        });
+      },
+    },
   ],
   exports: [
     VERIFY_CONFIG,
@@ -122,6 +212,11 @@ export function readVerifyConfig(
     ASSERTION_SIGNER,
     DIRECTORY_TOKENS,
     PERMISSIONS_TOKENS,
+    VRMS_REFERRAL_TOKENS,
+    VRMS_HISTORY_TOKENS,
+    VRMS_STATUS_TOKENS,
+    BMS_AVAILABILITY_TOKENS,
+    BMS_FLEET_CHANGE_TOKENS,
   ],
 })
 export class AuthVerifyModule {}
