@@ -5,7 +5,6 @@ import pg from 'pg';
 import { seedGarages } from './seeds/garages.seed';
 import { seedUsers } from './seeds/users.seed';
 import { seedVehicles } from './seeds/vehicles.seed';
-import { seedWorkOrders } from './seeds/work-orders.seed';
 import { seedVmms } from './seeds/vmms.seed';
 
 const pool = new pg.Pool({ connectionString: process.env['DATABASE_URL'] });
@@ -15,16 +14,15 @@ async function main() {
   if (process.env['NODE_ENV'] === 'production' && process.env['SEED_ALLOW'] !== 'staging') {
     throw new Error('Production seeding is disabled. Set SEED_ALLOW=staging only for an approved staging seed run.');
   }
-  const [vehicles, schedules, workOrders, garages] = await Promise.all([
-    prisma.vehicle.count(), prisma.maintenanceSchedule.count(), prisma.workOrder.count(), prisma.garage.count(),
+  const [vehicles, schedules, garages] = await Promise.all([
+    prisma.vehicle.count(), prisma.maintenanceSchedule.count(), prisma.garage.count(),
   ]);
-  if (vehicles || schedules || workOrders || garages) {
+  if (vehicles || schedules || garages) {
     console.log('VMMS already has core data; preserving existing rows.');
   } else {
     await seedGarages(prisma);
     await seedUsers(prisma); // copies suite people; creates no local accounts
     await seedVehicles(prisma);
-    await seedWorkOrders(prisma);
     await seedVmms(prisma);
     console.log('VMMS sample fleet seeded from suite people.json.');
   }

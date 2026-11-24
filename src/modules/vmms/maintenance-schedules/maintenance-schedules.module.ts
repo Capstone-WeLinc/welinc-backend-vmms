@@ -7,9 +7,17 @@ import { MaintenanceNotificationsController } from './maintenance-notifications.
 import { MaintenanceOverdueService } from './maintenance-overdue.service';
 import { MaintenancePredictionsController } from './maintenance-predictions.controller';
 import { MaintenancePredictionsService } from './maintenance-predictions.service';
+import { BmsAvailabilityModule } from '../integrations/bms/bms-availability.module';
+import { VrmsRepairReferralsModule } from '../integrations/vrms/vrms-repair-referrals.module';
+import { VrmsRepairReadsModule } from '../integrations/vrms/vrms-repair-reads.module';
 
 @Module({
-  imports: [SharedModule],
+  imports: [
+    SharedModule,
+    BmsAvailabilityModule,
+    VrmsRepairReferralsModule,
+    VrmsRepairReadsModule,
+  ],
   controllers: [
     MaintenancePredictionsController,
     MaintenanceNotificationsController,
@@ -21,5 +29,6 @@ import { MaintenancePredictionsService } from './maintenance-predictions.service
     MaintenanceOverdueService,
     MaintenancePredictionsService,
   ],
+  exports: [MaintenanceSchedulesService],
 })
 export class MaintenanceSchedulesModule {}

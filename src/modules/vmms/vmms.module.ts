@@ -18,6 +18,7 @@ import { FleetController } from './fleet/fleet.controller';
 import { AuditController } from './audit/audit.controller';
 import { ReportsModule } from './reports/reports.module';
 import { SettingsModule } from './settings/settings.module';
+import { VrmsRepairEventsModule } from './integrations/vrms/vrms-repair-events.module';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { SettingsModule } from './settings/settings.module';
     FuelModule,
     ReportsModule,
     SettingsModule,
+    VrmsRepairEventsModule,
   ],
   controllers: [
     VmmsConfigController,

@@ -40,11 +40,17 @@ export class FleetController {
         capacity: true,
         odometer: true,
         status: true,
+        availabilityVersion: true,
         garageId: true,
         updatedAt: true,
       },
     });
-    return { vehicles: rows };
+    return {
+      vehicles: rows.map((vehicle) => ({
+        ...vehicle,
+        isAssignable: vehicle.status === 'AVAILABLE',
+      })),
+    };
   }
 
   @Get('vehicles/:id')
@@ -65,6 +71,7 @@ export class FleetController {
         capacity: true,
         odometer: true,
         status: true,
+        availabilityVersion: true,
         garageId: true,
         updatedAt: true,
       },
@@ -74,7 +81,10 @@ export class FleetController {
         code: 'VEHICLE_NOT_FOUND',
         message: 'Vehicle not found.',
       });
-    return vehicle;
+    return {
+      ...vehicle,
+      isAssignable: vehicle.status === 'AVAILABLE',
+    };
   }
 
   @Get('garages')

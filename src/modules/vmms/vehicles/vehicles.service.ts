@@ -6,6 +6,8 @@ import {
 } from '@nestjs/common';
 import { MaintenanceStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../../shared/prisma.service';
+import { BmsAvailabilityService } from '../integrations/bms/bms-availability.service';
+import { BmsFleetChangesService } from '../integrations/bms/bms-fleet-changes.service';
 import * as ExcelJS from 'exceljs';
 import { odometerScheduleStatus } from '../maintenance-schedules/schedule-due';
 import { CreateVehicleDto } from './dto/create-vehicle.dto';
@@ -119,7 +121,11 @@ function auditValue(value: unknown): string | null {
 
 @Injectable()
 export class VehiclesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly availability: BmsAvailabilityService,
+    private readonly fleetChanges: BmsFleetChangesService,
+  ) {}
 
   async findAll(activeOnly = false) {
     const vehicles = await this.prisma.vehicle.findMany({
@@ -324,21 +330,32 @@ export class VehiclesService {
   async create(dto: CreateVehicleDto) {
     await this.assertActiveGarage(dto.garageId);
     try {
-      return await this.prisma.vehicle.create({
-        data: {
-          plateNumber: dto.plateNumber.trim(),
-          make: dto.make.trim(),
-          model: dto.model.trim(),
-          year: dto.year,
-          engineType: dto.engineType.trim(),
-          truckSizeCategory: dto.truckSizeCategory.trim(),
-          capacity: 0,
-          odometer: dto.odometer,
-          garageId: dto.garageId,
-          status: 'AVAILABLE',
-        },
-        include: { garage: { select: { id: true, name: true } } },
+      const vehicle = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.vehicle.create({
+          data: {
+            plateNumber: dto.plateNumber.trim(),
+            make: dto.make.trim(),
+            model: dto.model.trim(),
+            year: dto.year,
+            engineType: dto.engineType.trim(),
+            truckSizeCategory: dto.truckSizeCategory.trim(),
+            capacity: 0,
+            odometer: dto.odometer,
+            garageId: dto.garageId,
+            status: 'AVAILABLE',
+          },
+          include: { garage: { select: { id: true, name: true } } },
+        });
+        await this.fleetChanges.recordChange(tx, {
+          entityType: 'VEHICLE',
+          entityId: created.id,
+          changeType: 'VEHICLE_CREATED',
+        });
+        return created;
       });
+      const { availabilityVersion: _availabilityVersion, ...response } =
+        vehicle;
+      return response;
     } catch (error) {
       this.throwPlateConflict(error);
     }
@@ -762,19 +779,26 @@ export class VehiclesService {
       }
 
       try {
-        await this.prisma.vehicle.create({
-          data: {
-            plateNumber: normalizedPlate,
-            make: candidate.make,
-            model: candidate.model,
-            year,
-            engineType: candidate.engineType,
-            truckSizeCategory: candidate.truckSizeCategory,
-            capacity: 0,
-            odometer,
-            garageId: garage.id,
-            status: 'AVAILABLE',
-          },
+        await this.prisma.$transaction(async (tx) => {
+          const created = await tx.vehicle.create({
+            data: {
+              plateNumber: normalizedPlate,
+              make: candidate.make,
+              model: candidate.model,
+              year,
+              engineType: candidate.engineType,
+              truckSizeCategory: candidate.truckSizeCategory,
+              capacity: 0,
+              odometer,
+              garageId: garage.id,
+              status: 'AVAILABLE',
+            },
+          });
+          await this.fleetChanges.recordChange(tx, {
+            entityType: 'VEHICLE',
+            entityId: created.id,
+            changeType: 'VEHICLE_IMPORTED',
+          });
         });
       } catch (createError) {
         if (
@@ -819,6 +843,9 @@ export class VehiclesService {
       };
 
       return await this.prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`
+          SELECT id FROM vehicles WHERE id = ${id}::uuid FOR UPDATE
+        `;
         const previous = await tx.vehicle.findUnique({
           where: { id },
           select: {
@@ -838,9 +865,17 @@ export class VehiclesService {
 
         const updated = await tx.vehicle.update({
           where: { id },
-          data,
+          data: {
+            ...data,
+            ...(previous.status !== (dto.status ?? previous.status)
+              ? { availabilityVersion: { increment: 1 } }
+              : {}),
+          },
           include: { garage: { select: { id: true, name: true } } },
         });
+        if (previous.status !== updated.status) {
+          await this.availability.recordStatusChange(tx, updated);
+        }
         const changedFields = Object.keys(data).filter(
           (field) =>
             !Object.is(
@@ -864,8 +899,17 @@ export class VehiclesService {
             })),
           });
         }
+        if (changedFields.some((field) => field !== 'status')) {
+          await this.fleetChanges.recordChange(tx, {
+            entityType: 'VEHICLE',
+            entityId: id,
+            changeType: 'VEHICLE_UPDATED',
+          });
+        }
 
-        return updated;
+        const { availabilityVersion: _availabilityVersion, ...response } =
+          updated;
+        return response;
       });
     } catch (error) {
       this.throwPlateConflict(error);
@@ -1066,6 +1110,11 @@ export class VehiclesService {
       );
 
     if (changed) {
+      await this.fleetChanges.recordChange(tx, {
+        entityType: 'VEHICLE',
+        entityId: id,
+        changeType: 'ODOMETER_UPDATED',
+      });
       await this.refreshOdometerScheduleStatuses(
         tx,
         updated.plateNumber,
@@ -1149,12 +1198,24 @@ export class VehiclesService {
   }
 
   async delete(id: string) {
-    return this.prisma.vehicle.update({
-      where: { id },
-      data: {
-        deletedAt: new Date(),
-        isActive: false,
-      },
+    return this.prisma.$transaction(async (tx) => {
+      const previous = await tx.vehicle.findUnique({ where: { id } });
+      if (!previous) throw new NotFoundException('Vehicle not found.');
+      if (previous.deletedAt && !previous.isActive) return previous;
+
+      const deleted = await tx.vehicle.update({
+        where: { id },
+        data: {
+          deletedAt: new Date(),
+          isActive: false,
+        },
+      });
+      await this.fleetChanges.recordChange(tx, {
+        entityType: 'VEHICLE',
+        entityId: id,
+        changeType: 'VEHICLE_DELETED',
+      });
+      return deleted;
     });
   }
 

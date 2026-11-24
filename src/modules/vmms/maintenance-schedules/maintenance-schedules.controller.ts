@@ -31,6 +31,7 @@ import { UpdateMaintenanceLogDto } from './dto/update-maintenance-log.dto';
 import { ReviewMaintenanceCancellationDto } from './dto/review-maintenance-cancellation.dto';
 import { CreateMaintenanceScheduleExtensionDto } from './dto/create-maintenance-schedule-extension.dto';
 import { ReviewMaintenanceScheduleExtensionDto } from './dto/review-maintenance-schedule-extension.dto';
+import { VrmsRepairReadsService } from '../integrations/vrms/vrms-repair-reads.service';
 
 type WorkOrderUploadFile = {
   originalname: string;
@@ -45,6 +46,7 @@ type WorkOrderUploadFile = {
 export class MaintenanceSchedulesController {
   constructor(
     private readonly maintenanceSchedulesService: MaintenanceSchedulesService,
+    private readonly repairReads: VrmsRepairReadsService,
   ) {}
 
   @Roles(
@@ -56,6 +58,20 @@ export class MaintenanceSchedulesController {
   @Get()
   async list(@Req() req: { user: ScheduleActor }) {
     return this.maintenanceSchedulesService.findAll(req.user);
+  }
+
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.OPERATIONS,
+    UserRole.CHIEF_MECHANIC,
+    UserRole.MECHANIC,
+  )
+  @Get(':id/repair-status')
+  async repairStatus(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: { user: ScheduleActor },
+  ) {
+    return this.repairReads.readWorkOrderStatus(id, req.user);
   }
 
   @Roles(

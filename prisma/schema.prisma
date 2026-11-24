@@ -32,12 +32,31 @@ enum VehicleStatus {
   UNDER_MAINTENANCE
 }
 
-enum WorkOrderStatus {
-  PENDING
-  IN_PROGRESS
-  FOR_VERIFICATION
+enum VrmsRepairIntegrationStatus {
+  OPEN
   COMPLETED
   CANCELLED
+}
+
+enum VrmsRepairEventType {
+  OPENED
+  LINKS_UPDATED
+  STATUS_UPDATED
+  COMPLETED
+  CANCELLED
+}
+
+enum VmmsRepairReferralStatus {
+  QUEUED
+  SENT
+  FAILED
+  ACCEPTED
+  REJECTED
+  CANCELLED
+}
+
+enum VrmsRepairReferralEventType {
+  REJECTED
 }
 
 enum AccountType {
@@ -143,11 +162,11 @@ model Vehicle {
   truckSizeCategory            String?                     @map("truck_size_category") @db.VarChar(50)
   capacity                     Int                         @default(0) @map("capacity")
   status                       VehicleStatus               @default(AVAILABLE)
+  availabilityVersion          Int                         @default(0) @map("availability_version")
   odometer                     Int                         @default(0)
   defaultMaintenanceIntervalKm Int?                        @map("default_maintenance_interval_km")
   defaultMaintenanceBufferKm   Int?                        @map("default_maintenance_buffer_km")
   garageId                     String?                     @map("garage_id") @db.Uuid
-  workOrders                   WorkOrder[]
   isActive                     Boolean                     @default(true) @map("is_active")
   deletedAt                    DateTime?                   @map("deleted_at") @db.Timestamptz(6)
   createdAt                    DateTime                    @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -156,6 +175,9 @@ model Vehicle {
   fuelFillUps                  FuelFillUp[]
   fuelAnomalies                FuelAnomaly[]
   maintenanceDefaults          VehicleMaintenanceDefault[]
+  vrmsRepairIntegrations       VrmsRepairIntegrationState[]
+  repairReferrals              VmmsRepairReferral[]
+  bmsAvailabilityEvents        BmsVehicleAvailabilityEvent[]
   garage                       Garage?                     @relation(fields: [garageId], references: [id], onDelete: Restrict)
 
   @@index([deletedAt])
@@ -170,8 +192,6 @@ model Garage {
   createdAt  DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt  DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
   vehicles   Vehicle[]
-  workOrders WorkOrder[]
-
   @@index([deletedAt])
   @@map("garages")
 }
@@ -196,6 +216,132 @@ model FuelStation {
   fillUps   FuelFillUp[]
 
   @@map("fuel_stations")
+}
+
+model VrmsRepairIntegrationState {
+  repairTicketId         String                       @id @map("repair_ticket_id") @db.Uuid
+  vehicleId              String                       @map("vehicle_id") @db.Uuid
+  repairTicketNumber     String?                      @map("repair_ticket_number") @db.VarChar(32)
+  repairStatus           String?                      @map("repair_status") @db.VarChar(32)
+  outsideShopName        String?                      @map("outside_shop_name") @db.VarChar(150)
+  status                 VrmsRepairIntegrationStatus
+  lastEventVersion       Int                          @map("last_event_version")
+  maintenanceScheduleIds Json                         @default("[]") @map("maintenance_schedule_ids") @db.JsonB
+  acceptedReferralIds    Json                         @default("[]") @map("accepted_referral_ids") @db.JsonB
+  lastOccurredAt         DateTime                     @map("last_occurred_at") @db.Timestamptz(6)
+  createdAt              DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime                     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  vehicle                Vehicle                      @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  events                 VrmsRepairEventReceipt[]
+
+  @@index([vehicleId, status])
+  @@map("vrms_repair_integration_states")
+}
+
+model VrmsRepairEventReceipt {
+  eventId                String                @id @map("event_id") @db.Uuid
+  repairTicketId         String                @map("repair_ticket_id") @db.Uuid
+  eventVersion           Int                   @map("event_version")
+  eventType              VrmsRepairEventType   @map("event_type")
+  vmmsVehicleId          String                @map("vmms_vehicle_id") @db.Uuid
+  maintenanceScheduleIds Json                  @map("maintenance_schedule_ids") @db.JsonB
+  occurredAt             DateTime              @map("occurred_at") @db.Timestamptz(6)
+  serviceOdometerReading Int?                  @map("service_odometer_reading")
+  repairTicketNumber     String?               @map("repair_ticket_number") @db.VarChar(32)
+  repairStatus           String?               @map("repair_status") @db.VarChar(32)
+  outsideShopName        String?               @map("outside_shop_name") @db.VarChar(150)
+  acceptedReferralIds    Json                  @default("[]") @map("accepted_referral_ids") @db.JsonB
+  receivedAt             DateTime              @default(now()) @map("received_at") @db.Timestamptz(6)
+  state                  VrmsRepairIntegrationState @relation(fields: [repairTicketId], references: [repairTicketId], onDelete: Restrict)
+
+  @@unique([repairTicketId, eventVersion])
+  @@index([repairTicketId, receivedAt])
+  @@map("vrms_repair_event_receipts")
+}
+
+model VmmsRepairReferral {
+  id                      String                    @id @default(uuid()) @db.Uuid
+  vehicleId               String                    @map("vehicle_id") @db.Uuid
+  maintenanceScheduleId   String                    @map("maintenance_schedule_id") @db.Uuid
+  workOrderNumber         String                    @map("work_order_number") @db.VarChar(32)
+  status                  VmmsRepairReferralStatus @default(QUEUED)
+  requestPayload          Json                      @map("request_payload") @db.JsonB
+  repairTicketId          String?                   @map("repair_ticket_id") @db.Uuid
+  repairTicketNumber      String?                   @map("repair_ticket_number") @db.VarChar(32)
+  repairStatus            String?                   @map("repair_status") @db.VarChar(32)
+  outsideShopName         String?                   @map("outside_shop_name") @db.VarChar(150)
+  outcomeReason           String?                   @map("outcome_reason") @db.Text
+  outcomeEventId          String?                   @unique @map("outcome_event_id") @db.Uuid
+  outcomeOccurredAt       DateTime?                 @map("outcome_occurred_at") @db.Timestamptz(6)
+  attemptWindowStartedAt  DateTime                  @default(now()) @map("attempt_window_started_at") @db.Timestamptz(6)
+  nextAttemptAt           DateTime?                 @default(now()) @map("next_attempt_at") @db.Timestamptz(6)
+  lastAttemptAt           DateTime?                 @map("last_attempt_at") @db.Timestamptz(6)
+  attempts                Int                       @default(0)
+  manualRetryCount        Int                       @default(0) @map("manual_retry_count")
+  lastErrorCode           String?                   @map("last_error_code") @db.VarChar(80)
+  failedAt                DateTime?                 @map("failed_at") @db.Timestamptz(6)
+  deliveredAt             DateTime?                 @map("delivered_at") @db.Timestamptz(6)
+  createdAt               DateTime                  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt               DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  vehicle                 Vehicle                   @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  maintenanceSchedule     MaintenanceSchedule       @relation(fields: [maintenanceScheduleId], references: [id], onDelete: Restrict)
+  events                  VrmsRepairReferralEventReceipt[]
+
+  @@index([status, nextAttemptAt])
+  @@index([maintenanceScheduleId, createdAt])
+  @@index([vehicleId, createdAt])
+  @@map("vmms_repair_referrals")
+}
+
+model VrmsRepairReferralEventReceipt {
+  eventId       String                       @id @map("event_id") @db.Uuid
+  referralId    String                       @map("referral_id") @db.Uuid
+  eventType     VrmsRepairReferralEventType  @map("event_type")
+  reason        String                       @db.Text
+  occurredAt    DateTime                     @map("occurred_at") @db.Timestamptz(6)
+  receivedAt    DateTime                     @default(now()) @map("received_at") @db.Timestamptz(6)
+  referral      VmmsRepairReferral           @relation(fields: [referralId], references: [id], onDelete: Restrict)
+
+  @@index([referralId, receivedAt])
+  @@map("vrms_repair_referral_event_receipts")
+}
+
+model BmsVehicleAvailabilityEvent {
+  eventId       String        @id @map("event_id") @db.Uuid
+  vehicleId     String        @map("vehicle_id") @db.Uuid
+  eventVersion  Int           @map("event_version")
+  status        VehicleStatus
+  occurredAt    DateTime      @map("occurred_at") @db.Timestamptz(6)
+  nextAttemptAt DateTime      @default(now()) @map("next_attempt_at") @db.Timestamptz(6)
+  lastAttemptAt DateTime?     @map("last_attempt_at") @db.Timestamptz(6)
+  attempts      Int           @default(0)
+  lastErrorCode String?       @map("last_error_code") @db.VarChar(80)
+  sentAt        DateTime?     @map("sent_at") @db.Timestamptz(6)
+  createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  vehicle       Vehicle       @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+
+  @@unique([vehicleId, eventVersion])
+  @@index([sentAt, nextAttemptAt])
+  @@index([vehicleId, eventVersion])
+  @@map("bms_vehicle_availability_events")
+}
+
+model BmsFleetChangeEvent {
+  eventId       String   @id @map("event_id") @db.Uuid
+  entityType    String   @map("entity_type") @db.VarChar(16)
+  entityId      String   @map("entity_id") @db.Uuid
+  changeType    String   @map("change_type") @db.VarChar(32)
+  occurredAt    DateTime @map("occurred_at") @db.Timestamptz(6)
+  nextAttemptAt DateTime @default(now()) @map("next_attempt_at") @db.Timestamptz(6)
+  lastAttemptAt DateTime? @map("last_attempt_at") @db.Timestamptz(6)
+  attempts      Int      @default(0)
+  lastErrorCode String?  @map("last_error_code") @db.VarChar(80)
+  sentAt        DateTime? @map("sent_at") @db.Timestamptz(6)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([sentAt, nextAttemptAt])
+  @@index([entityType, entityId, occurredAt])
+  @@map("bms_fleet_change_events")
 }
 
 model FuelAnomalySetting {
@@ -349,8 +495,6 @@ model Mechanic {
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  workOrders WorkOrder[] @relation("WorkOrderMechanics")
-
   @@map("mechanics")
 }
 
@@ -358,100 +502,6 @@ enum MaintenancePriority {
   HIGH
   MEDIUM
   LOW
-}
-
-model WorkOrder {
-  id                       String          @id @default(uuid()) @db.Uuid
-  workOrderNumber          String          @unique @map("work_order_number") @db.VarChar(50)
-  status                   WorkOrderStatus @default(PENDING)
-  vehicleId                String          @map("vehicle_id") @db.Uuid
-  garageId                 String          @map("garage_id") @db.Uuid
-  odometer                 Int
-  targetDueDate            DateTime?       @map("target_due_date") @db.Timestamptz(6)
-  durationDays             Int?            @map("duration_days")
-  durationHours            Int?            @map("duration_hours")
-  partsCost                Decimal?        @map("parts_cost") @db.Decimal(10, 2)
-  laborCost                Decimal?        @map("labor_cost") @db.Decimal(10, 2)
-  totalCost                Decimal?        @map("total_cost") @db.Decimal(10, 2)
-  isLumpSum                Boolean         @default(false) @map("is_lump_sum")
-  cancellationReason       String?         @map("cancellation_reason") @db.Text
-  failedVerificationReason String?         @map("failed_verification_reason") @db.Text
-  remarks                  String?         @db.Text
-  isUnlocked               Boolean         @default(false) @map("is_unlocked")
-  unlockReason             String?         @map("unlock_reason") @db.Text
-  isArchived               Boolean         @default(false) @map("is_archived")
-  createdAt                DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt                DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
-  completedAt              DateTime?       @map("completed_at") @db.Timestamptz(6)
-
-  vehicle        Vehicle         @relation(fields: [vehicleId], references: [id])
-  garage         Garage          @relation(fields: [garageId], references: [id])
-  issues         RepairIssue[]
-  mechanics      Mechanic[]      @relation("WorkOrderMechanics")
-  repairParts    RepairPart[]
-  shopChangeLogs ShopChangeLog[]
-  auditLogs      AuditLog[]
-
-  @@index([status, createdAt])
-  @@index([vehicleId])
-  @@map("work_orders")
-}
-
-model RepairIssue {
-  id          String   @id @default(uuid()) @db.Uuid
-  workOrderId String   @map("work_order_id") @db.Uuid
-  description String   @db.Text
-  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
-
-  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
-
-  @@map("repair_issues")
-}
-
-model RepairPart {
-  id          String   @id @default(uuid()) @db.Uuid
-  workOrderId String   @map("work_order_id") @db.Uuid
-  description String   @db.VarChar(255)
-  unitCost    Decimal  @map("unit_cost") @db.Decimal(10, 2)
-  quantity    Int      @default(1)
-  subtotal    Decimal  @db.Decimal(10, 2)
-  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-
-  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
-
-  @@map("repair_parts")
-}
-
-model ShopChangeLog {
-  id              String   @id @default(uuid()) @db.Uuid
-  workOrderId     String   @map("work_order_id") @db.Uuid
-  changedByUserId String   @map("changed_by_user_id") @db.Uuid
-  changedByName   String   @map("changed_by_name") @db.VarChar(100)
-  previousValue   String   @map("previous_value") @db.VarChar(255)
-  newValue        String   @map("new_value") @db.VarChar(255)
-  changedAt       DateTime @default(now()) @map("changed_at") @db.Timestamptz(6)
-
-  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Restrict)
-
-  @@map("shop_change_logs")
-}
-
-model AuditLog {
-  id            String   @id @default(uuid()) @db.Uuid
-  workOrderId   String   @map("work_order_id") @db.Uuid
-  userId        String   @map("user_id") @db.Uuid
-  email         String   @db.VarChar(100)
-  action        String   @db.VarChar(100)
-  fieldName     String?  @map("field_name") @db.VarChar(50)
-  previousValue String?  @map("previous_value") @db.Text
-  newValue      String?  @map("new_value") @db.Text
-  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-
-  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Restrict)
-
-  @@index([workOrderId, createdAt])
-  @@map("audit_logs")
 }
 
 model VehicleAuditLog {
@@ -567,6 +617,7 @@ model MaintenanceSchedule {
   checklistTemplate         ChecklistTemplate?                   @relation(fields: [checklistTemplateId], references: [id], onDelete: SetNull)
   previousSchedule          MaintenanceSchedule?                 @relation("MaintenanceScheduleRecurrence", fields: [previousScheduleId], references: [id], onDelete: SetNull)
   nextSchedule              MaintenanceSchedule?                 @relation("MaintenanceScheduleRecurrence")
+  vrmsRepairReferrals       VmmsRepairReferral[]
 
   @@index([chiefMechanicId])
   @@index([assignedMechanicId])

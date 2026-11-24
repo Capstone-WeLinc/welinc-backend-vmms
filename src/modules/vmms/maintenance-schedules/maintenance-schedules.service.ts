@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import {
   AccountType,
+  MaintenanceApprovalStatus,
   MaintenanceCancellationReviewStatus,
   MaintenanceScheduleExtensionAuditEventType,
   MaintenanceScheduleExtensionReviewStatus,
@@ -21,6 +22,8 @@ import {
   VehicleStatus,
 } from '@prisma/client';
 import { PrismaService } from '../../../shared/prisma.service';
+import { BmsAvailabilityService } from '../integrations/bms/bms-availability.service';
+import { VrmsRepairReferralsService } from '../integrations/vrms/vrms-repair-referrals.service';
 import {
   BlobStorageService,
   StorageUnavailableException,
@@ -83,6 +86,8 @@ export class MaintenanceSchedulesService {
   constructor(
     private readonly prisma: PrismaService,
     @Optional() private readonly storage?: BlobStorageService,
+    @Optional() private readonly availability?: BmsAvailabilityService,
+    @Optional() private readonly repairReferrals?: VrmsRepairReferralsService,
   ) {}
 
   private fileStorage(): BlobStorageService {
@@ -629,6 +634,21 @@ export class MaintenanceSchedulesService {
         where: { deletedAt: null, ...scope },
         orderBy: { createdAt: 'desc' },
         include: {
+          vrmsRepairReferrals: {
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+            select: {
+              id: true,
+              status: true,
+              repairTicketId: true,
+              repairTicketNumber: true,
+              repairStatus: true,
+              outsideShopName: true,
+              outcomeReason: true,
+              lastErrorCode: true,
+              createdAt: true,
+            },
+          },
           cancellations: { orderBy: { createdAt: 'desc' } },
           maintenanceLogEditUnlocks: {
             orderBy: { createdAt: 'desc' },
@@ -694,6 +714,7 @@ export class MaintenanceSchedulesService {
           previousScheduleId: schedule.previousScheduleId ?? null,
           approvalStatus: schedule.approvalStatus,
           workOrderProgress: progressForClient(schedule),
+          repairReferral: schedule.vrmsRepairReferrals[0] ?? null,
           ...(includeCosts
             ? {
                 partsCost: costs.partsCost,
@@ -1460,8 +1481,7 @@ export class MaintenanceSchedulesService {
     if (decision !== 'APPROVE' && decision !== 'REJECT') {
       throw new BadRequestException('A valid extension decision is required.');
     }
-    const reason =
-      typeof reviewReason === 'string' ? reviewReason.trim() : '';
+    const reason = typeof reviewReason === 'string' ? reviewReason.trim() : '';
     if (decision === 'REJECT' && (!reason || reason.length > 2000)) {
       throw new BadRequestException(
         'A rejection reason of 1 to 2000 characters is required.',
@@ -2612,7 +2632,7 @@ export class MaintenanceSchedulesService {
       };
     }
 
-    const { schedule, nextSchedule } = await this.prisma
+    const { schedule, nextSchedule, referral } = await this.prisma
       .$transaction(async (tx) => {
         if (action === 'SUBMIT') {
           const odometerToRecord = serviceOdometer;
@@ -2654,7 +2674,15 @@ export class MaintenanceSchedulesService {
         if (workflow.status === MaintenanceStatus.COMPLETED) {
           nextSchedule = await this.createNextRecurringSchedule(tx, updated);
         }
-        return { schedule: updated, nextSchedule };
+        const referral =
+          action === 'REPAIR' && this.repairReferrals
+            ? await this.repairReferrals.createFromWorkOrder(
+                tx,
+                updated,
+                progressRecord,
+              )
+            : null;
+        return { schedule: updated, nextSchedule, referral };
       })
       .catch((error: unknown) =>
         this.handleScheduleWriteConflict(
@@ -2667,6 +2695,9 @@ export class MaintenanceSchedulesService {
           id,
         ),
       );
+    if (referral?.created) {
+      await this.repairReferrals?.deliverOne(referral.id);
+    }
     await this.syncVehicleStatus(schedule.vehicleId, schedule.status);
 
     const costs = this.normalizeCostPayload({
@@ -2699,6 +2730,12 @@ export class MaintenanceSchedulesService {
         : null,
       approvalStatus: schedule.approvalStatus,
       workOrderProgress: progressForClient(schedule),
+      ...(this.repairReferrals
+        ? {
+            repairReferral:
+              await this.repairReferrals.getLatestForSchedule(schedule.id),
+          }
+        : {}),
       ...(this.canViewMaintenanceCosts(actor)
         ? {
             partsCost: costs.partsCost,
@@ -2900,19 +2937,95 @@ export class MaintenanceSchedulesService {
     }
 
     if (newStatus && vehicle.status !== newStatus) {
-      // Enforce repair precedence in the write, even if VRMS changes status
-      // after the initial read. Do not update a concurrently archived vehicle.
-      const result = await this.prisma.vehicle.updateMany({
-        where: {
-          id: vehicle.id,
-          deletedAt: null,
-          status: { not: VehicleStatus.UNDER_REPAIR },
-        },
-        data: { status: newStatus },
+      const changed = await this.prisma.$transaction(async (tx) => {
+        // Enforce repair precedence in the write, even if VRMS changes status
+        // after the initial read. Do not update a concurrently archived vehicle.
+        const result = await tx.vehicle.updateMany({
+          where: {
+            id: vehicle.id,
+            deletedAt: null,
+            status: { not: VehicleStatus.UNDER_REPAIR },
+            NOT: { status: newStatus },
+          },
+          data: {
+            status: newStatus,
+            availabilityVersion: { increment: 1 },
+          },
+        });
+        if (result.count !== 1) return false;
+        const updatedVehicle = await tx.vehicle.findUniqueOrThrow({
+          where: { id: vehicle.id },
+          select: {
+            id: true,
+            plateNumber: true,
+            status: true,
+            availabilityVersion: true,
+          },
+        });
+        await this.availability?.recordStatusChange(tx, updatedVehicle);
+        return true;
       });
-      if (result.count === 0) return;
+      if (!changed) return;
       this.logger.log(
         `Vehicle ${plateNumber} status synced: ${vehicle.status} → ${newStatus} (schedule ${scheduleStatus})`,
+      );
+    }
+  }
+
+  async returnToChiefForFinalVerificationFromVrmsEvent(
+    tx: Prisma.TransactionClient,
+    schedule: MaintenanceSchedule,
+  ): Promise<void> {
+    const progress = this.asProgressRecord(schedule.workOrderProgress);
+    const wasInProgress =
+      schedule.status === MaintenanceStatus.IN_PROGRESS ||
+      (schedule.status === MaintenanceStatus.OVERDUE &&
+        progress.overdueFromStatus === MaintenanceStatus.IN_PROGRESS);
+    if (
+      !wasInProgress ||
+      schedule.approvalStatus !== MaintenanceApprovalStatus.FOR_REPAIR ||
+      schedule.deletedAt
+    ) {
+      throw new ConflictException(
+        'The VMMS work order is no longer in the For Repair state.',
+      );
+    }
+
+    delete progress.overdueFromStatus;
+    const inspectionItems = asUnknownArray(progress.inspectionItems).map(
+      (item) =>
+        isRecord(item) ? { ...item, status: 'pending', note: '' } : item,
+    );
+    const storedProgress = stateForStorage(
+      {
+        ...progress,
+        inspectionItems,
+        inspectorRemarks: '',
+        workflowStatus: 'Done',
+        approvalStatus: 'Unverified',
+        mechanicSubmitted: true,
+      },
+      MaintenanceStatus.DONE,
+    );
+    const updated = await tx.maintenanceSchedule.updateMany({
+      where: {
+        id: schedule.id,
+        updatedAt: schedule.updatedAt,
+        deletedAt: null,
+        status: {
+          in: [MaintenanceStatus.IN_PROGRESS, MaintenanceStatus.OVERDUE],
+        },
+        approvalStatus: MaintenanceApprovalStatus.FOR_REPAIR,
+      },
+      data: {
+        status: MaintenanceStatus.DONE,
+        approvalStatus: MaintenanceApprovalStatus.UNVERIFIED,
+        workOrderProgress: storedProgress.workOrderProgress,
+      },
+    });
+    if (updated.count !== 1) {
+      throw new ConflictException(
+        'The VMMS work order changed before it could be returned for final verification.',
       );
     }
   }
