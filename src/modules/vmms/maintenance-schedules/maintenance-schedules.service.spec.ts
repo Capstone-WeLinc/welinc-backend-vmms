@@ -44,6 +44,7 @@ describe('MaintenanceSchedulesService', () => {
         startReferenceDate: null,
         previousScheduleId: null,
         workOrderProgress: null,
+        vrmsRepairReferrals: [],
         partsCost: {
           toNumber: () => 125.5,
           toJSON: () => '125.50',
@@ -96,6 +97,7 @@ describe('MaintenanceSchedulesService', () => {
         previousScheduleId: null,
         approvalStatus: 'UNVERIFIED',
         workOrderProgress: null,
+        vrmsRepairReferrals: [],
         partsCost: 125.5,
         laborCost: 45.25,
         totalCost: 170.75,
@@ -133,6 +135,7 @@ describe('MaintenanceSchedulesService', () => {
         createdAt: new Date('2026-09-30T16:05:00.000Z'),
         startDate: null,
         cancellations: [],
+        vrmsRepairReferrals: [],
         partsCost: null,
         laborCost: null,
         totalCost: null,

@@ -1,11 +1,14 @@
 import { BadRequestException } from '@nestjs/common';
 import * as XLSX from 'xlsx';
 import { PrismaService } from '../../../shared/prisma.service';
+import { BmsAvailabilityService } from '../integrations/bms/bms-availability.service';
+import { BmsFleetChangesService } from '../integrations/bms/bms-fleet-changes.service';
 import { VehiclesService } from './vehicles.service';
 
 describe('VehiclesService garage branch assignment', () => {
   const prisma = {
     $transaction: jest.fn(),
+    $queryRaw: jest.fn(),
     garage: { findFirst: jest.fn(), findMany: jest.fn() },
     maintenanceSchedule: { findMany: jest.fn(), updateMany: jest.fn() },
     vehicleAuditLog: { createMany: jest.fn(), findMany: jest.fn() },
@@ -17,7 +20,13 @@ describe('VehiclesService garage branch assignment', () => {
       updateMany: jest.fn(),
     },
   };
-  const service = new VehiclesService(prisma as unknown as PrismaService);
+  const availability = { recordStatusChange: jest.fn() };
+  const fleetChanges = { recordChange: jest.fn() };
+  const service = new VehiclesService(
+    prisma as unknown as PrismaService,
+    availability as unknown as BmsAvailabilityService,
+    fleetChanges as unknown as BmsFleetChangesService,
+  );
   const createDto = (overrides = {}) => ({
     plateNumber: 'ABC 1234',
     make: 'Isuzu',
@@ -33,7 +42,10 @@ describe('VehiclesService garage branch assignment', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     prisma.$transaction.mockImplementation((callback) => callback(prisma));
+    prisma.$queryRaw.mockResolvedValue(undefined);
     prisma.maintenanceSchedule.findMany.mockResolvedValue([]);
+    availability.recordStatusChange.mockResolvedValue(undefined);
+    fleetChanges.recordChange.mockResolvedValue(undefined);
   });
 
   it('requires an active registered branch when creating a vehicle', async () => {

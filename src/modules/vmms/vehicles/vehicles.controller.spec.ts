@@ -9,6 +9,7 @@ import { SystemType, UserRole } from '@prisma/client';
 import request from 'supertest';
 import * as XLSX from 'xlsx';
 import { JwtAuthGuard } from '../../../auth/guards/jwt-auth.guard';
+import { VrmsRepairReadsService } from '../integrations/vrms/vrms-repair-reads.service';
 import { VehiclesController } from './vehicles.controller';
 import { VehiclesService } from './vehicles.service';
 
@@ -56,7 +57,10 @@ describe('vehicle HTTP permissions', () => {
   beforeAll(async () => {
     const module = await Test.createTestingModule({
       controllers: [VehiclesController],
-      providers: [{ provide: VehiclesService, useValue: service }],
+      providers: [
+        { provide: VehiclesService, useValue: service },
+        { provide: VrmsRepairReadsService, useValue: {} },
+      ],
     })
       .overrideGuard(JwtAuthGuard)
       .useValue({
