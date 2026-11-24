@@ -432,7 +432,7 @@ model ShopChangeLog {
   newValue        String   @map("new_value") @db.VarChar(255)
   changedAt       DateTime @default(now()) @map("changed_at") @db.Timestamptz(6)
 
-  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Restrict)
 
   @@map("shop_change_logs")
 }
@@ -448,7 +448,7 @@ model AuditLog {
   newValue      String?  @map("new_value") @db.Text
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Restrict)
 
   @@index([workOrderId, createdAt])
   @@map("audit_logs")
@@ -465,7 +465,7 @@ model VehicleAuditLog {
   newValue      String?  @map("new_value") @db.Text
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
 
   @@index([vehicleId, createdAt])
   @@index([userId, createdAt])

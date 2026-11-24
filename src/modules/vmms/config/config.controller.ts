@@ -10,10 +10,14 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
-import { JwtAuthGuard } from '../../../auth/guards/jwt-auth.guard.js';
-import { RolesGuard } from '../../../auth/guards/roles.guard.js';
-import { Roles } from '../../../auth/decorators/roles.decorator.js';
-import { VmmsConfigService } from './config.service.js';
+import { JwtAuthGuard } from '../../../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../../../auth/guards/roles.guard';
+import { Roles } from '../../../auth/decorators/roles.decorator';
+import { VmmsConfigService } from './config.service';
+import {
+  CreateOutsourcedProviderDto,
+  UpdateOutsourcedProviderDto,
+} from './dto/outsourced-provider.dto';
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('config')
@@ -61,7 +65,7 @@ export class VmmsConfigController {
 
   @Roles(UserRole.OPERATIONS)
   @Post('outsourced-providers')
-  createOutsourcedProvider(@Body() body: { name: string }) {
+  createOutsourcedProvider(@Body() body: CreateOutsourcedProviderDto) {
     return this.configService.createOutsourcedProvider(body.name);
   }
 
@@ -69,7 +73,7 @@ export class VmmsConfigController {
   @Patch('outsourced-providers/:id')
   updateOutsourcedProvider(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() body: { name?: string; isActive?: boolean },
+    @Body() body: UpdateOutsourcedProviderDto,
   ) {
     return this.configService.updateOutsourcedProvider(id, body);
   }

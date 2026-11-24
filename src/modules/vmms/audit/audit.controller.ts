@@ -9,6 +9,12 @@ import { PrismaService } from '../../../shared/prisma.service';
 type BusinessAuditRecord = {
   id: string;
   source: 'business';
+  category:
+    | 'work_order'
+    | 'vehicle'
+    | 'fuel'
+    | 'maintenance_schedule'
+    | 'maintenance_costing';
   actor: string;
   action: string;
   entity: string;
@@ -33,14 +39,16 @@ function record(
   entity: string,
   createdAt: Date,
   options: {
+    category: BusinessAuditRecord['category'];
     details?: string | null;
     previousValue?: string | null;
     newValue?: string | null;
-  } = {},
+  },
 ): BusinessAuditRecord {
   return {
     id,
     source: 'business',
+    category: options.category,
     actor,
     action,
     entity,
@@ -186,6 +194,7 @@ export class AuditController {
           `Work order ${row.workOrder.workOrderNumber}`,
           row.createdAt,
           {
+            category: 'work_order',
             details: row.fieldName,
             previousValue: row.previousValue,
             newValue: row.newValue,
@@ -199,7 +208,11 @@ export class AuditController {
           'SHOP_CHANGED',
           `Work order ${row.workOrder.workOrderNumber}`,
           row.changedAt,
-          { previousValue: row.previousValue, newValue: row.newValue },
+          {
+            category: 'work_order',
+            previousValue: row.previousValue,
+            newValue: row.newValue,
+          },
         ),
       ),
       ...vehicles.map((row) =>
@@ -210,6 +223,7 @@ export class AuditController {
           `Vehicle ${row.vehicle.plateNumber}`,
           row.createdAt,
           {
+            category: 'vehicle',
             details: row.fieldName,
             previousValue: row.previousValue,
             newValue: row.newValue,
@@ -224,6 +238,7 @@ export class AuditController {
           row.fillUp ? `Fuel ${row.fillUp.vehicle.plateNumber}` : 'Fuel report',
           row.createdAt,
           {
+            category: 'fuel',
             details: details(
               row.reason,
               row.details == null ? null : JSON.stringify(row.details),
@@ -238,7 +253,10 @@ export class AuditController {
           `SCHEDULE_${row.reviewStatus}`,
           `Schedule ${row.schedule.title}`,
           row.createdAt,
-          { details: details(row.reason, row.reviewReason) },
+          {
+            category: 'maintenance_schedule',
+            details: details(row.reason, row.reviewReason),
+          },
         ),
       ),
       ...costing.map((row) =>
@@ -249,6 +267,7 @@ export class AuditController {
           'Maintenance costing settings',
           row.changedAt,
           {
+            category: 'maintenance_costing',
             previousValue: row.previousThreshold?.toString() ?? null,
             newValue: row.newThreshold.toString(),
           },
@@ -261,7 +280,7 @@ export class AuditController {
           `LOG_EDIT_${row.reviewStatus}`,
           `Schedule ${row.schedule.title}`,
           row.createdAt,
-          { details: row.reason },
+          { category: 'maintenance_schedule', details: row.reason },
         ),
       ),
       ...edits.map((row) =>
@@ -272,6 +291,7 @@ export class AuditController {
           `Schedule ${row.schedule.title}`,
           row.changedAt,
           {
+            category: 'maintenance_schedule',
             details: row.unlockReason,
             previousValue: row.previousValue,
             newValue: row.newValue,

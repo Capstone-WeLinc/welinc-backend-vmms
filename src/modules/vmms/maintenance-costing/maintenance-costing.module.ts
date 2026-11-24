@@ -7,5 +7,6 @@ import { MaintenanceCostingService } from './maintenance-costing.service';
   imports: [SharedModule],
   controllers: [MaintenanceCostingController],
   providers: [MaintenanceCostingService],
+  exports: [MaintenanceCostingService],
 })
 export class MaintenanceCostingModule {}

@@ -17,6 +17,7 @@ import { MechanicsController } from './directory/mechanics.controller';
 import { FleetController } from './fleet/fleet.controller';
 import { AuditController } from './audit/audit.controller';
 import { ReportsModule } from './reports/reports.module';
+import { SettingsModule } from './settings/settings.module';
 
 @Module({
   imports: [
@@ -28,6 +29,7 @@ import { ReportsModule } from './reports/reports.module';
     MaintenanceCostingModule,
     FuelModule,
     ReportsModule,
+    SettingsModule,
   ],
   controllers: [
     VmmsConfigController,
