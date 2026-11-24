@@ -9,5 +9,6 @@ import { FuelReceiptScannerService } from './fuel-receipt-scanner.service';
   imports: [SharedModule],
   controllers: [FuelController],
   providers: [FuelService, FuelEscalationService, FuelReceiptScannerService],
+  exports: [FuelService],
 })
 export class FuelModule {}
