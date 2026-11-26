@@ -31,6 +31,7 @@ import {
   MAX_FUEL_RECEIPT_BYTES,
 } from './fuel.constants';
 import { FuelReceiptScannerService } from './fuel-receipt-scanner.service';
+import { VrmsRepairReferralsService } from '../integrations/vrms/vrms-repair-referrals.service';
 import type { FuelReceiptFile } from './fuel-receipt-file';
 import {
   FuelAcknowledgmentDto,
@@ -97,6 +98,7 @@ export class FuelController {
   constructor(
     private readonly fuel: FuelService,
     private readonly receiptScanner: FuelReceiptScannerService,
+    private readonly repairReferrals: VrmsRepairReferralsService,
   ) {}
 
   @Roles(UserRole.ADMIN, UserRole.OPERATIONS)
@@ -358,6 +360,13 @@ export class FuelController {
   ) {
     return this.fuel.acknowledgeAnomaly(id, body.remark, req.user);
   }
+
+  @Roles(UserRole.ADMIN, UserRole.CHIEF_MECHANIC)
+  @Post('anomalies/:id/repair-referrals')
+  referAnomalyForRepair(@Param('id', ParseUUIDPipe) id: string) {
+    return this.repairReferrals.createFromFuelAnomaly(id);
+  }
+
   @Roles(UserRole.ADMIN, UserRole.OPERATIONS)
   @Get('report')
   report(

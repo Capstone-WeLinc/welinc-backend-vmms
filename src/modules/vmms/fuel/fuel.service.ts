@@ -1116,28 +1116,48 @@ export class FuelService {
   async anomalies(actor: FuelActor) {
     this.require(actor, 'ADMIN', 'OPERATIONS', 'CHIEF_MECHANIC');
     const rows = await this.prisma.fuelAnomaly.findMany({
-      include: {
+      select: {
+        id: true,
+        fillUpId: true,
+        vehicleId: true,
+        efficiency: true,
+        rollingAverage: true,
+        status: true,
+        note: true,
+        acknowledgedAt: true,
+        createdAt: true,
+        fillUp: {
+          select: {
+            id: true,
+            entryDate: true,
+            odometer: true,
+            isVoided: true,
+            stationNameSnapshot: true,
+            station: { select: { name: true } },
+            repairReferral: {
+              select: {
+                id: true,
+                status: true,
+                repairTicketNumber: true,
+                repairStatus: true,
+                outcomeReason: true,
+                lastErrorCode: true,
+                createdAt: true,
+              },
+            },
+          },
+        },
         vehicle: true,
         attachments: {
           select: { id: true, name: true, contentType: true, createdAt: true },
         },
-        fillUp: { include: { station: true } },
       },
       orderBy: { createdAt: 'desc' },
     });
     const now = Date.now();
     return rows.map((a) => ({
       ...a,
-      fillUp: a.fillUp
-        ? {
-            ...a.fillUp,
-            station: {
-              ...(a.fillUp.station ?? {}),
-              name:
-                a.fillUp.stationNameSnapshot ?? a.fillUp.station?.name,
-            },
-          }
-        : a.fillUp,
+      repairReferral: a.fillUp?.repairReferral ?? null,
       efficiency: money(a.efficiency),
       rollingAverage: money(a.rollingAverage),
       severity:

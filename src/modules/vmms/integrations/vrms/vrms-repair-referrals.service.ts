@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  ConflictException,
   HttpException,
   Inject,
   Injectable,
@@ -10,6 +11,7 @@ import { ConfigService } from '@nestjs/config';
 import {
   MaintenanceSchedule,
   Prisma,
+  VmmsRepairReferralSource,
   VmmsRepairReferralStatus,
 } from '@prisma/client';
 import { Cron } from '@nestjs/schedule';
@@ -25,7 +27,7 @@ const CLAIM_LEASE_MS = 15_000;
 const RETRY_BASE_SECONDS = 30;
 const RETRY_MAX_SECONDS = 60 * 60;
 
-type ReferralPayload = {
+type InspectionReferralPayload = {
   referralId: string;
   vmmsVehicleId: string;
   vehiclePlate: string;
@@ -37,8 +39,27 @@ type ReferralPayload = {
     label: string;
     note: string;
   }>;
-  chiefMechanicRemarks: string;
+  chiefMechanicRemarks: string | null;
 };
+
+type FuelAnomalyReferralPayload = {
+  referralId: string;
+  source: 'FUEL_ANOMALY';
+  fuelTransactionId: string;
+  vmmsVehicleId: string;
+  vehiclePlate: string;
+  odometerReading: number;
+  findings: Array<{
+    checklistItemId: string;
+    label: string;
+    note: string;
+  }>;
+  chiefMechanicRemarks: null;
+};
+
+type ReferralPayload =
+  | InspectionReferralPayload
+  | FuelAnomalyReferralPayload;
 
 class ReferralResponseError extends Error {
   constructor(readonly status: number) {
@@ -153,6 +174,7 @@ export class VrmsRepairReferralsService {
       data: {
         id,
         vehicleId: vehicle.id,
+        source: VmmsRepairReferralSource.INSPECTION,
         maintenanceScheduleId: schedule.id,
         workOrderNumber: schedule.workOrderNumber,
         status: VmmsRepairReferralStatus.QUEUED,
@@ -160,6 +182,106 @@ export class VrmsRepairReferralsService {
       },
     });
     return { id, created: true };
+  }
+
+  async createFromFuelAnomaly(
+    anomalyId: string,
+  ): Promise<{ id: string; created: boolean }> {
+    return this.prisma.$transaction(async (tx) => {
+      const anomaly = await tx.fuelAnomaly.findUnique({
+        where: { id: anomalyId },
+        include: {
+          fillUp: {
+            include: {
+              vehicle: {
+                select: {
+                  id: true,
+                  plateNumber: true,
+                  odometer: true,
+                  isActive: true,
+                  deletedAt: true,
+                },
+              },
+            },
+          },
+        },
+      });
+      if (!anomaly) {
+        throw new NotFoundException('Open fuel anomaly not found.');
+      }
+      if (!anomaly.fillUp) {
+        throw new ConflictException(
+          'The fuel anomaly has no source transaction.',
+        );
+      }
+      const vehicle = anomaly.fillUp.vehicle;
+
+      await tx.$executeRaw`
+        SELECT pg_advisory_xact_lock(hashtextextended(${`fuel-referral:${anomaly.fillUp.id}`}, 0))
+      `;
+      const previous = await tx.vmmsRepairReferral.findUnique({
+        where: { fuelTransactionId: anomaly.fillUp.id },
+        select: { id: true },
+      });
+      if (previous) return { id: previous.id, created: false };
+
+      if (anomaly.status !== 'OPEN') {
+        throw new NotFoundException('Open fuel anomaly not found.');
+      }
+      if (anomaly.fillUp.isVoided) {
+        throw new ConflictException(
+          'A voided fuel transaction cannot be referred for repair.',
+        );
+      }
+      if (!vehicle.isActive || vehicle.deletedAt) {
+        throw new ConflictException(
+          'Only an active vehicle can be referred for repair.',
+        );
+      }
+
+      const fillUpOdometer = anomaly.fillUp.odometer;
+      const odometerReading =
+        Number.isSafeInteger(fillUpOdometer) && fillUpOdometer >= 0
+          ? fillUpOdometer
+          : vehicle.odometer;
+      const id = randomUUID();
+      const efficiency = Number(anomaly.efficiency);
+      const rollingAverage = Number(anomaly.rollingAverage);
+      const payload: FuelAnomalyReferralPayload = {
+        referralId: id,
+        source: 'FUEL_ANOMALY',
+        fuelTransactionId: anomaly.fillUp.id,
+        vmmsVehicleId: vehicle.id,
+        vehiclePlate: vehicle.plateNumber,
+        odometerReading,
+        findings: [
+          {
+            checklistItemId: anomaly.id,
+            label: 'Fuel efficiency anomaly',
+            note: [
+              `Recorded efficiency ${efficiency} km/L versus rolling average ${rollingAverage} km/L.`,
+              anomaly.note?.trim() ?? '',
+            ]
+              .filter(Boolean)
+              .join(' ')
+              .slice(0, 2000),
+          },
+        ],
+        chiefMechanicRemarks: null,
+      };
+
+      await tx.vmmsRepairReferral.create({
+        data: {
+          id,
+          vehicleId: vehicle.id,
+          source: VmmsRepairReferralSource.FUEL_ANOMALY,
+          fuelTransactionId: anomaly.fillUp.id,
+          status: VmmsRepairReferralStatus.QUEUED,
+          requestPayload: payload,
+        },
+      });
+      return { id, created: true };
+    });
   }
 
   async retryFailed(id: string) {

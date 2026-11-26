@@ -3,6 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import {
   MaintenanceSchedule,
   Prisma,
+  VmmsRepairReferralSource,
   VmmsRepairReferralStatus,
 } from '@prisma/client';
 import { VRMS_REFERRAL_TOKENS } from '../../../../auth/verify';
@@ -19,6 +20,7 @@ describe('VrmsRepairReferralsService', () => {
   let service: VrmsRepairReferralsService;
   let fetchMock: jest.SpyInstance;
   let prisma: {
+    $transaction: jest.Mock;
     vmmsRepairReferral: {
       findFirst: jest.Mock;
       findMany: jest.Mock;
@@ -59,6 +61,7 @@ describe('VrmsRepairReferralsService', () => {
       .spyOn(globalThis, 'fetch')
       .mockRejectedValue(new Error('Unexpected VRMS request.'));
     prisma = {
+      $transaction: jest.fn(),
       vmmsRepairReferral: {
         findFirst: jest.fn(),
         findMany: jest.fn(),
@@ -199,6 +202,106 @@ describe('VrmsRepairReferralsService', () => {
       'Mark at least one inspection item as failed before referring the work order.',
     );
 
+    expect(tx.vmmsRepairReferral.create).not.toHaveBeenCalled();
+  });
+
+  it('creates an idempotent fuel-anomaly referral without schedule or cost fields', async () => {
+    const fillUpId = 'c60d7310-2b44-42c8-8ff1-01f4e3cc6356';
+    const anomalyId = '9c6f18ab-4b9e-4e31-bdf9-4c826a44ae6d';
+    const tx = {
+      $executeRaw: jest.fn().mockResolvedValue(0),
+      fuelAnomaly: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: anomalyId,
+          status: 'OPEN',
+          efficiency: 4.5,
+          rollingAverage: 9,
+          note: 'Inspect the engine',
+          fillUp: {
+            id: fillUpId,
+            odometer: 15400,
+            isVoided: false,
+            vehicle: {
+              id: vehicleId,
+              plateNumber: 'TGD 908',
+              odometer: 15000,
+              isActive: true,
+              deletedAt: null,
+            },
+          },
+        }),
+      },
+      vmmsRepairReferral: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn(),
+      },
+    };
+    prisma.$transaction.mockImplementation((callback) => callback(tx));
+
+    const result = await service.createFromFuelAnomaly(anomalyId);
+
+    expect(result).toEqual({ id: expect.any(String), created: true });
+    const createCall = tx.vmmsRepairReferral.create.mock.calls[0][0];
+    expect(createCall.data).toMatchObject({
+      vehicleId,
+      source: VmmsRepairReferralSource.FUEL_ANOMALY,
+      fuelTransactionId: fillUpId,
+      status: VmmsRepairReferralStatus.QUEUED,
+    });
+    expect(createCall.data).not.toHaveProperty('maintenanceScheduleId');
+    expect(createCall.data).not.toHaveProperty('workOrderNumber');
+    expect(createCall.data.requestPayload).toEqual({
+      referralId: result.id,
+      source: 'FUEL_ANOMALY',
+      fuelTransactionId: fillUpId,
+      vmmsVehicleId: vehicleId,
+      vehiclePlate: 'TGD 908',
+      odometerReading: 15400,
+      findings: [
+        {
+          checklistItemId: anomalyId,
+          label: 'Fuel efficiency anomaly',
+          note: 'Recorded efficiency 4.5 km/L versus rolling average 9 km/L. Inspect the engine',
+        },
+      ],
+      chiefMechanicRemarks: null,
+    });
+  });
+
+  it('returns the existing referral for a repeated fuel transaction', async () => {
+    const tx = {
+      $executeRaw: jest.fn().mockResolvedValue(0),
+      fuelAnomaly: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: '9c6f18ab-4b9e-4e31-bdf9-4c826a44ae6d',
+          status: 'RESOLVED',
+          efficiency: 4.5,
+          rollingAverage: 9,
+          note: null,
+          fillUp: {
+            id: 'c60d7310-2b44-42c8-8ff1-01f4e3cc6356',
+            odometer: 15400,
+            isVoided: false,
+            vehicle: {
+              id: vehicleId,
+              plateNumber: 'TGD 908',
+              odometer: 15000,
+              isActive: true,
+              deletedAt: null,
+            },
+          },
+        }),
+      },
+      vmmsRepairReferral: {
+        findUnique: jest.fn().mockResolvedValue({ id: referralId }),
+        create: jest.fn(),
+      },
+    };
+    prisma.$transaction.mockImplementation((callback) => callback(tx));
+
+    await expect(
+      service.createFromFuelAnomaly('9c6f18ab-4b9e-4e31-bdf9-4c826a44ae6d'),
+    ).resolves.toEqual({ id: referralId, created: false });
     expect(tx.vmmsRepairReferral.create).not.toHaveBeenCalled();
   });
 

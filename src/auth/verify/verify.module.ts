@@ -31,6 +31,11 @@ export const PERMISSIONS_TOKENS = Symbol('PERMISSIONS_TOKENS');
 /** VMMS's token for VRMS repair-referral writes. */
 export const VRMS_REFERRAL_TOKENS = Symbol('VRMS_REFERRAL_TOKENS');
 
+/** VMMS's token for VRMS retirement decisions. */
+export const VRMS_RETIREMENT_DECISION_TOKENS = Symbol(
+  'VRMS_RETIREMENT_DECISION_TOKENS',
+);
+
 /** VMMS's token for VRMS repair status and history reads. */
 export const VRMS_HISTORY_TOKENS = Symbol('VRMS_HISTORY_TOKENS');
 
@@ -149,6 +154,23 @@ export function readVerifyConfig(
       },
     },
     {
+      provide: VRMS_RETIREMENT_DECISION_TOKENS,
+      inject: [VERIFY_CONFIG, ASSERTION_SIGNER],
+      useFactory: (verify: VerifyConfig, signer: AssertionSigner) => {
+        const logger = new Logger('ServiceToken');
+        return new ServiceTokenClient({
+          tokenUrl: `${verify.internalUrl}/auth/token`,
+          signer,
+          audience: 'VRMS',
+          scope: 'retirement.decision.write',
+          onError: (reason) =>
+            logger.warn(
+              `could not get a VRMS retirement-decision token: ${reason}`,
+            ),
+        });
+      },
+    },
+    {
       provide: VRMS_HISTORY_TOKENS,
       inject: [VERIFY_CONFIG, ASSERTION_SIGNER],
       useFactory: (verify: VerifyConfig, signer: AssertionSigner) => {
@@ -231,6 +253,7 @@ export function readVerifyConfig(
     DIRECTORY_TOKENS,
     PERMISSIONS_TOKENS,
     VRMS_REFERRAL_TOKENS,
+    VRMS_RETIREMENT_DECISION_TOKENS,
     VRMS_HISTORY_TOKENS,
     VRMS_STATUS_TOKENS,
     BMS_AVAILABILITY_TOKENS,

@@ -3,10 +3,12 @@ import {
   MaintenanceApprovalStatus,
   MaintenanceStatus,
   VehicleStatus,
+  VmmsRepairReferralSource,
   VmmsRepairReferralStatus,
   VrmsRepairEventType,
   VrmsRepairIntegrationStatus,
   VrmsRepairReferralEventType,
+  VrmsRetirementRequestStatus,
 } from '@prisma/client';
 import { PrismaService } from '../../../../shared/prisma.service';
 import { MaintenanceSchedulesService } from '../../maintenance-schedules/maintenance-schedules.service';
@@ -171,6 +173,32 @@ describe('VrmsRepairEventsService referral outcomes', () => {
     expect(transaction.vmmsRepairReferral.findUnique).not.toHaveBeenCalled();
     expect(transaction.maintenanceSchedule.updateMany).not.toHaveBeenCalled();
   });
+
+  it('rejects a fuel-anomaly referral without mutating a maintenance schedule', async () => {
+    transaction.vmmsRepairReferral.findUnique.mockResolvedValue({
+      ...referral,
+      source: VmmsRepairReferralSource.FUEL_ANOMALY,
+      maintenanceScheduleId: null,
+      fuelTransactionId: 'c60d7310-2b44-42c8-8ff1-01f4e3cc6356',
+    });
+
+    await expect(service.applyReferralOutcome(event)).resolves.toEqual({
+      accepted: true,
+      duplicate: false,
+    });
+
+    expect(transaction.vmmsRepairReferral.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: referralId },
+        data: expect.objectContaining({
+          status: VmmsRepairReferralStatus.REJECTED,
+          outcomeReason: 'Brake inspection failed',
+        }),
+      }),
+    );
+    expect(transaction.maintenanceSchedule.findUnique).not.toHaveBeenCalled();
+    expect(transaction.maintenanceSchedule.updateMany).not.toHaveBeenCalled();
+  });
 });
 
 describe('VrmsRepairEventsService ticket acceptance', () => {
@@ -253,7 +281,7 @@ describe('VrmsRepairEventsService ticket acceptance', () => {
       },
       vrmsRepairIntegrationState: {
         findUnique: jest.fn().mockResolvedValue(null),
-        findFirst: jest.fn().mockResolvedValue(null),
+        findMany: jest.fn().mockResolvedValue([]),
         create: jest.fn(),
       },
       vmmsRepairReferral: {
@@ -723,6 +751,170 @@ describe('VrmsRepairEventsService ticket acceptance', () => {
         maintenanceScheduleIds: [scheduleId],
         acceptedReferralIds: [existingReferralId, referralId],
       }),
+    });
+  });
+
+  it('accepts a fuel-anomaly referral on an opened repair without schedule links', async () => {
+    const repairTicketId = 'c0d0b760-0de6-4d61-9a9d-bcf2db46703a';
+    const fuelTransactionId = 'c60d7310-2b44-42c8-8ff1-01f4e3cc6356';
+    const fuelReferralId = '9c6f18ab-4b9e-4e31-bdf9-4c826a44ae6d';
+    const transaction = {
+      $executeRaw: jest.fn().mockResolvedValue(0),
+      vrmsRepairEventReceipt: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn(),
+      },
+      vrmsRepairIntegrationState: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        findMany: jest.fn().mockResolvedValue([]),
+        create: jest.fn(),
+      },
+      vmmsRepairReferral: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: fuelReferralId,
+            vehicleId,
+            source: VmmsRepairReferralSource.FUEL_ANOMALY,
+            maintenanceScheduleId: null,
+            fuelTransactionId,
+            status: VmmsRepairReferralStatus.SENT,
+            repairTicketId: null,
+            deliveredAt: null,
+          },
+        ]),
+        update: jest.fn(),
+      },
+      fuelFillUp: {
+        findUnique: jest.fn().mockResolvedValue({ vehicleId }),
+      },
+      vehicle: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: vehicleId,
+          plateNumber: 'TGD 908',
+          status: VehicleStatus.UNDER_REPAIR,
+          availabilityVersion: 1,
+        }),
+      },
+      maintenanceSchedule: { findMany: jest.fn() },
+      outsourcedProvider: { findFirst: jest.fn() },
+    };
+    const prisma = {
+      $transaction: jest.fn((callback) => callback(transaction)),
+    };
+    const availability = { recordStatusChange: jest.fn() };
+    const service = new VrmsRepairEventsService(
+      prisma as unknown as PrismaService,
+      {} as MaintenanceSchedulesService,
+      availability as unknown as BmsAvailabilityService,
+    );
+    const ticketEvent = {
+      eventId: '91d69d7f-6085-4e80-a59f-3f242bf4be8f',
+      repairTicketId,
+      eventVersion: 1,
+      eventType: VrmsRepairEventType.OPENED,
+      vmmsVehicleId: vehicleId,
+      maintenanceScheduleIds: [],
+      acceptedReferralIds: [fuelReferralId],
+      occurredAt,
+      repairTicketNumber: 'VR-FUEL-100',
+      repairStatus: 'OPEN',
+    } satisfies VrmsRepairEventDto;
+
+    await expect(service.apply(ticketEvent)).resolves.toEqual({
+      accepted: true,
+      duplicate: false,
+      eventVersion: 1,
+    });
+
+    expect(transaction.fuelFillUp.findUnique).toHaveBeenCalledWith({
+      where: { id: fuelTransactionId },
+      select: { vehicleId: true },
+    });
+    expect(transaction.vmmsRepairReferral.update).toHaveBeenCalledWith({
+      where: { id: fuelReferralId },
+      data: expect.objectContaining({
+        status: VmmsRepairReferralStatus.ACCEPTED,
+        repairTicketId,
+        repairTicketNumber: 'VR-FUEL-100',
+      }),
+    });
+    expect(transaction.maintenanceSchedule.findMany).not.toHaveBeenCalled();
+    expect(availability.recordStatusChange).not.toHaveBeenCalled();
+  });
+
+  it('allows the replacement repair to open after Operations declines retirement', async () => {
+    const previousTicketId = 'c0d0b760-0de6-4d61-9a9d-bcf2db46703a';
+    const replacementTicketId = '4bf4627c-b22b-4754-83d9-aa0bf7a71b4a';
+    const transaction = {
+      $executeRaw: jest.fn().mockResolvedValue(0),
+      vrmsRepairEventReceipt: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn(),
+      },
+      vrmsRepairIntegrationState: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        findMany: jest
+          .fn()
+          .mockResolvedValue([{ repairTicketId: previousTicketId }]),
+        create: jest.fn(),
+      },
+      vrmsRetirementRequest: {
+        findUnique: jest.fn().mockResolvedValue({
+          vehicleId,
+          status: VrmsRetirementRequestStatus.DECLINED,
+        }),
+      },
+      vmmsRepairReferral: { findMany: jest.fn() },
+      vehicle: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: vehicleId,
+          plateNumber: 'TGD 908',
+          status: VehicleStatus.UNDER_REPAIR,
+          availabilityVersion: 1,
+        }),
+      },
+      maintenanceSchedule: { findMany: jest.fn() },
+      outsourcedProvider: { findFirst: jest.fn() },
+    };
+    const prisma = {
+      $transaction: jest.fn((callback) => callback(transaction)),
+    };
+    const availability = { recordStatusChange: jest.fn() };
+    const service = new VrmsRepairEventsService(
+      prisma as unknown as PrismaService,
+      {} as MaintenanceSchedulesService,
+      availability as unknown as BmsAvailabilityService,
+    );
+    const ticketEvent = {
+      eventId: '91d69d7f-6085-4e80-a59f-3f242bf4be8f',
+      repairTicketId: replacementTicketId,
+      eventVersion: 1,
+      eventType: VrmsRepairEventType.OPENED,
+      vmmsVehicleId: vehicleId,
+      maintenanceScheduleIds: [],
+      acceptedReferralIds: [],
+      occurredAt,
+      repairTicketNumber: 'VR-NEW-100',
+      repairStatus: 'OPEN',
+    } satisfies VrmsRepairEventDto;
+
+    await expect(service.apply(ticketEvent)).resolves.toEqual({
+      accepted: true,
+      duplicate: false,
+      eventVersion: 1,
+    });
+    expect(transaction.vrmsRepairIntegrationState.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          repairTicketId: replacementTicketId,
+          vehicleId,
+          status: VrmsRepairIntegrationStatus.OPEN,
+        }),
+      }),
+    );
+    expect(transaction.vrmsRetirementRequest.findUnique).toHaveBeenCalledWith({
+      where: { repairTicketId: previousTicketId },
+      select: { vehicleId: true, status: true },
     });
   });
 });
