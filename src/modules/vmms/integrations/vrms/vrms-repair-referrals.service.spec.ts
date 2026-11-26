@@ -239,7 +239,95 @@ describe('VrmsRepairReferralsService', () => {
     });
   });
 
-  it('backs off after a retryable VRMS response', async () => {
+  it.each([401, 403, 408, 429, 503])(
+    'backs off after retryable HTTP %i response',
+    async (status) => {
+      const now = new Date('2026-11-27T00:00:00.000Z');
+      jest.useFakeTimers();
+      jest.setSystemTime(now);
+      prisma.vmmsRepairReferral.findUnique.mockResolvedValue({
+        id: referralId,
+        requestPayload: payload,
+        status: VmmsRepairReferralStatus.QUEUED,
+        attempts: 0,
+        attemptWindowStartedAt: new Date(now.getTime() - 60_000),
+        nextAttemptAt: new Date(now.getTime() - 1_000),
+      });
+      fetchMock.mockResolvedValue(new Response(null, { status }));
+
+      await service.deliverOne(referralId);
+
+      expect(prisma.vmmsRepairReferral.updateMany).toHaveBeenLastCalledWith({
+        where: { id: referralId, status: VmmsRepairReferralStatus.QUEUED },
+        data: {
+          nextAttemptAt: new Date(now.getTime() + 30_000),
+          lastErrorCode: `http_${status}`,
+        },
+      });
+    },
+  );
+
+  it('increases the backoff delay on successive attempts', async () => {
+    const now = new Date('2026-11-27T00:00:00.000Z');
+    jest.useFakeTimers();
+    jest.setSystemTime(now);
+    prisma.vmmsRepairReferral.findUnique.mockResolvedValue({
+      id: referralId,
+      requestPayload: payload,
+      status: VmmsRepairReferralStatus.QUEUED,
+      attempts: 1,
+      attemptWindowStartedAt: new Date(now.getTime() - 60_000),
+      nextAttemptAt: new Date(now.getTime() - 1_000),
+    });
+    fetchMock.mockResolvedValue(new Response(null, { status: 503 }));
+
+    await service.deliverOne(referralId);
+
+    expect(prisma.vmmsRepairReferral.updateMany).toHaveBeenLastCalledWith({
+      where: { id: referralId, status: VmmsRepairReferralStatus.QUEUED },
+      data: {
+        nextAttemptAt: new Date(now.getTime() + 60_000),
+        lastErrorCode: 'http_503',
+      },
+    });
+  });
+
+  it.each([
+    ['network error', new Error('Connection reset'), 'network_error'],
+    [
+      'timeout',
+      Object.assign(new Error('Request timed out'), { name: 'TimeoutError' }),
+      'timeout',
+    ],
+  ] as const)(
+    'backs off after a %s failure',
+    async (_description, error, errorCode) => {
+      const now = new Date('2026-11-27T00:00:00.000Z');
+      jest.useFakeTimers();
+      jest.setSystemTime(now);
+      prisma.vmmsRepairReferral.findUnique.mockResolvedValue({
+        id: referralId,
+        requestPayload: payload,
+        status: VmmsRepairReferralStatus.QUEUED,
+        attempts: 0,
+        attemptWindowStartedAt: new Date(now.getTime() - 60_000),
+        nextAttemptAt: new Date(now.getTime() - 1_000),
+      });
+      fetchMock.mockRejectedValue(error);
+
+      await service.deliverOne(referralId);
+
+      expect(prisma.vmmsRepairReferral.updateMany).toHaveBeenLastCalledWith({
+        where: { id: referralId, status: VmmsRepairReferralStatus.QUEUED },
+        data: {
+          nextAttemptAt: new Date(now.getTime() + 30_000),
+          lastErrorCode: errorCode,
+        },
+      });
+    },
+  );
+
+  it('marks a referral failed without retrying after a bad request', async () => {
     const now = new Date('2026-11-27T00:00:00.000Z');
     jest.useFakeTimers();
     jest.setSystemTime(now);
@@ -251,15 +339,44 @@ describe('VrmsRepairReferralsService', () => {
       attemptWindowStartedAt: new Date(now.getTime() - 60_000),
       nextAttemptAt: new Date(now.getTime() - 1_000),
     });
-    fetchMock.mockResolvedValue(new Response(null, { status: 503 }));
+    fetchMock.mockResolvedValue(new Response(null, { status: 400 }));
 
     await service.deliverOne(referralId);
 
     expect(prisma.vmmsRepairReferral.updateMany).toHaveBeenLastCalledWith({
       where: { id: referralId, status: VmmsRepairReferralStatus.QUEUED },
       data: {
-        nextAttemptAt: new Date(now.getTime() + 30_000),
-        lastErrorCode: 'http_503',
+        status: VmmsRepairReferralStatus.FAILED,
+        failedAt: expect.any(Date),
+        nextAttemptAt: null,
+        lastErrorCode: 'http_400',
+      },
+    });
+  });
+
+  it('marks a referral failed when its retry window has expired', async () => {
+    const now = new Date('2026-11-27T00:00:00.000Z');
+    jest.useFakeTimers();
+    jest.setSystemTime(now);
+    prisma.vmmsRepairReferral.findUnique.mockResolvedValue({
+      id: referralId,
+      requestPayload: payload,
+      status: VmmsRepairReferralStatus.QUEUED,
+      attempts: 0,
+      attemptWindowStartedAt: new Date(now.getTime() - 24 * 60 * 60 * 1000),
+      nextAttemptAt: new Date(now.getTime() - 1_000),
+    });
+
+    await service.deliverOne(referralId);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(prisma.vmmsRepairReferral.updateMany).toHaveBeenLastCalledWith({
+      where: { id: referralId, status: VmmsRepairReferralStatus.QUEUED },
+      data: {
+        status: VmmsRepairReferralStatus.FAILED,
+        failedAt: expect.any(Date),
+        nextAttemptAt: null,
+        lastErrorCode: 'retry_window_expired',
       },
     });
   });

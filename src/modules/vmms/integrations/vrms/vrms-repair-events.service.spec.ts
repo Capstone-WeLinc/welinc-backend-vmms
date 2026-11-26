@@ -5,6 +5,7 @@ import {
   VehicleStatus,
   VmmsRepairReferralStatus,
   VrmsRepairEventType,
+  VrmsRepairIntegrationStatus,
   VrmsRepairReferralEventType,
 } from '@prisma/client';
 import { PrismaService } from '../../../../shared/prisma.service';
@@ -23,7 +24,7 @@ describe('VrmsRepairEventsService referral outcomes', () => {
   let service: VrmsRepairEventsService;
   let prisma: { $transaction: jest.Mock };
   let transaction: {
-    $queryRaw: jest.Mock;
+    $executeRaw: jest.Mock;
     vrmsRepairReferralEventReceipt: {
       findUnique: jest.Mock;
       create: jest.Mock;
@@ -57,7 +58,7 @@ describe('VrmsRepairEventsService referral outcomes', () => {
 
   beforeEach(() => {
     transaction = {
-      $queryRaw: jest.fn().mockResolvedValue([]),
+      $executeRaw: jest.fn().mockResolvedValue(0),
       vrmsRepairReferralEventReceipt: {
         findUnique: jest.fn().mockResolvedValue(null),
         create: jest.fn(),
@@ -173,6 +174,55 @@ describe('VrmsRepairEventsService referral outcomes', () => {
 });
 
 describe('VrmsRepairEventsService ticket acceptance', () => {
+  it('ignores a lower event version without reading or mutating repair data', async () => {
+    const repairTicketId = 'ee3d6c66-1d30-4c38-9f31-1d8e13b78816';
+    const transaction = {
+      $executeRaw: jest.fn().mockResolvedValue(0),
+      vrmsRepairEventReceipt: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn(),
+      },
+      vrmsRepairIntegrationState: {
+        findUnique: jest.fn().mockResolvedValue({
+          repairTicketId,
+          vehicleId,
+          repairTicketNumber: 'VR-100',
+          status: VrmsRepairIntegrationStatus.COMPLETED,
+          lastEventVersion: 2,
+        }),
+      },
+      vehicle: { findFirst: jest.fn() },
+    };
+    const prisma = {
+      $transaction: jest.fn((callback) => callback(transaction)),
+    };
+    const service = new VrmsRepairEventsService(
+      prisma as unknown as PrismaService,
+      {} as MaintenanceSchedulesService,
+      {} as BmsAvailabilityService,
+    );
+    const staleEvent = {
+      eventId: '4bf4627c-b22b-4754-83d9-aa0bf7a71b4a',
+      repairTicketId,
+      eventVersion: 1,
+      eventType: VrmsRepairEventType.STATUS_UPDATED,
+      vmmsVehicleId: vehicleId,
+      maintenanceScheduleIds: [],
+      acceptedReferralIds: [],
+      occurredAt,
+      repairTicketNumber: 'VR-100',
+      repairStatus: 'ASSIGNED',
+    } satisfies VrmsRepairEventDto;
+
+    await expect(service.apply(staleEvent)).resolves.toEqual({
+      accepted: true,
+      duplicate: true,
+    });
+
+    expect(transaction.vehicle.findFirst).not.toHaveBeenCalled();
+    expect(transaction.vrmsRepairEventReceipt.create).not.toHaveBeenCalled();
+  });
+
   it('links an accepted referral atomically when VRMS opens its repair ticket', async () => {
     const referralRow = {
       id: referralId,
@@ -193,9 +243,10 @@ describe('VrmsRepairEventsService ticket acceptance', () => {
       occurredAt,
       repairTicketNumber: 'VR-100',
       repairStatus: 'OPEN',
+      serviceOdometerReading: 45678,
     } satisfies VrmsRepairEventDto;
     const transaction = {
-      $queryRaw: jest.fn().mockResolvedValue([]),
+      $executeRaw: jest.fn().mockResolvedValue(0),
       vrmsRepairEventReceipt: {
         findUnique: jest.fn().mockResolvedValue(null),
         create: jest.fn(),
@@ -237,6 +288,7 @@ describe('VrmsRepairEventsService ticket acceptance', () => {
         ]),
       },
       outsourcedProvider: { findFirst: jest.fn() },
+      vrmsRepairOdometerReview: { create: jest.fn() },
     };
     const prisma = {
       $transaction: jest.fn((callback) => callback(transaction)),
@@ -295,6 +347,382 @@ describe('VrmsRepairEventsService ticket acceptance', () => {
         availabilityVersion: 2,
       }),
     );
-    expect(transaction.vrmsRepairEventReceipt.create).toHaveBeenCalledTimes(1);
+    expect(transaction.vrmsRepairEventReceipt.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ serviceOdometerReading: 45678 }),
+    });
+    expect(transaction.vrmsRepairOdometerReview.create).not.toHaveBeenCalled();
+  });
+
+  it('creates a pending Operations review for a completed service reading', async () => {
+    const repairTicketId = 'ee3d6c66-1d30-4c38-9f31-1d8e13b78816';
+    const previousOccurredAt = new Date('2026-11-26T00:00:00.000Z');
+    const schedule = {
+      id: scheduleId,
+      vehicleId: 'TGD 908',
+      deletedAt: null,
+      status: MaintenanceStatus.COMPLETED,
+      approvalStatus: MaintenanceApprovalStatus.VERIFIED,
+      workOrderProgress: {},
+    };
+    const transaction = {
+      $executeRaw: jest.fn().mockResolvedValue(0),
+      vrmsRepairEventReceipt: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn(),
+      },
+      vrmsRepairIntegrationState: {
+        findUnique: jest.fn().mockResolvedValue({
+          repairTicketId,
+          vehicleId,
+          repairTicketNumber: 'VR-100',
+          repairStatus: 'OPEN',
+          outsideShopName: null,
+          status: VrmsRepairIntegrationStatus.OPEN,
+          lastEventVersion: 1,
+          maintenanceScheduleIds: [scheduleId],
+          acceptedReferralIds: [],
+          lastOccurredAt: previousOccurredAt,
+        }),
+        findFirst: jest.fn().mockResolvedValue(null),
+        update: jest.fn(),
+      },
+      vmmsRepairReferral: {
+        findMany: jest.fn(),
+        update: jest.fn(),
+      },
+      vehicle: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: vehicleId,
+          plateNumber: 'TGD 908',
+          status: VehicleStatus.UNDER_REPAIR,
+          availabilityVersion: 1,
+        }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findUniqueOrThrow: jest.fn().mockResolvedValue({
+          id: vehicleId,
+          plateNumber: 'TGD 908',
+          status: VehicleStatus.AVAILABLE,
+          availabilityVersion: 2,
+        }),
+      },
+      maintenanceSchedule: {
+        findMany: jest.fn().mockResolvedValue([schedule]),
+      },
+      outsourcedProvider: { findFirst: jest.fn() },
+      vrmsRepairOdometerReview: { create: jest.fn() },
+    };
+    const prisma = {
+      $transaction: jest.fn((callback) => callback(transaction)),
+    };
+    const maintenanceSchedules = {
+      returnToChiefForFinalVerificationFromVrmsEvent: jest.fn(),
+    };
+    const availability = { recordStatusChange: jest.fn() };
+    const service = new VrmsRepairEventsService(
+      prisma as unknown as PrismaService,
+      maintenanceSchedules as unknown as MaintenanceSchedulesService,
+      availability as unknown as BmsAvailabilityService,
+    );
+    const completedEvent = {
+      eventId: 'c942a653-2e44-4ee3-8d85-8e710558a614',
+      repairTicketId,
+      eventVersion: 2,
+      eventType: VrmsRepairEventType.COMPLETED,
+      vmmsVehicleId: vehicleId,
+      maintenanceScheduleIds: [scheduleId],
+      acceptedReferralIds: [],
+      occurredAt,
+      repairTicketNumber: 'VR-100',
+      repairStatus: 'CLOSED',
+      serviceOdometerReading: 45678,
+    } satisfies VrmsRepairEventDto;
+
+    await expect(service.apply(completedEvent)).resolves.toEqual({
+      accepted: true,
+      duplicate: false,
+      eventVersion: 2,
+    });
+
+    expect(
+      maintenanceSchedules.returnToChiefForFinalVerificationFromVrmsEvent,
+    ).toHaveBeenCalledWith(transaction, schedule);
+    expect(transaction.vrmsRepairOdometerReview.create).toHaveBeenCalledWith({
+      data: {
+        eventId: completedEvent.eventId,
+        vehicleId,
+        serviceOdometerReading: 45678,
+        occurredAt: new Date(occurredAt),
+      },
+    });
+    expect(
+      transaction.vrmsRepairEventReceipt.create.mock.invocationCallOrder[0],
+    ).toBeLessThan(
+      transaction.vrmsRepairOdometerReview.create.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('links a new referral to an existing ticket and preserves its schedule links', async () => {
+    const existingScheduleId = '4da7c12f-2ac5-4db4-b532-e0a6b0bd6c69';
+    const existingReferralId = '1cb7ce91-c4d0-41fb-a330-831f4702eeea';
+    const repairTicketId = 'ee3d6c66-1d30-4c38-9f31-1d8e13b78816';
+    const previousOccurredAt = new Date('2026-11-26T00:00:00.000Z');
+    const transaction = {
+      $executeRaw: jest.fn().mockResolvedValue(0),
+      vrmsRepairEventReceipt: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn(),
+      },
+      vrmsRepairIntegrationState: {
+        findUnique: jest.fn().mockResolvedValue({
+          repairTicketId,
+          vehicleId,
+          repairTicketNumber: 'VR-100',
+          repairStatus: 'OPEN',
+          outsideShopName: null,
+          status: VrmsRepairIntegrationStatus.OPEN,
+          lastEventVersion: 1,
+          maintenanceScheduleIds: [existingScheduleId],
+          acceptedReferralIds: [existingReferralId],
+          lastOccurredAt: previousOccurredAt,
+        }),
+        findFirst: jest.fn(),
+        update: jest.fn(),
+      },
+      vmmsRepairReferral: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: existingReferralId,
+            vehicleId,
+            maintenanceScheduleId: existingScheduleId,
+            status: VmmsRepairReferralStatus.ACCEPTED,
+            repairTicketId,
+            deliveredAt: previousOccurredAt,
+          },
+          {
+            id: referralId,
+            vehicleId,
+            maintenanceScheduleId: scheduleId,
+            status: VmmsRepairReferralStatus.SENT,
+            repairTicketId: null,
+            deliveredAt: null,
+          },
+        ]),
+        update: jest.fn(),
+      },
+      vehicle: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: vehicleId,
+          plateNumber: 'TGD 908',
+        }),
+      },
+      maintenanceSchedule: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: existingScheduleId,
+            vehicleId: 'TGD 908',
+            deletedAt: null,
+            status: MaintenanceStatus.IN_PROGRESS,
+            approvalStatus: MaintenanceApprovalStatus.FOR_REPAIR,
+            workOrderProgress: {},
+          },
+          {
+            id: scheduleId,
+            vehicleId: 'TGD 908',
+            deletedAt: null,
+            status: MaintenanceStatus.IN_PROGRESS,
+            approvalStatus: MaintenanceApprovalStatus.FOR_REPAIR,
+            workOrderProgress: {},
+          },
+        ]),
+      },
+      outsourcedProvider: { findFirst: jest.fn() },
+    };
+    const prisma = {
+      $transaction: jest.fn((callback) => callback(transaction)),
+    };
+    const availability = { recordStatusChange: jest.fn() };
+    const service = new VrmsRepairEventsService(
+      prisma as unknown as PrismaService,
+      {} as MaintenanceSchedulesService,
+      availability as unknown as BmsAvailabilityService,
+    );
+    const ticketEvent = {
+      eventId: 'c942a653-2e44-4ee3-8d85-8e710558a614',
+      repairTicketId,
+      eventVersion: 2,
+      eventType: VrmsRepairEventType.LINKS_UPDATED,
+      vmmsVehicleId: vehicleId,
+      maintenanceScheduleIds: [existingScheduleId, scheduleId],
+      acceptedReferralIds: [existingReferralId, referralId],
+      occurredAt,
+      repairTicketNumber: 'VR-100',
+      repairStatus: 'OPEN',
+    } satisfies VrmsRepairEventDto;
+
+    await expect(service.apply(ticketEvent)).resolves.toEqual({
+      accepted: true,
+      duplicate: false,
+      eventVersion: 2,
+    });
+
+    expect(transaction.vrmsRepairIntegrationState.update).toHaveBeenCalledWith({
+      where: { repairTicketId },
+      data: expect.objectContaining({
+        repairTicketNumber: 'VR-100',
+        repairStatus: 'OPEN',
+        status: VrmsRepairIntegrationStatus.OPEN,
+        lastEventVersion: 2,
+        maintenanceScheduleIds: [existingScheduleId, scheduleId],
+        acceptedReferralIds: [existingReferralId, referralId],
+      }),
+    });
+    expect(transaction.vmmsRepairReferral.update).toHaveBeenCalledTimes(2);
+    expect(transaction.vmmsRepairReferral.update).toHaveBeenCalledWith({
+      where: { id: referralId },
+      data: expect.objectContaining({
+        status: VmmsRepairReferralStatus.ACCEPTED,
+        repairTicketId,
+        repairTicketNumber: 'VR-100',
+        repairStatus: 'OPEN',
+      }),
+    });
+    expect(transaction.maintenanceSchedule.findMany).toHaveBeenCalledWith({
+      where: {
+        id: { in: [existingScheduleId, scheduleId] },
+        deletedAt: null,
+      },
+    });
+    expect(availability.recordStatusChange).not.toHaveBeenCalled();
+    expect(transaction.vrmsRepairEventReceipt.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        repairTicketId,
+        repairTicketNumber: 'VR-100',
+        repairStatus: 'OPEN',
+        maintenanceScheduleIds: [existingScheduleId, scheduleId],
+        acceptedReferralIds: [existingReferralId, referralId],
+      }),
+    });
+  });
+
+  it('accepts a referral-only link update with a version gap after schedule changes state', async () => {
+    const existingReferralId = '1cb7ce91-c4d0-41fb-a330-831f4702eeea';
+    const repairTicketId = 'ee3d6c66-1d30-4c38-9f31-1d8e13b78816';
+    const previousOccurredAt = new Date('2026-11-26T00:00:00.000Z');
+    const transaction = {
+      $executeRaw: jest.fn().mockResolvedValue(0),
+      vrmsRepairEventReceipt: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn(),
+      },
+      vrmsRepairIntegrationState: {
+        findUnique: jest.fn().mockResolvedValue({
+          repairTicketId,
+          vehicleId,
+          repairTicketNumber: 'VR-100',
+          repairStatus: 'OPEN',
+          outsideShopName: null,
+          status: VrmsRepairIntegrationStatus.OPEN,
+          lastEventVersion: 1,
+          maintenanceScheduleIds: [scheduleId],
+          acceptedReferralIds: [existingReferralId],
+          lastOccurredAt: previousOccurredAt,
+        }),
+        findFirst: jest.fn(),
+        update: jest.fn(),
+      },
+      vmmsRepairReferral: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: existingReferralId,
+            vehicleId,
+            maintenanceScheduleId: scheduleId,
+            status: VmmsRepairReferralStatus.ACCEPTED,
+            repairTicketId,
+            deliveredAt: previousOccurredAt,
+          },
+          {
+            id: referralId,
+            vehicleId,
+            maintenanceScheduleId: scheduleId,
+            status: VmmsRepairReferralStatus.SENT,
+            repairTicketId: null,
+            deliveredAt: null,
+          },
+        ]),
+        update: jest.fn(),
+      },
+      vehicle: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: vehicleId,
+          plateNumber: 'TGD 908',
+        }),
+      },
+      maintenanceSchedule: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: scheduleId,
+            vehicleId: 'TGD 908',
+            deletedAt: null,
+            status: MaintenanceStatus.COMPLETED,
+            approvalStatus: MaintenanceApprovalStatus.VERIFIED,
+            workOrderProgress: {},
+          },
+        ]),
+      },
+      outsourcedProvider: { findFirst: jest.fn() },
+    };
+    const prisma = {
+      $transaction: jest.fn((callback) => callback(transaction)),
+    };
+    const availability = { recordStatusChange: jest.fn() };
+    const service = new VrmsRepairEventsService(
+      prisma as unknown as PrismaService,
+      {} as MaintenanceSchedulesService,
+      availability as unknown as BmsAvailabilityService,
+    );
+    const ticketEvent = {
+      eventId: 'c942a653-2e44-4ee3-8d85-8e710558a614',
+      repairTicketId,
+      eventVersion: 3,
+      eventType: VrmsRepairEventType.LINKS_UPDATED,
+      vmmsVehicleId: vehicleId,
+      maintenanceScheduleIds: [scheduleId],
+      acceptedReferralIds: [existingReferralId, referralId],
+      occurredAt,
+      repairTicketNumber: 'VR-100',
+      repairStatus: 'OPEN',
+    } satisfies VrmsRepairEventDto;
+
+    await expect(service.apply(ticketEvent)).resolves.toEqual({
+      accepted: true,
+      duplicate: false,
+      eventVersion: 3,
+    });
+
+    expect(transaction.vrmsRepairIntegrationState.update).toHaveBeenCalledWith({
+      where: { repairTicketId },
+      data: expect.objectContaining({
+        lastEventVersion: 3,
+        maintenanceScheduleIds: [scheduleId],
+        acceptedReferralIds: [existingReferralId, referralId],
+      }),
+    });
+    expect(transaction.vmmsRepairReferral.update).toHaveBeenCalledWith({
+      where: { id: referralId },
+      data: expect.objectContaining({
+        status: VmmsRepairReferralStatus.ACCEPTED,
+        repairTicketId,
+        repairTicketNumber: 'VR-100',
+        repairStatus: 'OPEN',
+      }),
+    });
+    expect(availability.recordStatusChange).not.toHaveBeenCalled();
+    expect(transaction.vrmsRepairEventReceipt.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        eventType: VrmsRepairEventType.LINKS_UPDATED,
+        maintenanceScheduleIds: [scheduleId],
+        acceptedReferralIds: [existingReferralId, referralId],
+      }),
+    });
   });
 });

@@ -16,6 +16,7 @@ import { VehiclesService } from './vehicles.service';
 type Role = { role: UserRole; system: SystemType };
 const secret = 'vehicle-permissions-test-only';
 const vehicleId = '8da72728-b06e-4475-945e-2cf3c99a996e';
+const reviewId = 'c4b5a2e8-59c4-4c18-8bda-97e8df63f1c0';
 const roleFor = (role: UserRole): Role => ({ role, system: SystemType.VMMS });
 
 describe('vehicle HTTP permissions', () => {
@@ -28,6 +29,9 @@ describe('vehicle HTTP permissions', () => {
     delete: jest.fn(),
     findAll: jest.fn(),
     findAuditHistory: jest.fn(),
+    findPendingVrmsOdometerReviews: jest.fn(),
+    confirmVrmsOdometerReview: jest.fn(),
+    dismissVrmsOdometerReview: jest.fn(),
     getMaintenanceDefaults: jest.fn(),
     updateMaintenanceDefaults: jest.fn(),
     previewExcel: jest.fn(),
@@ -48,6 +52,8 @@ describe('vehicle HTTP permissions', () => {
     expect(service.create).not.toHaveBeenCalled();
     expect(service.update).not.toHaveBeenCalled();
     expect(service.updateOdometer).not.toHaveBeenCalled();
+    expect(service.confirmVrmsOdometerReview).not.toHaveBeenCalled();
+    expect(service.dismissVrmsOdometerReview).not.toHaveBeenCalled();
     expect(service.delete).not.toHaveBeenCalled();
     expect(service.updateMaintenanceDefaults).not.toHaveBeenCalled();
     expect(service.previewOdometerExcel).not.toHaveBeenCalled();
@@ -149,6 +155,57 @@ describe('vehicle HTTP permissions', () => {
         email: 'test@example.invalid',
       }),
     );
+  });
+
+  it('lets only Operations list pending VRMS odometer reviews', async () => {
+    const response = await request(app.getHttpServer())
+      .get('/vehicles/odometer-reviews/pending')
+      .set('Authorization', `Bearer ${token([roleFor(UserRole.OPERATIONS)])}`)
+      .expect(200);
+
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(service.findPendingVrmsOdometerReviews).toHaveBeenCalledWith(
+      undefined,
+    );
+
+    await request(app.getHttpServer())
+      .get('/vehicles/odometer-reviews/pending')
+      .set('Authorization', `Bearer ${token([roleFor(UserRole.ADMIN)])}`)
+      .expect(403);
+    expect(service.findPendingVrmsOdometerReviews).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets only Operations confirm or dismiss a VRMS odometer review', async () => {
+    const operationsToken = token([roleFor(UserRole.OPERATIONS)]);
+    await request(app.getHttpServer())
+      .post(`/vehicles/odometer-reviews/${reviewId}/confirm`)
+      .set('Authorization', `Bearer ${operationsToken}`)
+      .expect(201);
+    expect(service.confirmVrmsOdometerReview).toHaveBeenCalledWith(
+      reviewId,
+      expect.objectContaining({
+        sub: 'user-id',
+        email: 'test@example.invalid',
+      }),
+    );
+
+    await request(app.getHttpServer())
+      .post(`/vehicles/odometer-reviews/${reviewId}/dismiss`)
+      .set('Authorization', `Bearer ${operationsToken}`)
+      .expect(201);
+    expect(service.dismissVrmsOdometerReview).toHaveBeenCalledWith(
+      reviewId,
+      expect.objectContaining({
+        sub: 'user-id',
+        email: 'test@example.invalid',
+      }),
+    );
+
+    await request(app.getHttpServer())
+      .post(`/vehicles/odometer-reviews/${reviewId}/confirm`)
+      .set('Authorization', `Bearer ${token([roleFor(UserRole.ADMIN)])}`)
+      .expect(403);
+    expect(service.confirmVrmsOdometerReview).toHaveBeenCalledTimes(1);
   });
 
   it('lets only Operations manage vehicle maintenance defaults', async () => {

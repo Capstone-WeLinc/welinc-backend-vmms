@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import { MaintenanceSchedule, MaintenanceStatus } from '@prisma/client';
 import { PrismaService } from '../../../shared/prisma.service';
+import { VrmsRepairReferralsService } from '../integrations/vrms/vrms-repair-referrals.service';
 import { MaintenanceSchedulesService } from './maintenance-schedules.service';
 import { applyWorkOrderWorkflow } from './work-order-workflow';
 
@@ -209,6 +210,69 @@ describe('submission through MaintenanceSchedulesService', () => {
     service = new MaintenanceSchedulesService(
       prisma as unknown as PrismaService,
     );
+  });
+
+  it('queues a repair referral in the transaction without delivering in the request', async () => {
+    const referralId = 'c4b5a2e8-59c4-4c18-8bda-97e8df63f1c0';
+    const reviewSchedule = {
+      ...schedule,
+      status: MaintenanceStatus.DONE,
+      chiefMechanicId: 'chief-1',
+      chiefMechanic: 'Chief One',
+      workOrderProgress: {
+        mechanicSubmitted: true,
+        workflowStatus: 'Done',
+        executionItems: [
+          { id: 'oil', label: 'Inspect oil', status: 'checked' },
+        ],
+        inspectionItems: [{ id: 'oil', label: 'Inspect oil', status: 'fail' }],
+      },
+    } as MaintenanceSchedule;
+    prisma.maintenanceSchedule.findFirst.mockResolvedValue(reviewSchedule);
+    prisma.maintenanceSchedule.update.mockImplementation(async ({ data }) => ({
+      ...reviewSchedule,
+      ...data,
+    }));
+    const referrals = {
+      createFromWorkOrder: jest.fn().mockResolvedValue({
+        id: referralId,
+        created: true,
+      }),
+      deliverOne: jest.fn().mockRejectedValue(new Error('Should not deliver')),
+      getLatestForSchedule: jest.fn().mockResolvedValue({
+        id: referralId,
+        status: 'QUEUED',
+      }),
+    };
+    const serviceWithReferrals = new MaintenanceSchedulesService(
+      prisma as unknown as PrismaService,
+      undefined,
+      undefined,
+      referrals as unknown as VrmsRepairReferralsService,
+    );
+    jest
+      .spyOn(serviceWithReferrals as any, 'syncVehicleStatus')
+      .mockResolvedValue(undefined);
+
+    const result = await serviceWithReferrals.updateProgress(
+      schedule.id,
+      { action: 'REPAIR' },
+      {
+        sub: 'chief-1',
+        system: 'VMMS',
+        roles: [{ role: 'CHIEF_MECHANIC', system: 'VMMS' }],
+      },
+    );
+
+    expect(referrals.createFromWorkOrder).toHaveBeenCalledWith(
+      prisma,
+      expect.objectContaining({ status: MaintenanceStatus.IN_PROGRESS }),
+      expect.objectContaining({
+        inspectionItems: [{ id: 'oil', label: 'Inspect oil', status: 'fail' }],
+      }),
+    );
+    expect(referrals.deliverOne).not.toHaveBeenCalled();
+    expect(result.repairReferral).toEqual({ id: referralId, status: 'QUEUED' });
   });
 
   it('checks the server checklist and never writes incomplete submissions', async () => {

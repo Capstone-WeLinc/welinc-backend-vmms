@@ -15,6 +15,7 @@ import {
   missingScope,
   tokenExpired,
   wrongAudience,
+  wrongServiceClient,
   wrongTokenUse,
 } from './errors';
 import {
@@ -76,7 +77,10 @@ export async function checkPerson(
  * A guard for routes meant for services: a person's token answers 403 `WRONG_TOKEN_USE`, a
  * service token without `scope` 403 `FORBIDDEN` (contract 0001 section 4, version 8). The checked token is put on `request.service`.
  */
-export function requireService(scope: string): Type<CanActivate> {
+export function requireService(
+  scope: string,
+  clientId?: string,
+): Type<CanActivate> {
   @Injectable()
   class RequireServiceGuard implements CanActivate {
     constructor(
@@ -94,6 +98,9 @@ export function requireService(scope: string): Type<CanActivate> {
       if (!token.scopes.includes(scope)) {
         throw missingScope(scope);
       }
+      if (clientId && token.clientId !== clientId) {
+        throw wrongServiceClient();
+      }
       request.service = token;
       return true;
     }
@@ -101,9 +108,9 @@ export function requireService(scope: string): Type<CanActivate> {
   return RequireServiceGuard;
 }
 
-/** `@ServiceRoute('scope')`: marks the route for services and guards it with `requireService`. */
-export const ServiceRoute = (scope: string) =>
+/** `@ServiceRoute('scope', 'client-id')` optionally binds a route to one service client. */
+export const ServiceRoute = (scope: string, clientId?: string) =>
   applyDecorators(
     SetMetadata(SERVICE_ROUTE_KEY, scope),
-    UseGuards(requireService(scope)),
+    UseGuards(requireService(scope, clientId)),
   );

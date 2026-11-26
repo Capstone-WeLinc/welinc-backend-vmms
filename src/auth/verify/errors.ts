@@ -54,6 +54,14 @@ export const wrongTokenUse = (
   message = 'This route does not accept this token',
 ) => error(HttpStatus.FORBIDDEN, message, 'WRONG_TOKEN_USE');
 
+/** A service token from a client not authorized for this route. */
+export const wrongServiceClient = () =>
+  error(
+    HttpStatus.FORBIDDEN,
+    'This service client is not authorized for the route',
+    'WRONG_CLIENT',
+  );
+
 /**
  * A service token without the route's scope (contract 0001 section 4, version 8; the directory's
  * rule too): 403 `FORBIDDEN`, so a caller can tell a missing grant from a wrong kind of token.

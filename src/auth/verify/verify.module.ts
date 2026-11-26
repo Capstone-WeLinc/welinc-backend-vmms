@@ -43,6 +43,9 @@ export const BMS_AVAILABILITY_TOKENS = Symbol('BMS_AVAILABILITY_TOKENS');
 /** VMMS's token for BMS fleet-change invalidations. */
 export const BMS_FLEET_CHANGE_TOKENS = Symbol('BMS_FLEET_CHANGE_TOKENS');
 
+/** VMMS's token for VRMS fleet-change invalidations. */
+export const VRMS_FLEET_CHANGE_TOKENS = Symbol('VRMS_FLEET_CHANGE_TOKENS');
+
 /** The audience this service accepts. Change it when copying the folder (`VMMS`, `BMS`). */
 export const SERVICE_AUDIENCE = 'VMMS';
 
@@ -205,6 +208,21 @@ export function readVerifyConfig(
         });
       },
     },
+    {
+      provide: VRMS_FLEET_CHANGE_TOKENS,
+      inject: [VERIFY_CONFIG, ASSERTION_SIGNER],
+      useFactory: (verify: VerifyConfig, signer: AssertionSigner) => {
+        const logger = new Logger('ServiceToken');
+        return new ServiceTokenClient({
+          tokenUrl: `${verify.internalUrl}/auth/token`,
+          signer,
+          audience: 'VRMS',
+          scope: 'fleet.change.write',
+          onError: (reason) =>
+            logger.warn(`could not get a VRMS fleet-change token: ${reason}`),
+        });
+      },
+    },
   ],
   exports: [
     VERIFY_CONFIG,
@@ -217,6 +235,7 @@ export function readVerifyConfig(
     VRMS_STATUS_TOKENS,
     BMS_AVAILABILITY_TOKENS,
     BMS_FLEET_CHANGE_TOKENS,
+    VRMS_FLEET_CHANGE_TOKENS,
   ],
 })
 export class AuthVerifyModule {}

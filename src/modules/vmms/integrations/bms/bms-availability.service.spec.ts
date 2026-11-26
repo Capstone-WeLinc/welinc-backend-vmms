@@ -178,6 +178,7 @@ describe('BmsAvailabilityService', () => {
         eventId: 'event-4',
         sentAt: null,
         nextAttemptAt: { lte: new Date('2026-11-27T00:00:00.000Z') },
+        OR: [{ lastErrorCode: null }, { lastErrorCode: { not: 'http_400' } }],
       },
       data: {
         attempts: { increment: 1 },
@@ -191,6 +192,39 @@ describe('BmsAvailabilityService', () => {
         nextAttemptAt: new Date('2026-11-27T00:00:30.000Z'),
         lastErrorCode: 'http_503',
       },
+    });
+  });
+
+  it('marks HTTP 400 terminal and continues with later vehicle events', async () => {
+    prisma.bmsVehicleAvailabilityEvent.findMany.mockResolvedValue([
+      event(4),
+      event(5),
+    ]);
+    fetchMock
+      .mockResolvedValueOnce(new Response(null, { status: 400 }))
+      .mockResolvedValueOnce(new Response(null, { status: 202 }));
+
+    await service.deliverPending();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(prisma.bmsVehicleAvailabilityEvent.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          OR: [{ lastErrorCode: null }, { lastErrorCode: { not: 'http_400' } }],
+        }),
+      }),
+    );
+    expect(
+      prisma.bmsVehicleAvailabilityEvent.updateMany,
+    ).toHaveBeenNthCalledWith(1, {
+      where: { eventId: 'event-4', sentAt: null },
+      data: { lastErrorCode: 'http_400' },
+    });
+    expect(
+      prisma.bmsVehicleAvailabilityEvent.updateMany,
+    ).toHaveBeenNthCalledWith(2, {
+      where: { eventId: 'event-5', sentAt: null },
+      data: { sentAt: expect.any(Date), lastErrorCode: null },
     });
   });
 

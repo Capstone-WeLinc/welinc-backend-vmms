@@ -4,7 +4,12 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { MaintenanceStatus, Prisma } from '@prisma/client';
+import {
+  MaintenanceStatus,
+  Prisma,
+  VrmsRepairIntegrationStatus,
+  VrmsRepairOdometerReviewStatus,
+} from '@prisma/client';
 import { PrismaService } from '../../../shared/prisma.service';
 import { BmsAvailabilityService } from '../integrations/bms/bms-availability.service';
 import { BmsFleetChangesService } from '../integrations/bms/bms-fleet-changes.service';
@@ -843,6 +848,9 @@ export class VehiclesService {
       };
 
       return await this.prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`
+          SELECT pg_advisory_xact_lock(hashtextextended(${`vehicle:${id}`}, 0))
+        `;
         await tx.$queryRaw`
           SELECT id FROM vehicles WHERE id = ${id}::uuid FOR UPDATE
         `;
@@ -862,6 +870,9 @@ export class VehiclesService {
           },
         });
         if (!previous) throw new NotFoundException('Vehicle not found.');
+        if (dto.isActive === false && previous.isActive) {
+          await this.assertNoOpenVrmsRepair(tx, id);
+        }
 
         const updated = await tx.vehicle.update({
           where: { id },
@@ -930,6 +941,139 @@ export class VehiclesService {
       this.updateOdometerInTransaction(tx, id, odometer, actor),
     );
     return outcome.vehicle;
+  }
+
+  async findPendingVrmsOdometerReviews(cursor?: string) {
+    const pageSize = 50;
+    const reviews = await this.prisma.vrmsRepairOdometerReview.findMany({
+      where: { status: VrmsRepairOdometerReviewStatus.PENDING },
+      orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
+      take: pageSize + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      select: {
+        id: true,
+        serviceOdometerReading: true,
+        occurredAt: true,
+        event: {
+          select: {
+            repairTicketId: true,
+            repairTicketNumber: true,
+            outsideShopName: true,
+          },
+        },
+        vehicle: {
+          select: {
+            id: true,
+            plateNumber: true,
+            odometer: true,
+            isActive: true,
+          },
+        },
+      },
+    });
+    const hasMore = reviews.length > pageSize;
+    const page = hasMore ? reviews.slice(0, pageSize) : reviews;
+
+    return {
+      items: page.map((review) => ({
+        id: review.id,
+        repairTicketId: review.event.repairTicketId,
+        repairTicketNumber: review.event.repairTicketNumber,
+        outsideShopName: review.event.outsideShopName,
+        vehicleId: review.vehicle.id,
+        plateNumber: review.vehicle.plateNumber,
+        currentOdometer: review.vehicle.odometer,
+        isActive: review.vehicle.isActive,
+        serviceOdometerReading: review.serviceOdometerReading,
+        occurredAt: review.occurredAt.toISOString(),
+      })),
+      nextCursor: hasMore ? (page[page.length - 1]?.id ?? null) : null,
+    };
+  }
+
+  async confirmVrmsOdometerReview(id: string, actor: VehicleAuditActor) {
+    return this.decideVrmsOdometerReview(
+      id,
+      VrmsRepairOdometerReviewStatus.CONFIRMED,
+      actor,
+    );
+  }
+
+  async dismissVrmsOdometerReview(id: string, actor: VehicleAuditActor) {
+    return this.decideVrmsOdometerReview(
+      id,
+      VrmsRepairOdometerReviewStatus.DISMISSED,
+      actor,
+    );
+  }
+
+  private async decideVrmsOdometerReview(
+    id: string,
+    decision: Exclude<VrmsRepairOdometerReviewStatus, 'PENDING'>,
+    actor: VehicleAuditActor,
+  ) {
+    try {
+      return await this.prisma.$transaction(
+        async (tx) => {
+          const review = await tx.vrmsRepairOdometerReview.findUnique({
+            where: { id },
+            select: {
+              id: true,
+              vehicleId: true,
+              serviceOdometerReading: true,
+              status: true,
+            },
+          });
+          if (!review) {
+            throw new NotFoundException('Odometer review not found.');
+          }
+          if (review.status !== VrmsRepairOdometerReviewStatus.PENDING) {
+            throw new ConflictException(
+              'This service reading has already been reviewed.',
+            );
+          }
+
+          if (decision === VrmsRepairOdometerReviewStatus.CONFIRMED) {
+            await this.updateOdometerInTransaction(
+              tx,
+              review.vehicleId,
+              review.serviceOdometerReading,
+              actor,
+            );
+          }
+
+          const result = await tx.vrmsRepairOdometerReview.updateMany({
+            where: {
+              id,
+              status: VrmsRepairOdometerReviewStatus.PENDING,
+            },
+            data: {
+              status: decision,
+              reviewedAt: new Date(),
+              reviewedById: actor.sub,
+            },
+          });
+          if (result.count !== 1) {
+            throw new ConflictException(
+              'This service reading was reviewed by another user. Refresh and try again.',
+            );
+          }
+
+          return { id, status: decision };
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2034'
+      ) {
+        throw new ConflictException(
+          'This service reading was reviewed by another user. Refresh and try again.',
+        );
+      }
+      throw error;
+    }
   }
 
   async bulkUpdateOdometer(
@@ -1199,9 +1343,16 @@ export class VehiclesService {
 
   async delete(id: string) {
     return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`
+        SELECT pg_advisory_xact_lock(hashtextextended(${`vehicle:${id}`}, 0))
+      `;
+      await tx.$queryRaw`
+        SELECT id FROM vehicles WHERE id = ${id}::uuid FOR UPDATE
+      `;
       const previous = await tx.vehicle.findUnique({ where: { id } });
       if (!previous) throw new NotFoundException('Vehicle not found.');
       if (previous.deletedAt && !previous.isActive) return previous;
+      if (previous.isActive) await this.assertNoOpenVrmsRepair(tx, id);
 
       const deleted = await tx.vehicle.update({
         where: { id },
@@ -1217,6 +1368,24 @@ export class VehiclesService {
       });
       return deleted;
     });
+  }
+
+  private async assertNoOpenVrmsRepair(
+    tx: Prisma.TransactionClient,
+    vehicleId: string,
+  ): Promise<void> {
+    const openRepair = await tx.vrmsRepairIntegrationState.findFirst({
+      where: {
+        vehicleId,
+        status: VrmsRepairIntegrationStatus.OPEN,
+      },
+      select: { repairTicketId: true, repairTicketNumber: true },
+    });
+    if (openRepair) {
+      throw new ConflictException(
+        `Cannot deactivate this truck while VRMS repair ticket ${openRepair.repairTicketNumber ?? openRepair.repairTicketId} is open.`,
+      );
+    }
   }
 
   private async assertActiveGarage(garageId?: string): Promise<void> {

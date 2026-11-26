@@ -12,10 +12,10 @@ import { PrismaService } from '../../../shared/prisma.service';
 import { ServiceRoute } from '../../../auth/verify/guards';
 
 @Controller('fleet')
-@ServiceRoute('fleet.read')
 export class FleetController {
   constructor(private readonly prisma: PrismaService) {}
 
+  @ServiceRoute('fleet.read', 'bms')
   @Get('vehicles')
   async vehicles(
     @Query('garageId', new ParseUUIDPipe({ optional: true }))
@@ -53,6 +53,7 @@ export class FleetController {
     };
   }
 
+  @ServiceRoute('fleet.read', 'bms')
   @Get('vehicles/:id')
   async vehicle(
     @Param('id', new ParseUUIDPipe()) id: string,
@@ -87,6 +88,7 @@ export class FleetController {
     };
   }
 
+  @ServiceRoute('fleet.read', 'bms')
   @Get('garages')
   async garages(@Res({ passthrough: true }) response: Response) {
     response.setHeader('Cache-Control', 'no-store');
@@ -96,5 +98,17 @@ export class FleetController {
       select: { id: true, name: true },
     });
     return { garages };
+  }
+
+  @ServiceRoute('fleet.read', 'vrms')
+  @Get('outsourced-providers')
+  async outsourcedProviders(@Res({ passthrough: true }) response: Response) {
+    response.setHeader('Cache-Control', 'no-store');
+    const providers = await this.prisma.outsourcedProvider.findMany({
+      where: { isActive: true },
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true },
+    });
+    return { providers };
   }
 }

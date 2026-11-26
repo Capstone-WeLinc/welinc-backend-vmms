@@ -14,7 +14,9 @@ import {
   UseInterceptors,
   BadRequestException,
   Query,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../../../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../../auth/guards/roles.guard';
@@ -53,6 +55,35 @@ export class VehiclesController {
   @Get()
   async list(@Query('activeOnly') activeOnly?: string) {
     return this.vehiclesService.findAll(activeOnly === 'true');
+  }
+
+  @Roles(UserRole.OPERATIONS)
+  @Get('odometer-reviews/pending')
+  async pendingVrmsOdometerReviews(
+    @Query('cursor', new ParseUUIDPipe({ optional: true }))
+    cursor: string | undefined,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    response.setHeader('Cache-Control', 'no-store');
+    return this.vehiclesService.findPendingVrmsOdometerReviews(cursor);
+  }
+
+  @Roles(UserRole.OPERATIONS)
+  @Post('odometer-reviews/:id/confirm')
+  async confirmVrmsOdometerReview(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: { user: VehicleAuditActor },
+  ) {
+    return this.vehiclesService.confirmVrmsOdometerReview(id, req.user);
+  }
+
+  @Roles(UserRole.OPERATIONS)
+  @Post('odometer-reviews/:id/dismiss')
+  async dismissVrmsOdometerReview(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: { user: VehicleAuditActor },
+  ) {
+    return this.vehiclesService.dismissVrmsOdometerReview(id, req.user);
   }
 
   @Roles(UserRole.ADMIN, UserRole.OPERATIONS)

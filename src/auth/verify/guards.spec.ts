@@ -35,10 +35,10 @@ describe('verify guards', () => {
   let jwks: ReturnType<typeof fakeJwksFetch>;
   let verifier: TokenVerifier;
 
-  const service = (scope = 'roster.read') =>
+  const service = (scope = 'roster.read', clientId = 'vmms') =>
     signAccess(signer, {
-      sub: 'client:vmms',
-      client_id: 'vmms',
+      sub: `client:${clientId}`,
+      client_id: clientId,
       token_use: 'service',
       scope,
     });
@@ -149,6 +149,45 @@ describe('verify guards', () => {
       expect(
         await answer(fleetGuard.canActivate(context(request(token)))),
       ).toMatchObject({ status: 403, body: { code: 'FORBIDDEN' } });
+    });
+
+    it('allows the configured service client with the required scope', async () => {
+      const fleetGuard = new (requireService('fleet.read', 'bms'))(
+        verifier,
+      ) as {
+        canActivate: (c: ExecutionContext) => Promise<boolean>;
+      };
+      const req = request(await service('fleet.read', 'bms'));
+      await expect(fleetGuard.canActivate(context(req))).resolves.toBe(true);
+      expect(req.service).toMatchObject({ clientId: 'bms' });
+    });
+
+    it('refuses another service client even when it has the required scope', async () => {
+      const fleetGuard = new (requireService('fleet.read', 'bms'))(
+        verifier,
+      ) as {
+        canActivate: (c: ExecutionContext) => Promise<boolean>;
+      };
+      const token = await service('fleet.read', 'other-service');
+      expect(
+        await answer(fleetGuard.canActivate(context(request(token)))),
+      ).toMatchObject({ status: 403, body: { code: 'WRONG_CLIENT' } });
+    });
+
+    it('allows only VRMS to read the outsourced-provider fleet route', async () => {
+      const fleetGuard = new (requireService('fleet.read', 'vrms'))(
+        verifier,
+      ) as {
+        canActivate: (c: ExecutionContext) => Promise<boolean>;
+      };
+      const req = request(await service('fleet.read', 'vrms'));
+      await expect(fleetGuard.canActivate(context(req))).resolves.toBe(true);
+      expect(req.service).toMatchObject({ clientId: 'vrms' });
+
+      const bmsToken = await service('fleet.read', 'bms');
+      expect(
+        await answer(fleetGuard.canActivate(context(request(bmsToken)))),
+      ).toMatchObject({ status: 403, body: { code: 'WRONG_CLIENT' } });
     });
   });
 });

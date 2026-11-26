@@ -394,11 +394,23 @@ export class VrmsRepairReferralsService {
 
   private isRetryable(error: unknown): boolean {
     if (error instanceof ReferralResponseError) {
-      return error.status === 408 || error.status === 429 || error.status >= 500;
+      return (
+        error.status === 401 ||
+        error.status === 403 ||
+        error.status === 408 ||
+        error.status === 429 ||
+        error.status >= 500
+      );
     }
     if (error instanceof HttpException) {
       const status = error.getStatus();
-      return status === 408 || status === 429 || status >= 500;
+      return (
+        status === 401 ||
+        status === 403 ||
+        status === 408 ||
+        status === 429 ||
+        status >= 500
+      );
     }
     return true;
   }
