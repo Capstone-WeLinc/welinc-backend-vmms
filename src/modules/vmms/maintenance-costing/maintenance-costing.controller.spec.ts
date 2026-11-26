@@ -15,7 +15,12 @@ describe('MaintenanceCostingController role access', () => {
   let app: INestApplication;
   const secret = 'maintenance-costing-access-test-only';
   const jwt = new JwtService({ secret });
-  const service = { getDashboard: jest.fn(), updateThreshold: jest.fn() };
+  const service = {
+    getDashboard: jest.fn(),
+    exportXlsx: jest.fn(),
+    auditPdfExport: jest.fn(),
+    updateThreshold: jest.fn(),
+  };
   const token = (roles: Role[], system: SystemType = SystemType.VMMS) =>
     jwt.sign({ sub: 'user-1', email: 'test@example.invalid', roles, system });
 
@@ -53,6 +58,8 @@ describe('MaintenanceCostingController role access', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     service.getDashboard.mockResolvedValue({ totalMaintenanceCosts: 0 });
+    service.exportXlsx.mockResolvedValue(Buffer.from('xlsx'));
+    service.auditPdfExport.mockResolvedValue({ recorded: true });
     service.updateThreshold.mockResolvedValue({ threshold: 50000 });
   });
 
@@ -84,6 +91,43 @@ describe('MaintenanceCostingController role access', () => {
       expect(service.getDashboard).not.toHaveBeenCalled();
     },
   );
+
+  it('allows Operations to export Excel and records PDF exports with the selected scope', async () => {
+    await request(app.getHttpServer())
+      .get('/maintenance-costing/export.xlsx?from=2026-06-01&to=2026-06-30&selectedTruckId=vehicle-1')
+      .set('Authorization', `Bearer ${token([vmmsRole(UserRole.OPERATIONS)])}`)
+      .expect(200);
+    expect(service.exportXlsx).toHaveBeenCalledWith(
+      '2026-06-01',
+      '2026-06-30',
+      'vehicle-1',
+      expect.objectContaining({ sub: 'user-1' }),
+    );
+
+    await request(app.getHttpServer())
+      .post('/maintenance-costing/export/pdf')
+      .set('Authorization', `Bearer ${token([vmmsRole(UserRole.ADMIN)])}`)
+      .send({
+        from: '2026-06-01',
+        to: '2026-06-30',
+        selectedTruckId: '00000000-0000-4000-8000-000000000001',
+      })
+      .expect(201);
+    expect(service.auditPdfExport).toHaveBeenCalledWith(
+      '2026-06-01',
+      '2026-06-30',
+      '00000000-0000-4000-8000-000000000001',
+      expect.objectContaining({ sub: 'user-1' }),
+    );
+  });
+
+  it('requires an explicit period for Excel export', async () => {
+    await request(app.getHttpServer())
+      .get('/maintenance-costing/export.xlsx')
+      .set('Authorization', `Bearer ${token([vmmsRole(UserRole.ADMIN)])}`)
+      .expect(400);
+    expect(service.exportXlsx).not.toHaveBeenCalled();
+  });
 
   it('allows only Admin to configure a positive threshold', async () => {
     await request(app.getHttpServer())
