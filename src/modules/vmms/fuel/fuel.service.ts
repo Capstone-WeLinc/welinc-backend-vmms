@@ -89,6 +89,7 @@ type FuelImportSaveRow = {
   errors: string[];
   status: 'READY' | 'SAVED' | 'ERROR';
   fillUpId?: string;
+  totalCost?: number;
 };
 
 function importText(value: unknown): string {
@@ -366,7 +367,7 @@ export class FuelService {
   ) {
     this.require(actor, 'OPERATIONS');
     const receiptImage = receiptFile
-      ? validateFuelReceiptFile(receiptFile)
+      ? await validateFuelReceiptFile(receiptFile)
       : undefined;
     const vehicle = await this.prisma.vehicle.findFirst({
       where: { id: dto.vehicleId, deletedAt: null, isActive: true },
@@ -920,6 +921,7 @@ export class FuelService {
         );
         row.status = 'SAVED';
         row.fillUpId = entry.id;
+        row.totalCost = entry.totalCost;
       } catch (error) {
         row.status = 'ERROR';
         row.errors.push(importHttpError(error));

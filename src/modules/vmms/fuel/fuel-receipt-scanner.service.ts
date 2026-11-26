@@ -9,6 +9,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { createRequire } from 'node:module';
 import type { Env } from '../../../config/env';
+import { MAX_FUEL_RECEIPT_ATTEMPTS_PER_ACTOR_PER_MINUTE } from './fuel.constants';
 import {
   type FuelReceiptFile,
   validateFuelReceiptFile,
@@ -16,7 +17,6 @@ import {
 
 const API_VERSION = '2024-11-30';
 const MAX_SCAN_DURATION_MS = 30_000;
-const MAX_SCANS_PER_ACTOR_PER_MINUTE = 5;
 const MAX_CONCURRENT_SCANS = 2;
 const DOCUMENT_INTELLIGENCE_SCOPE =
   'https://cognitiveservices.azure.com/.default';
@@ -321,7 +321,7 @@ export class FuelReceiptScannerService {
       throw new BadRequestException(
         'Select a JPG, JPEG, or PNG receipt image.',
       );
-    validateFuelReceiptFile(file);
+    await validateFuelReceiptFile(file);
     const endpoint = this.config
       .get('AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT', { infer: true })
       ?.replace(/\/+$/, '');
@@ -421,7 +421,7 @@ export class FuelReceiptScannerService {
     }
 
     const actorScans = this.scanTimes.get(actorId) ?? [];
-    if (actorScans.length >= MAX_SCANS_PER_ACTOR_PER_MINUTE)
+    if (actorScans.length >= MAX_FUEL_RECEIPT_ATTEMPTS_PER_ACTOR_PER_MINUTE)
       throw new HttpException(
         'Too many receipt scans. Try again in a minute.',
         HttpStatus.TOO_MANY_REQUESTS,

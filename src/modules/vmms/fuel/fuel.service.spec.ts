@@ -139,4 +139,53 @@ describe('FuelService', () => {
     ).rejects.toThrow('do not have access');
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
+
+  it('returns the persisted fill-up total cost for successful import rows', async () => {
+    const prisma = {
+      vehicle: {
+        findMany: jest
+          .fn()
+          .mockResolvedValue([{ id: 'vehicle-id', plateNumber: 'ABC-123' }]),
+      },
+      fuelStation: {
+        findMany: jest.fn().mockResolvedValue([{ id: 'station-id' }]),
+      },
+      fuelFillUp: { findFirst: jest.fn().mockResolvedValue(null) },
+    };
+    const service = new FuelService(prisma as any);
+    jest
+      .spyOn(service, 'create')
+      .mockResolvedValue({ id: 'fill-up-id', totalCost: 137.42 } as any);
+
+    const result = await service.saveImportRows(
+      [
+        {
+          key: 'row-1',
+          sheetName: 'November',
+          worksheetRow: 2,
+          plateNumber: 'ABC-123',
+          stationId: 'station-id',
+          date: '2026-10-10',
+          odometer: 1200,
+          liters: 10,
+          pricePerLiter: 12,
+          filledBy: 'Driver',
+          isFullTank: true,
+        },
+      ],
+      operations,
+    );
+
+    expect(result).toMatchObject({
+      saved: 1,
+      failed: 0,
+      rows: [
+        {
+          status: 'SAVED',
+          fillUpId: 'fill-up-id',
+          totalCost: 137.42,
+        },
+      ],
+    });
+  });
 });
