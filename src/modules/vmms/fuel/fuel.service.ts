@@ -500,13 +500,14 @@ export class FuelService {
               average != null &&
               isFuelEfficiencyAnomaly(efficiency, average, deviation)
             ) {
-              await tx.fuelAnomaly.create({
+              const anomaly = await tx.fuelAnomaly.create({
                 data: {
                   fillUpId: created.id,
                   vehicleId: vehicle.id,
                   efficiency,
                   rollingAverage: average,
                 },
+                select: { id: true },
               });
               const recipients = await tx.vmmsPerson.findMany({
                 where: {
@@ -531,7 +532,12 @@ export class FuelService {
                     title: 'Fuel efficiency anomaly',
                     message: `${vehicle.plateNumber} recorded ${efficiency.toFixed(1)} km/L versus its ${average.toFixed(1)} km/L rolling average.`,
                     type: 'warning',
+                    category: 'FUEL',
+                    actionType: 'FUEL_MANAGEMENT',
+                    actionTargetId: anomaly.id,
+                    dedupeKey: `fuel-anomaly:${anomaly.id}:${person.authUserId}`,
                   })),
+                  skipDuplicates: true,
                 });
             }
           }

@@ -166,6 +166,8 @@ export class ScheduledReportsService {
               title,
               message,
               type: 'info',
+              category: 'REPORT',
+              actionType: 'REPORTS',
               dedupeKey: `scheduled-report:${reportType}:${periodKey}:${recipient.authUserId}`,
             })),
             skipDuplicates: true,
