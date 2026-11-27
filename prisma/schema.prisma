@@ -152,6 +152,9 @@ model Notification {
   title                 String               @db.VarChar(200)
   message               String               @db.Text
   type                  String               @default("info") @db.VarChar(30)
+  category              String               @default("GENERAL") @db.VarChar(30)
+  actionType            String?              @map("action_type") @db.VarChar(40)
+  actionTargetId        String?              @map("action_target_id") @db.Uuid
   dedupeKey             String?              @unique @map("dedupe_key") @db.VarChar(255)
   maintenanceScheduleId String?              @map("maintenance_schedule_id") @db.Uuid
   maintenanceSchedule   MaintenanceSchedule? @relation(fields: [maintenanceScheduleId], references: [id], onDelete: SetNull)
@@ -160,6 +163,7 @@ model Notification {
   updatedAt             DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   @@index([userId, isRead, createdAt])
+  @@index([userId, category, isRead, createdAt])
   @@map("notifications")
 }
 

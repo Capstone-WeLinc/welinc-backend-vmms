@@ -99,7 +99,12 @@ export class FuelEscalationService {
                 title: stage.label,
                 message,
                 type: 'warning',
+                category: 'FUEL',
+                actionType: 'FUEL_MANAGEMENT',
+                actionTargetId: anomaly.id,
+                dedupeKey: `fuel-escalation:${anomaly.id}:day-${stage.days}:${person.authUserId}`,
               })),
+              skipDuplicates: true,
             });
           });
         }
