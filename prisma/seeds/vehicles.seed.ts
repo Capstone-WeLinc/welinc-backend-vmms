@@ -3,7 +3,7 @@ import { seedId } from './seed-id';
 import { suiteSeedPeople } from './users.seed';
 
 export async function seedVehicles(prisma: PrismaClient) {
-  console.log('Creating sample vehicles...');
+  console.log('Ensuring sample vehicles...');
 
   const garageNames = ['Marikina', 'Sta. Rosa', 'Pulilan'] as const;
   const garages = await prisma.garage.findMany({
@@ -150,6 +150,6 @@ export async function seedVehicles(prisma: PrismaClient) {
     });
   }
 
-  console.log(`  Created ${vehicles.length} sample vehicles\n`);
+  console.log(`  Processed ${vehicles.length} sample vehicles\n`);
   return vehicles;
 }

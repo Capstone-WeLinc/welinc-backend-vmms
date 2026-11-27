@@ -2632,7 +2632,7 @@ export class MaintenanceSchedulesService {
       };
     }
 
-    const { schedule, nextSchedule, referral } = await this.prisma
+    const { schedule, nextSchedule } = await this.prisma
       .$transaction(async (tx) => {
         if (action === 'SUBMIT') {
           const odometerToRecord = serviceOdometer;
@@ -2674,15 +2674,14 @@ export class MaintenanceSchedulesService {
         if (workflow.status === MaintenanceStatus.COMPLETED) {
           nextSchedule = await this.createNextRecurringSchedule(tx, updated);
         }
-        const referral =
-          action === 'REPAIR' && this.repairReferrals
-            ? await this.repairReferrals.createFromWorkOrder(
-                tx,
-                updated,
-                progressRecord,
-              )
-            : null;
-        return { schedule: updated, nextSchedule, referral };
+        if (action === 'REPAIR' && this.repairReferrals) {
+          await this.repairReferrals.createFromWorkOrder(
+            tx,
+            updated,
+            progressRecord,
+          );
+        }
+        return { schedule: updated, nextSchedule };
       })
       .catch((error: unknown) =>
         this.handleScheduleWriteConflict(
@@ -2695,9 +2694,6 @@ export class MaintenanceSchedulesService {
           id,
         ),
       );
-    if (referral?.created) {
-      await this.repairReferrals?.deliverOne(referral.id);
-    }
     await this.syncVehicleStatus(schedule.vehicleId, schedule.status);
 
     const costs = this.normalizeCostPayload({

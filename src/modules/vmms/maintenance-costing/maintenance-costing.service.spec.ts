@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { MaintenanceApprovalStatus, MaintenanceStatus } from '@prisma/client';
+import * as ExcelJS from 'exceljs';
 import { MaintenanceCostingService } from './maintenance-costing.service';
 
 describe('MaintenanceCostingService', () => {
@@ -7,6 +8,7 @@ describe('MaintenanceCostingService', () => {
     vehicle: { findMany: jest.fn() },
     maintenanceSchedule: { findMany: jest.fn() },
     maintenanceCostingSetting: { findUnique: jest.fn() },
+    maintenanceCostingExportAudit: { create: jest.fn() },
     $transaction: jest.fn(),
   };
   let service: MaintenanceCostingService;
@@ -35,6 +37,7 @@ describe('MaintenanceCostingService', () => {
     prisma.maintenanceCostingSetting.findUnique.mockResolvedValue({
       threshold: null,
     });
+    prisma.maintenanceCostingExportAudit.create.mockResolvedValue({});
     service = new MaintenanceCostingService(prisma as any);
   });
 
@@ -197,5 +200,106 @@ describe('MaintenanceCostingService', () => {
         }),
       }),
     );
+  });
+
+  it('exports a truck-scoped two-sheet workbook and audits export metadata only', async () => {
+    prisma.maintenanceCostingSetting.findUnique.mockResolvedValue({
+      threshold: { toNumber: () => 100 },
+    });
+    prisma.maintenanceSchedule.findMany.mockResolvedValue([
+      {
+        id: 'work-1',
+        workOrderNumber: 'WO-1',
+        vehicleId: 'ABC123',
+        title: 'Oil Change',
+        assignedMechanic: 'Mechanic One',
+        completedAt: new Date('2026-06-04T04:00:00.000Z'),
+        partsCost: { toNumber: () => 80 },
+        laborCost: { toNumber: () => 40 },
+        totalCost: { toNumber: () => 120 },
+        workOrderProgress: null,
+      },
+    ]);
+
+    const buffer = await service.exportXlsx(
+      '2026-06-01',
+      '2026-06-30',
+      'vehicle-1',
+      { sub: 'admin-1', email: 'admin@example.invalid' },
+    );
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(buffer);
+
+    expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual([
+      'Cost Summary',
+      'Completed Work',
+    ]);
+    expect(workbook.getWorksheet('Cost Summary')?.getCell('A7').value).toBe(
+      'ABC123',
+    );
+    expect(workbook.getWorksheet('Cost Summary')?.getCell('E7').value).toBe(
+      120,
+    );
+    expect(workbook.getWorksheet('Cost Summary')?.getCell('G7').value).toBe(
+      'Yes',
+    );
+    expect(workbook.getWorksheet('Cost Summary')?.getCell('A8').value).toBe(
+      null,
+    );
+    expect(workbook.getWorksheet('Completed Work')?.getCell('A7').value).toBe(
+      'ABC123',
+    );
+    expect(workbook.getWorksheet('Completed Work')?.getCell('E7').value).toBe(
+      'WO-1',
+    );
+    expect(workbook.getWorksheet('Completed Work')?.getCell('K7').value).toBe(
+      120,
+    );
+    const workbookText = workbook.worksheets
+      .flatMap((sheet) => sheet.getSheetValues())
+      .flat()
+      .join(' ');
+    expect(workbookText).not.toMatch(/income|profit|revenue|repair|fuel/i);
+    expect(prisma.maintenanceCostingExportAudit.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          actorId: 'admin-1',
+          actorEmail: 'admin@example.invalid',
+          format: 'XLSX',
+          fromDate: expect.any(Date),
+          toDate: expect.any(Date),
+          selectedTruckId: 'vehicle-1',
+          selectedTruckPlate: 'ABC123',
+        }),
+      }),
+    );
+    expect(
+      JSON.stringify(prisma.maintenanceCostingExportAudit.create.mock.calls[0]),
+    ).not.toMatch(/partsCost|laborCost|totalCost|120/);
+  });
+
+  it('records PDF export scope without storing report contents', async () => {
+    const result = await service.auditPdfExport(
+      '2026-06-01',
+      '2026-06-30',
+      'vehicle-1',
+      { sub: 'ops-1', email: 'ops@example.invalid' },
+    );
+
+    expect(result).toEqual({ recorded: true });
+    expect(prisma.maintenanceCostingExportAudit.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          actorId: 'ops-1',
+          actorEmail: 'ops@example.invalid',
+          format: 'PDF',
+          selectedTruckId: 'vehicle-1',
+          selectedTruckPlate: 'ABC123',
+        }),
+      }),
+    );
+    expect(
+      JSON.stringify(prisma.maintenanceCostingExportAudit.create.mock.calls[0]),
+    ).not.toMatch(/partsCost|laborCost|totalCost/);
   });
 });

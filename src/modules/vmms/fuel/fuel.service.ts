@@ -89,6 +89,7 @@ type FuelImportSaveRow = {
   errors: string[];
   status: 'READY' | 'SAVED' | 'ERROR';
   fillUpId?: string;
+  totalCost?: number;
 };
 
 function importText(value: unknown): string {
@@ -366,7 +367,7 @@ export class FuelService {
   ) {
     this.require(actor, 'OPERATIONS');
     const receiptImage = receiptFile
-      ? validateFuelReceiptFile(receiptFile)
+      ? await validateFuelReceiptFile(receiptFile)
       : undefined;
     const vehicle = await this.prisma.vehicle.findFirst({
       where: { id: dto.vehicleId, deletedAt: null, isActive: true },
@@ -920,6 +921,7 @@ export class FuelService {
         );
         row.status = 'SAVED';
         row.fillUpId = entry.id;
+        row.totalCost = entry.totalCost;
       } catch (error) {
         row.status = 'ERROR';
         row.errors.push(importHttpError(error));
@@ -1114,28 +1116,48 @@ export class FuelService {
   async anomalies(actor: FuelActor) {
     this.require(actor, 'ADMIN', 'OPERATIONS', 'CHIEF_MECHANIC');
     const rows = await this.prisma.fuelAnomaly.findMany({
-      include: {
+      select: {
+        id: true,
+        fillUpId: true,
+        vehicleId: true,
+        efficiency: true,
+        rollingAverage: true,
+        status: true,
+        note: true,
+        acknowledgedAt: true,
+        createdAt: true,
+        fillUp: {
+          select: {
+            id: true,
+            entryDate: true,
+            odometer: true,
+            isVoided: true,
+            stationNameSnapshot: true,
+            station: { select: { name: true } },
+            repairReferral: {
+              select: {
+                id: true,
+                status: true,
+                repairTicketNumber: true,
+                repairStatus: true,
+                outcomeReason: true,
+                lastErrorCode: true,
+                createdAt: true,
+              },
+            },
+          },
+        },
         vehicle: true,
         attachments: {
           select: { id: true, name: true, contentType: true, createdAt: true },
         },
-        fillUp: { include: { station: true } },
       },
       orderBy: { createdAt: 'desc' },
     });
     const now = Date.now();
     return rows.map((a) => ({
       ...a,
-      fillUp: a.fillUp
-        ? {
-            ...a.fillUp,
-            station: {
-              ...(a.fillUp.station ?? {}),
-              name:
-                a.fillUp.stationNameSnapshot ?? a.fillUp.station?.name,
-            },
-          }
-        : a.fillUp,
+      repairReferral: a.fillUp?.repairReferral ?? null,
       efficiency: money(a.efficiency),
       rollingAverage: money(a.rollingAverage),
       severity:

@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import * as XLSX from 'xlsx';
 import { PrismaService } from '../../../shared/prisma.service';
 import { BmsAvailabilityService } from '../integrations/bms/bms-availability.service';
@@ -8,9 +8,11 @@ import { VehiclesService } from './vehicles.service';
 describe('VehiclesService garage branch assignment', () => {
   const prisma = {
     $transaction: jest.fn(),
+    $executeRaw: jest.fn(),
     $queryRaw: jest.fn(),
     garage: { findFirst: jest.fn(), findMany: jest.fn() },
     maintenanceSchedule: { findMany: jest.fn(), updateMany: jest.fn() },
+    vrmsRepairIntegrationState: { findFirst: jest.fn() },
     vehicleAuditLog: { createMany: jest.fn(), findMany: jest.fn() },
     vehicle: {
       findMany: jest.fn(),
@@ -42,8 +44,10 @@ describe('VehiclesService garage branch assignment', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     prisma.$transaction.mockImplementation((callback) => callback(prisma));
+    prisma.$executeRaw.mockResolvedValue(0);
     prisma.$queryRaw.mockResolvedValue(undefined);
     prisma.maintenanceSchedule.findMany.mockResolvedValue([]);
+    prisma.vrmsRepairIntegrationState.findFirst.mockResolvedValue(null);
     availability.recordStatusChange.mockResolvedValue(undefined);
     fleetChanges.recordChange.mockResolvedValue(undefined);
   });
@@ -204,6 +208,95 @@ describe('VehiclesService garage branch assignment', () => {
         },
       ],
     });
+  });
+
+  it('prevents deactivation while the vehicle has an open VRMS repair', async () => {
+    prisma.vehicle.findUnique.mockResolvedValue({
+      plateNumber: 'ABC 1234',
+      status: 'UNDER_REPAIR',
+      isActive: true,
+    });
+    prisma.vrmsRepairIntegrationState.findFirst.mockResolvedValue({
+      repairTicketId: 'ticket-1',
+      repairTicketNumber: 'VR-2046-0012',
+    });
+
+    await expect(
+      service.update(
+        'vehicle-1',
+        { isActive: false },
+        { sub: 'operations-user', email: 'operations@example.test' },
+      ),
+    ).rejects.toThrow(
+      new ConflictException(
+        'Cannot deactivate this truck while VRMS repair ticket VR-2046-0012 is open.',
+      ),
+    );
+
+    expect(prisma.vrmsRepairIntegrationState.findFirst).toHaveBeenCalledWith({
+      where: {
+        vehicleId: 'vehicle-1',
+        status: 'OPEN',
+      },
+      select: { repairTicketId: true, repairTicketNumber: true },
+    });
+    expect(prisma.vehicle.update).not.toHaveBeenCalled();
+  });
+
+  it('prevents deleting an active vehicle while its VRMS repair is open', async () => {
+    prisma.vehicle.findUnique.mockResolvedValue({
+      id: 'vehicle-1',
+      isActive: true,
+      deletedAt: null,
+    });
+    prisma.vrmsRepairIntegrationState.findFirst.mockResolvedValue({
+      repairTicketId: 'ticket-1',
+      repairTicketNumber: 'VR-2046-0012',
+    });
+
+    await expect(service.delete('vehicle-1')).rejects.toThrow(
+      'VRMS repair ticket VR-2046-0012 is open.',
+    );
+
+    expect(prisma.vehicle.update).not.toHaveBeenCalled();
+    expect(fleetChanges.recordChange).not.toHaveBeenCalled();
+  });
+
+  it('allows deactivation when there is no open VRMS repair', async () => {
+    const previous = {
+      plateNumber: 'ABC 1234',
+      make: 'Isuzu',
+      model: 'Elf',
+      year: 2022,
+      engineType: 'Diesel',
+      truckSizeCategory: 'Light Duty',
+      capacity: 0,
+      odometer: 100,
+      garageId: 'garage-1',
+      status: 'AVAILABLE',
+      isActive: true,
+    };
+    prisma.vehicle.findUnique.mockResolvedValue(previous);
+    prisma.vehicle.update.mockImplementation(({ data }) => ({
+      ...previous,
+      ...data,
+      garage: { id: 'garage-1', name: 'Marikina' },
+    }));
+
+    await service.update(
+      'vehicle-1',
+      { isActive: false },
+      { sub: 'operations-user', email: 'operations@example.test' },
+    );
+
+    expect(prisma.vrmsRepairIntegrationState.findFirst).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(prisma.vehicle.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ isActive: false }),
+      }),
+    );
   });
 
   it('updates and audits the master odometer atomically', async () => {

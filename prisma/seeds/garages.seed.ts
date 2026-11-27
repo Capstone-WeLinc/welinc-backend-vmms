@@ -1,7 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 
 export async function seedGarages(prisma: PrismaClient) {
-  console.log('Creating garages...');
+  console.log('Ensuring garages...');
 
   const garages = await Promise.all([
     prisma.garage.upsert({
@@ -22,7 +22,7 @@ export async function seedGarages(prisma: PrismaClient) {
   ]);
 
   console.log(
-    `  Created ${garages.length} garages: ${garages.map((g) => g.name).join(', ')}\n`,
+    `  Processed ${garages.length} garages: ${garages.map((g) => g.name).join(', ')}\n`,
   );
   return garages;
 }

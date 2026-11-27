@@ -74,6 +74,7 @@ export class AuditController {
       fuel,
       cancellations,
       costing,
+      costingExports,
       editUnlocks,
       edits,
     ] = await Promise.all([
@@ -126,6 +127,19 @@ export class AuditController {
           previousThreshold: true,
           newThreshold: true,
           changedAt: true,
+        },
+      }),
+      this.prisma.maintenanceCostingExportAudit.findMany({
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take,
+        select: {
+          id: true,
+          actorEmail: true,
+          format: true,
+          fromDate: true,
+          toDate: true,
+          selectedTruckPlate: true,
+          createdAt: true,
         },
       }),
       this.prisma.maintenanceLogEditUnlock.findMany({
@@ -212,6 +226,26 @@ export class AuditController {
             category: 'maintenance_costing',
             previousValue: row.previousThreshold?.toString() ?? null,
             newValue: row.newThreshold.toString(),
+          },
+        ),
+      ),
+      ...costingExports.map((row) =>
+        record(
+          row.id,
+          row.actorEmail,
+          'COSTING_EXPORTED',
+          `${row.format} maintenance costing report`,
+          row.createdAt,
+          {
+            category: 'maintenance_costing',
+            details: details(
+              `${row.fromDate.toISOString().slice(0, 10)} to ${row.toDate
+                .toISOString()
+                .slice(0, 10)}`,
+              row.selectedTruckPlate
+                ? `Truck ${row.selectedTruckPlate}`
+                : 'Fleet',
+            ),
           },
         ),
       ),

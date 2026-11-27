@@ -4,6 +4,8 @@ import {
   Controller,
   Delete,
   Get,
+  HttpException,
+  HttpStatus,
   Param,
   Patch,
   Post,
@@ -25,9 +27,11 @@ import { RoleSystem, Roles } from '../../../auth/decorators/roles.decorator';
 import { FuelActor, FuelService } from './fuel.service';
 import {
   MAX_FUEL_ANOMALY_ATTACHMENT_BYTES,
+  MAX_FUEL_RECEIPT_ATTEMPTS_PER_ACTOR_PER_MINUTE,
   MAX_FUEL_RECEIPT_BYTES,
 } from './fuel.constants';
 import { FuelReceiptScannerService } from './fuel-receipt-scanner.service';
+import { VrmsRepairReferralsService } from '../integrations/vrms/vrms-repair-referrals.service';
 import type { FuelReceiptFile } from './fuel-receipt-file';
 import {
   FuelAcknowledgmentDto,
@@ -89,9 +93,12 @@ function fuelReceiptUploadInterceptor() {
 @UseGuards(JwtAuthGuard, RolesGuard)
 @RoleSystem(SystemType.VMMS)
 export class FuelController {
+  private readonly receiptUploadTimes = new Map<string, number[]>();
+
   constructor(
     private readonly fuel: FuelService,
     private readonly receiptScanner: FuelReceiptScannerService,
+    private readonly repairReferrals: VrmsRepairReferralsService,
   ) {}
 
   @Roles(UserRole.ADMIN, UserRole.OPERATIONS)
@@ -232,7 +239,26 @@ export class FuelController {
       throw new BadRequestException(
         'Select a receipt image to save with this fuel entry.',
       );
+    this.reserveReceiptUpload(req.user.sub);
     return this.fuel.create(dto, req.user, file);
+  }
+
+  private reserveReceiptUpload(actorId: string) {
+    const now = Date.now();
+    for (const [id, timestamps] of this.receiptUploadTimes) {
+      const recent = timestamps.filter((timestamp) => now - timestamp < 60_000);
+      if (recent.length) this.receiptUploadTimes.set(id, recent);
+      else this.receiptUploadTimes.delete(id);
+    }
+
+    const actorUploads = this.receiptUploadTimes.get(actorId) ?? [];
+    if (actorUploads.length >= MAX_FUEL_RECEIPT_ATTEMPTS_PER_ACTOR_PER_MINUTE)
+      throw new HttpException(
+        'Too many receipt uploads. Try again in a minute.',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    actorUploads.push(now);
+    this.receiptUploadTimes.set(actorId, actorUploads);
   }
 
   @Roles(UserRole.OPERATIONS)
@@ -334,6 +360,13 @@ export class FuelController {
   ) {
     return this.fuel.acknowledgeAnomaly(id, body.remark, req.user);
   }
+
+  @Roles(UserRole.ADMIN, UserRole.CHIEF_MECHANIC)
+  @Post('anomalies/:id/repair-referrals')
+  referAnomalyForRepair(@Param('id', ParseUUIDPipe) id: string) {
+    return this.repairReferrals.createFromFuelAnomaly(id);
+  }
+
   @Roles(UserRole.ADMIN, UserRole.OPERATIONS)
   @Get('report')
   report(

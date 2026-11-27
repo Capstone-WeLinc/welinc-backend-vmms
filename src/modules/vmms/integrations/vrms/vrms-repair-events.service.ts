@@ -9,9 +9,11 @@ import {
   MaintenanceStatus,
   Prisma,
   VehicleStatus,
+  VmmsRepairReferralSource,
   VmmsRepairReferralStatus,
   VrmsRepairEventType,
   VrmsRepairIntegrationStatus,
+  VrmsRetirementRequestStatus,
 } from '@prisma/client';
 import { PrismaService } from '../../../../shared/prisma.service';
 import { MaintenanceSchedulesService } from '../../maintenance-schedules/maintenance-schedules.service';
@@ -87,24 +89,25 @@ export class VrmsRepairEventsService {
       );
     }
     if (
+      event.eventType !== VrmsRepairEventType.OPENED &&
       event.eventType !== VrmsRepairEventType.COMPLETED &&
       event.serviceOdometerReading !== undefined
     ) {
       throw new BadRequestException(
-        'serviceOdometerReading is only valid for a completed repair.',
+        'serviceOdometerReading is only valid when a repair opens or completes.',
       );
     }
 
     try {
       return await this.prisma.$transaction(
         async (tx) => {
-          await tx.$queryRaw`
+          await tx.$executeRaw`
           SELECT pg_advisory_xact_lock(hashtextextended(${`event:${eventId}`}, 0))
         `;
-          await tx.$queryRaw`
+          await tx.$executeRaw`
           SELECT pg_advisory_xact_lock(hashtextextended(${`ticket:${repairTicketId}`}, 0))
         `;
-          await tx.$queryRaw`
+          await tx.$executeRaw`
           SELECT pg_advisory_xact_lock(hashtextextended(${`vehicle:${vehicleId}`}, 0))
         `;
 
@@ -142,22 +145,6 @@ export class VrmsRepairEventsService {
             });
           }
 
-          const vehicle = await tx.vehicle.findFirst({
-            where: { id: vehicleId, isActive: true, deletedAt: null },
-            select: { id: true, plateNumber: true },
-          });
-          if (!vehicle) {
-            throw new NotFoundException({
-              code: 'VEHICLE_NOT_FOUND',
-              message: 'The VMMS vehicle was not found.',
-            });
-          }
-          const outsideShopName = await this.resolveOutsideShopName(
-            tx,
-            repairStatus,
-            event.outsideShopName,
-          );
-
           const state = await tx.vrmsRepairIntegrationState.findUnique({
             where: { repairTicketId },
           });
@@ -175,6 +162,26 @@ export class VrmsRepairEventsService {
               message: 'A repair ticket cannot change its VMMS vehicle.',
             });
           }
+          if (state && event.eventVersion < state.lastEventVersion) {
+            return { accepted: true, duplicate: true };
+          }
+
+          const vehicle = await tx.vehicle.findFirst({
+            where: { id: vehicleId, isActive: true, deletedAt: null },
+            select: { id: true, plateNumber: true },
+          });
+          if (!vehicle) {
+            throw new NotFoundException({
+              code: 'VEHICLE_NOT_FOUND',
+              message: 'The VMMS vehicle was not found.',
+            });
+          }
+          const outsideShopName = await this.resolveOutsideShopName(
+            tx,
+            repairStatus,
+            event.outsideShopName,
+          );
+          let newlyLinkedScheduleIds = scheduleIds;
 
           if (!state) {
             if (
@@ -185,14 +192,30 @@ export class VrmsRepairEventsService {
                 'The first event for a repair ticket must be OPENED version 1.',
               );
             }
-            const otherOpen = await tx.vrmsRepairIntegrationState.findFirst({
+            const openRepairs = await tx.vrmsRepairIntegrationState.findMany({
               where: {
                 vehicleId,
                 status: VrmsRepairIntegrationStatus.OPEN,
               },
               select: { repairTicketId: true },
             });
-            if (otherOpen) {
+            const retirementHandoff =
+              openRepairs.length === 1
+                ? await tx.vrmsRetirementRequest.findUnique({
+                    where: {
+                      repairTicketId: openRepairs[0].repairTicketId,
+                    },
+                    select: { vehicleId: true, status: true },
+                  })
+                : null;
+            if (
+              openRepairs.length > 0 &&
+              (openRepairs.length !== 1 ||
+                !retirementHandoff ||
+                retirementHandoff.vehicleId !== vehicleId ||
+                retirementHandoff.status !==
+                  VrmsRetirementRequestStatus.DECLINED)
+            ) {
               throw this.eventConflict(
                 'The VMMS vehicle already has an open VRMS repair.',
               );
@@ -206,10 +229,8 @@ export class VrmsRepairEventsService {
                 'A repair ticket can only be opened once.',
               );
             }
-            if (event.eventVersion !== state.lastEventVersion + 1) {
-              throw this.eventConflict(
-                'Repair event versions must arrive in sequence.',
-              );
+            if (event.eventVersion === state.lastEventVersion) {
+              throw this.eventConflict('Repair event versions must increase.');
             }
             if (occurredAt.getTime() < state.lastOccurredAt.getTime()) {
               throw this.eventConflict(
@@ -224,6 +245,9 @@ export class VrmsRepairEventsService {
                 'Accepted VMMS schedule links cannot be removed.',
               );
             }
+            newlyLinkedScheduleIds = scheduleIds.filter(
+              (id) => !previousIds.includes(id),
+            );
             const previousReferralIds = sortedIds(
               jsonStringArray(state.acceptedReferralIds),
             );
@@ -236,12 +260,16 @@ export class VrmsRepairEventsService {
                 'Accepted VMMS referrals cannot be removed from a repair ticket.',
               );
             }
+            const newlyAcceptedReferralIds = acceptedReferralIds.filter(
+              (id) => !previousReferralIds.includes(id),
+            );
             if (
               event.eventType === VrmsRepairEventType.LINKS_UPDATED &&
-              previousIds.length === scheduleIds.length
+              newlyLinkedScheduleIds.length === 0 &&
+              newlyAcceptedReferralIds.length === 0
             ) {
               throw this.eventConflict(
-                'LINKS_UPDATED must add at least one VMMS schedule.',
+                'LINKS_UPDATED must add at least one VMMS schedule or referral.',
               );
             }
           }
@@ -250,6 +278,7 @@ export class VrmsRepairEventsService {
             tx,
             scheduleIds,
             vehicle.plateNumber,
+            newlyLinkedScheduleIds,
           );
           await this.acceptLinkedReferrals(
             tx,
@@ -335,6 +364,20 @@ export class VrmsRepairEventsService {
             },
           });
 
+          if (
+            event.eventType === VrmsRepairEventType.COMPLETED &&
+            event.serviceOdometerReading !== undefined
+          ) {
+            await tx.vrmsRepairOdometerReview.create({
+              data: {
+                eventId,
+                vehicleId,
+                serviceOdometerReading: event.serviceOdometerReading,
+                occurredAt,
+              },
+            });
+          }
+
           return {
             accepted: true,
             duplicate: false,
@@ -373,10 +416,10 @@ export class VrmsRepairEventsService {
 
     return this.prisma.$transaction(
       async (tx) => {
-        await tx.$queryRaw`
+        await tx.$executeRaw`
           SELECT pg_advisory_xact_lock(hashtextextended(${`referral-event:${eventId}`}, 0))
         `;
-        await tx.$queryRaw`
+        await tx.$executeRaw`
           SELECT pg_advisory_xact_lock(hashtextextended(${`referral:${referralId}`}, 0))
         `;
 
@@ -416,61 +459,80 @@ export class VrmsRepairEventsService {
             'Only an unaccepted referral can be rejected.',
           );
         }
-        const latestReferral = await tx.vmmsRepairReferral.findFirst({
-          where: { maintenanceScheduleId: referral.maintenanceScheduleId },
-          orderBy: { createdAt: 'desc' },
-          select: { id: true },
-        });
-        if (latestReferral?.id !== referral.id) {
-          throw this.eventConflict(
-            'A superseded referral cannot change the current work order.',
-          );
-        }
+        if (referral.source === VmmsRepairReferralSource.FUEL_ANOMALY) {
+          if (referral.maintenanceScheduleId || !referral.fuelTransactionId) {
+            throw this.eventConflict(
+              'The fuel-anomaly referral has invalid source links.',
+            );
+          }
+        } else {
+          if (!referral.maintenanceScheduleId) {
+            throw this.eventConflict(
+              'The inspection referral has no maintenance schedule.',
+            );
+          }
+          const latestReferral = await tx.vmmsRepairReferral.findFirst({
+            where: { maintenanceScheduleId: referral.maintenanceScheduleId },
+            orderBy: { createdAt: 'desc' },
+            select: { id: true },
+          });
+          if (latestReferral?.id !== referral.id) {
+            throw this.eventConflict(
+              'A superseded referral cannot change the current work order.',
+            );
+          }
 
-        const schedule = await tx.maintenanceSchedule.findUnique({
-          where: { id: referral.maintenanceScheduleId },
-        });
-        if (!schedule || schedule.vehicleId !== (await tx.vehicle.findUnique({
-          where: { id: referral.vehicleId },
-          select: { plateNumber: true },
-        }))?.plateNumber) {
-          throw this.eventConflict(
-            'The referral no longer matches its VMMS work order and vehicle.',
-          );
-        }
-        const progress = isRecord(schedule.workOrderProgress)
-          ? { ...schedule.workOrderProgress }
-          : {};
-        const overdueInProgress =
-          schedule.status === MaintenanceStatus.OVERDUE &&
-          progress['overdueFromStatus'] === MaintenanceStatus.IN_PROGRESS;
-        if (
-          (schedule.status !== MaintenanceStatus.IN_PROGRESS &&
-            !overdueInProgress) ||
-          schedule.approvalStatus !== MaintenanceApprovalStatus.FOR_REPAIR
-        ) {
-          throw this.eventConflict(
-            'The work order is no longer waiting for this repair referral.',
-          );
-        }
-        delete progress['overdueFromStatus'];
-        progress['vrmsRejectionReason'] = reason;
-        progress['rejectionRemarks'] = reason;
-        const updatedSchedule = await tx.maintenanceSchedule.updateMany({
-          where: {
-            id: schedule.id,
-            updatedAt: schedule.updatedAt,
-          },
-          data: {
-            status: MaintenanceStatus.IN_PROGRESS,
-            approvalStatus: MaintenanceApprovalStatus.REJECTED,
-            workOrderProgress: progress,
-          },
-        });
-        if (updatedSchedule.count !== 1) {
-          throw this.eventConflict(
-            'The work order changed while applying the referral outcome.',
-          );
+          const schedule = await tx.maintenanceSchedule.findUnique({
+            where: { id: referral.maintenanceScheduleId },
+          });
+          if (
+            !schedule ||
+            schedule.vehicleId !==
+              (
+                await tx.vehicle.findUnique({
+                  where: { id: referral.vehicleId },
+                  select: { plateNumber: true },
+                })
+              )?.plateNumber
+          ) {
+            throw this.eventConflict(
+              'The referral no longer matches its VMMS work order and vehicle.',
+            );
+          }
+          const progress = isRecord(schedule.workOrderProgress)
+            ? { ...schedule.workOrderProgress }
+            : {};
+          const overdueInProgress =
+            schedule.status === MaintenanceStatus.OVERDUE &&
+            progress['overdueFromStatus'] === MaintenanceStatus.IN_PROGRESS;
+          if (
+            (schedule.status !== MaintenanceStatus.IN_PROGRESS &&
+              !overdueInProgress) ||
+            schedule.approvalStatus !== MaintenanceApprovalStatus.FOR_REPAIR
+          ) {
+            throw this.eventConflict(
+              'The work order is no longer waiting for this repair referral.',
+            );
+          }
+          delete progress['overdueFromStatus'];
+          progress['vrmsRejectionReason'] = reason;
+          progress['rejectionRemarks'] = reason;
+          const updatedSchedule = await tx.maintenanceSchedule.updateMany({
+            where: {
+              id: schedule.id,
+              updatedAt: schedule.updatedAt,
+            },
+            data: {
+              status: MaintenanceStatus.IN_PROGRESS,
+              approvalStatus: MaintenanceApprovalStatus.REJECTED,
+              workOrderProgress: progress,
+            },
+          });
+          if (updatedSchedule.count !== 1) {
+            throw this.eventConflict(
+              'The work order changed while applying the referral outcome.',
+            );
+          }
         }
 
         await tx.vmmsRepairReferral.update({
@@ -504,6 +566,7 @@ export class VrmsRepairEventsService {
     tx: Prisma.TransactionClient,
     scheduleIds: string[],
     vehiclePlateNumber: string,
+    newlyLinkedScheduleIds: string[],
   ) {
     if (!scheduleIds.length) return [];
 
@@ -522,15 +585,16 @@ export class VrmsRepairEventsService {
           'Every linked VMMS schedule must belong to the repair vehicle.',
         );
       }
+      const isInProgress =
+        schedule.status === MaintenanceStatus.IN_PROGRESS ||
+        (schedule.status === MaintenanceStatus.OVERDUE &&
+          isRecord(schedule.workOrderProgress) &&
+          schedule.workOrderProgress['overdueFromStatus'] ===
+            MaintenanceStatus.IN_PROGRESS);
       if (
-        (schedule.status !== MaintenanceStatus.IN_PROGRESS &&
-          !(
-            schedule.status === MaintenanceStatus.OVERDUE &&
-            isRecord(schedule.workOrderProgress) &&
-            schedule.workOrderProgress['overdueFromStatus'] ===
-              MaintenanceStatus.IN_PROGRESS
-          )) ||
-        schedule.approvalStatus !== MaintenanceApprovalStatus.FOR_REPAIR
+        newlyLinkedScheduleIds.includes(schedule.id) &&
+        (!isInProgress ||
+          schedule.approvalStatus !== MaintenanceApprovalStatus.FOR_REPAIR)
       ) {
         throw this.eventConflict(
           'Every linked VMMS schedule must be In Progress or overdue In Progress / For Repair.',
@@ -594,12 +658,32 @@ export class VrmsRepairEventsService {
       );
     }
     for (const referral of referrals) {
-      if (
-        referral.vehicleId !== vehicleId ||
+      if (referral.vehicleId !== vehicleId) {
+        throw this.eventConflict(
+          'An accepted referral must match the repair vehicle.',
+        );
+      }
+      if (referral.source === VmmsRepairReferralSource.FUEL_ANOMALY) {
+        if (referral.maintenanceScheduleId || !referral.fuelTransactionId) {
+          throw this.eventConflict(
+            'The fuel-anomaly referral has invalid source links.',
+          );
+        }
+        const fillUp = await tx.fuelFillUp.findUnique({
+          where: { id: referral.fuelTransactionId },
+          select: { vehicleId: true },
+        });
+        if (!fillUp || fillUp.vehicleId !== vehicleId) {
+          throw this.eventConflict(
+            'The fuel-anomaly referral no longer matches its vehicle.',
+          );
+        }
+      } else if (
+        !referral.maintenanceScheduleId ||
         !scheduleIds.includes(referral.maintenanceScheduleId)
       ) {
         throw this.eventConflict(
-          'An accepted referral must match the repair vehicle and linked work-order set.',
+          'An inspection referral must match the repair vehicle and linked work-order set.',
         );
       }
       if (
@@ -633,6 +717,41 @@ export class VrmsRepairEventsService {
         },
       });
     }
+  }
+
+  async closeForRetirement(
+    tx: Prisma.TransactionClient,
+    repairTicketId: string,
+    vehicleId: string,
+  ): Promise<void> {
+    const state = await tx.vrmsRepairIntegrationState.findUnique({
+      where: { repairTicketId },
+      include: {
+        vehicle: {
+          select: { plateNumber: true, isActive: true, deletedAt: true },
+        },
+      },
+    });
+    if (
+      !state ||
+      state.vehicleId !== vehicleId ||
+      state.status !== VrmsRepairIntegrationStatus.OPEN ||
+      !state.vehicle.isActive ||
+      state.vehicle.deletedAt
+    ) {
+      throw this.eventConflict(
+        'The retirement request no longer matches an open repair on an active vehicle.',
+      );
+    }
+
+    await tx.vrmsRepairIntegrationState.update({
+      where: { repairTicketId },
+      data: {
+        status: VrmsRepairIntegrationStatus.COMPLETED,
+        repairStatus: 'CLOSED',
+      },
+    });
+    await this.recomputeVehicleStatus(tx, vehicleId, state.vehicle.plateNumber);
   }
 
   private async recomputeVehicleStatus(

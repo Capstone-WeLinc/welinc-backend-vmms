@@ -4,9 +4,11 @@ import {
   MaintenanceStatus,
   Prisma,
 } from '@prisma/client';
+import * as ExcelJS from 'exceljs';
 import { PrismaService } from '../../../shared/prisma.service';
 
 export type MaintenanceCostingActor = { sub: string; email: string };
+type MaintenanceCostingExportFormat = 'PDF' | 'XLSX';
 
 type CostSchedule = {
   id: string;
@@ -19,6 +21,18 @@ type CostSchedule = {
   laborCost: Prisma.Decimal | null;
   totalCost: Prisma.Decimal | null;
   workOrderProgress: Prisma.JsonValue | null;
+};
+
+type CostRecord = {
+  id: string;
+  workOrderNumber: string;
+  title: string;
+  type: string;
+  completedAt: Date;
+  mechanicName: string;
+  partsCost: number | null;
+  laborCost: number | null;
+  totalCost: number;
 };
 
 type DecimalLike = { toNumber(): number };
@@ -170,6 +184,19 @@ function monthOffset(monthKey: string, offset: number) {
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
+function manilaTimestamp(date: Date) {
+  return new Intl.DateTimeFormat('en-PH', {
+    timeZone: 'Asia/Manila',
+    dateStyle: 'medium',
+    timeStyle: 'medium',
+  }).format(date);
+}
+
+function manilaDateString(date: Date) {
+  const { year, month, day } = manilaDateParts(date);
+  return dateKey(year, month, day);
+}
+
 @Injectable()
 export class MaintenanceCostingService {
   constructor(private readonly prisma: PrismaService) {}
@@ -237,7 +264,7 @@ export class MaintenanceCostingService {
     );
     const totals = new Map<string, number>();
     const monthlyTotals = new Map<string, Map<string, number>>();
-    const recordsByVehicle = new Map<string, Array<Record<string, unknown>>>();
+    const recordsByVehicle = new Map<string, CostRecord[]>();
     for (const schedule of schedules as CostSchedule[]) {
       const vehicle = vehicleByPlate.get(schedule.vehicleId);
       if (!vehicle || !schedule.completedAt) continue;
@@ -368,6 +395,190 @@ export class MaintenanceCostingService {
         threshold: decimalNumber(saved.threshold) ?? Number(value.toFixed(2)),
         updatedAt: saved.updatedAt,
       };
+    });
+  }
+
+  async exportXlsx(
+    from: string,
+    to: string,
+    selectedTruckId: string | undefined,
+    actor: MaintenanceCostingActor,
+  ): Promise<Buffer> {
+    const dashboard = await this.getDashboard(from, to);
+    const trucks = this.scopeTrucks(dashboard.trucks, selectedTruckId);
+    const generatedAt = new Date();
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'WeLinc VMMS';
+    workbook.created = generatedAt;
+
+    const summary = workbook.addWorksheet('Cost Summary');
+    summary.addRow(['Maintenance Costing Summary']);
+    summary.addRow(['Period', dashboard.period.from, 'to', dashboard.period.to]);
+    summary.addRow(['Generated', manilaTimestamp(generatedAt)]);
+    summary.addRow([
+      'Garage attribution',
+      'Current vehicle assignment; not historical at completion',
+    ]);
+    summary.addRow([]);
+    summary.addRow([
+      'Truck Plate',
+      'Make',
+      'Model',
+      'Current Garage',
+      'Completed Cost (PHP)',
+      'Completed Records',
+      'High-Cost Flag',
+      'Recurring High-Cost Candidate',
+    ]);
+    for (const truck of trucks) {
+      summary.addRow([
+        truck.plateNumber,
+        truck.make ?? '',
+        truck.model,
+        truck.garageName ?? 'Unclassified',
+        truck.totalCost,
+        truck.records.length,
+        truck.flagged ? 'Yes' : 'No',
+        truck.recurringHighCost ? 'Yes' : 'No',
+      ]);
+    }
+    const summaryTotal =
+      Math.round(trucks.reduce((sum, truck) => sum + truck.totalCost, 0) * 100) /
+      100;
+    summary.addRow([]);
+    summary.addRow([
+      'Total',
+      '',
+      '',
+      '',
+      summaryTotal,
+      trucks.reduce((sum, truck) => sum + truck.records.length, 0),
+    ]);
+    summary.getRow(6).font = { bold: true };
+    summary.getColumn(5).numFmt = '"₱"#,##0.00';
+    summary.getColumn(5).width = 22;
+    summary.columns.forEach((column) => {
+      column.width = Math.max(column.width ?? 12, 16);
+    });
+
+    const details = workbook.addWorksheet('Completed Work');
+    details.addRow(['Maintenance Costing — Completed Work']);
+    details.addRow(['Period', dashboard.period.from, 'to', dashboard.period.to]);
+    details.addRow(['Generated', manilaTimestamp(generatedAt)]);
+    details.addRow([
+      'Garage attribution',
+      'Current vehicle assignment; not historical at completion',
+    ]);
+    details.addRow([]);
+    details.addRow([
+      'Truck Plate',
+      'Make',
+      'Model',
+      'Current Garage',
+      'Work Order',
+      'Completed Date',
+      'Maintenance Type',
+      'Mechanic',
+      'Parts Cost (PHP)',
+      'Labor Cost (PHP)',
+      'Total Cost (PHP)',
+    ]);
+    for (const truck of trucks) {
+      for (const record of truck.records) {
+        details.addRow([
+          truck.plateNumber,
+          truck.make ?? '',
+          truck.model,
+          truck.garageName ?? 'Unclassified',
+          record.workOrderNumber,
+          record.completedAt
+            ? manilaDateString(record.completedAt)
+            : '',
+          record.type?.trim() || 'Unclassified',
+          record.mechanicName,
+          record.partsCost ?? '',
+          record.laborCost ?? '',
+          record.totalCost,
+        ]);
+      }
+    }
+    details.getRow(6).font = { bold: true };
+    details.getColumn(9).numFmt = '"₱"#,##0.00';
+    details.getColumn(10).numFmt = '"₱"#,##0.00';
+    details.getColumn(11).numFmt = '"₱"#,##0.00';
+    details.columns.forEach((column) => {
+      column.width = Math.max(column.width ?? 12, 16);
+    });
+
+    const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+    await this.recordExport(
+      'XLSX',
+      dashboard.period.from,
+      dashboard.period.to,
+      trucks.length === 1 && selectedTruckId
+        ? trucks[0].vehicleId
+        : undefined,
+      actor,
+      trucks.length === 1 && selectedTruckId
+        ? trucks[0].plateNumber
+        : undefined,
+    );
+    return buffer;
+  }
+
+  async auditPdfExport(
+    fromInput: string,
+    toInput: string,
+    selectedTruckId: string | undefined,
+    actor: MaintenanceCostingActor,
+  ) {
+    const dashboard = await this.getDashboard(fromInput, toInput);
+    const trucks = this.scopeTrucks(dashboard.trucks, selectedTruckId);
+    await this.recordExport(
+      'PDF',
+      dashboard.period.from,
+      dashboard.period.to,
+      trucks.length === 1 && selectedTruckId
+        ? trucks[0].vehicleId
+        : undefined,
+      actor,
+      trucks.length === 1 && selectedTruckId
+        ? trucks[0].plateNumber
+        : undefined,
+    );
+    return { recorded: true };
+  }
+
+  private scopeTrucks<T extends { vehicleId: string }>(
+    trucks: T[],
+    selectedTruckId?: string,
+  ): T[] {
+    if (!selectedTruckId) return trucks;
+    const truck = trucks.find((item) => item.vehicleId === selectedTruckId);
+    if (!truck) {
+      throw new BadRequestException('Selected truck is not available.');
+    }
+    return [truck];
+  }
+
+  private async recordExport(
+    format: MaintenanceCostingExportFormat,
+    from: string,
+    to: string,
+    selectedTruckId: string | undefined,
+    actor: MaintenanceCostingActor,
+    selectedTruckPlate?: string,
+  ) {
+    await this.prisma.maintenanceCostingExportAudit.create({
+      data: {
+        actorId: actor.sub,
+        actorEmail: actor.email,
+        format,
+        fromDate: parseDateOnly(from, 'from'),
+        toDate: parseDateOnly(to, 'to'),
+        selectedTruckId: selectedTruckId ?? null,
+        selectedTruckPlate: selectedTruckPlate ?? null,
+      },
     });
   }
 }

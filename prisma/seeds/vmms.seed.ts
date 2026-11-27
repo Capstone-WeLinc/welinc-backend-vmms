@@ -1,33 +1,82 @@
 import { stateForStorage } from '../../src/modules/vmms/maintenance-schedules/work-order-state';
-import { addTimeInterval, getTimeInterval } from '../../src/modules/vmms/maintenance-schedules/time-interval';
 import {
+  addTimeInterval,
+  getTimeInterval,
+} from '../../src/modules/vmms/maintenance-schedules/time-interval';
+import {
+  Prisma,
   PrismaClient,
   MaintenanceStatus,
+  MaintenanceApprovalStatus,
+  MaintenancePriority,
   AccountType,
   MaintenanceTriggerType,
   MaintenanceIntervalType,
 } from '@prisma/client';
 import { seedId } from './seed-id';
 
+function reconcileSeedOdometerReading(
+  fixtureReading: number | null | undefined,
+  vehicleOdometer: number,
+): number | null | undefined {
+  return fixtureReading == null
+    ? fixtureReading
+    : Math.min(fixtureReading, vehicleOdometer);
+}
+
 export async function seedVmms(prisma: PrismaClient) {
-  console.log('Creating checklist templates for VMMS...');
-  if (await prisma.maintenanceSchedule.count()) {
-    console.log('  Existing schedules found; preserving all VMMS seed rows.\n');
-    return;
-  }
+  console.log('Ensuring checklist templates for VMMS...');
 
   // Fetch relations from DB
   const garages = await prisma.garage.findMany({
     where: { isActive: true, deletedAt: null },
     orderBy: { name: 'asc' },
   });
-  const seededVehiclePlates = ['NDG 5821', 'CAK 9043', 'WOB 2947', 'PXW 382', 'TGD 908', 'NRE 471'];
-  const vehicleRows = await prisma.vehicle.findMany({ where: { plateNumber: { in: seededVehiclePlates } } });
-  const vehiclesByPlate = new Map(vehicleRows.map((vehicle) => [vehicle.plateNumber, vehicle]));
-  const missingPlate = seededVehiclePlates.find((plate) => !vehiclesByPlate.has(plate));
-  if (missingPlate) throw new Error(`Cannot seed maintenance schedules: sample vehicle "${missingPlate}" is missing.`);
-  const vehicles = seededVehiclePlates.map((plate) => vehiclesByPlate.get(plate)!);
-  const seededMechanicNames = ['Juan dela Cruz', 'Pedro Santos', 'Rommel Cruz', 'Isabel Reyes', 'Carl Santos'];
+  const seededVehiclePlates = [
+    'NDG 5821',
+    'CAK 9043',
+    'WOB 2947',
+    'PXW 382',
+    'TGD 908',
+    'NRE 471',
+  ];
+  const vehicleRows = await prisma.vehicle.findMany({
+    where: {
+      plateNumber: { in: seededVehiclePlates },
+      isActive: true,
+      deletedAt: null,
+    },
+  });
+  const vehiclesByPlate = new Map(
+    vehicleRows.map((vehicle) => [vehicle.plateNumber, vehicle]),
+  );
+  const missingPlate = seededVehiclePlates.find(
+    (plate) => !vehiclesByPlate.has(plate),
+  );
+  if (missingPlate) {
+    throw new Error(
+      `Cannot seed maintenance schedules: active sample vehicle "${missingPlate}" is missing.`,
+    );
+  }
+  const vehicles = seededVehiclePlates.map((plate) =>
+    vehiclesByPlate.get(plate)!,
+  );
+  const activeGarageIds = new Set(garages.map((garage) => garage.id));
+  const vehicleWithoutActiveGarage = vehicles.find(
+    (vehicle) => !vehicle.garageId || !activeGarageIds.has(vehicle.garageId),
+  );
+  if (vehicleWithoutActiveGarage) {
+    throw new Error(
+      `Cannot seed maintenance schedules: sample vehicle "${vehicleWithoutActiveGarage.plateNumber}" is not assigned to an active garage.`,
+    );
+  }
+  const seededMechanicNames = [
+    'Juan dela Cruz',
+    'Pedro Santos',
+    'Rommel Cruz',
+    'Isabel Reyes',
+    'Carl Santos',
+  ];
   const mechanicRows = await prisma.mechanic.findMany({
     where: {
       name: { in: seededMechanicNames },
@@ -36,24 +85,45 @@ export async function seedVmms(prisma: PrismaClient) {
     },
     orderBy: { name: 'asc' },
   });
-  const mechanicsByName = new Map(mechanicRows.map((mechanic) => [mechanic.name, mechanic]));
-  const missingMechanic = seededMechanicNames.find((name) => !mechanicsByName.has(name));
-  if (missingMechanic) throw new Error(`Cannot seed maintenance schedules: in-house mechanic "${missingMechanic}" is missing.`);
-  const mechanics = seededMechanicNames.map((name) => mechanicsByName.get(name)!);
+  const mechanicsByName = new Map(
+    mechanicRows.map((mechanic) => [mechanic.name, mechanic]),
+  );
+  const missingMechanic = seededMechanicNames.find(
+    (name) => !mechanicsByName.has(name),
+  );
+  if (missingMechanic)
+    throw new Error(
+      `Cannot seed maintenance schedules: in-house mechanic "${missingMechanic}" is missing.`,
+    );
+  const mechanics = seededMechanicNames.map((name) =>
+    mechanicsByName.get(name)!,
+  );
   const sampleTargetDueDate = (schedule: any) => {
-    const baseDate = new Date(schedule.startReferenceDate ?? schedule.startDate ?? schedule.createdAt ?? new Date());
+    const baseDate = new Date(
+      schedule.startReferenceDate ??
+        schedule.startDate ??
+        schedule.createdAt ??
+        new Date(),
+    );
     const interval = getTimeInterval(schedule);
     return schedule.triggerType === MaintenanceTriggerType.TIME && interval
       ? addTimeInterval(baseDate, interval)
       : new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
   };
   const chiefMechanics = await prisma.mechanic.findMany({
-    where: { isActive: true, role: 'CHIEF_MECHANIC', isOutsourced: false },
+    where: {
+      isActive: true,
+      role: 'CHIEF_MECHANIC',
+      isOutsourced: false,
+      userId: { not: null },
+    },
     orderBy: { email: 'asc' },
     select: { userId: true, name: true, email: true },
   });
   if (!chiefMechanics.length) {
-    throw new Error('Cannot seed maintenance schedules: no active VMMS Chief Mechanic directory rows exist.');
+    throw new Error(
+      'Cannot seed maintenance schedules: no active VMMS Chief Mechanic directory rows exist.',
+    );
   }
 
   const checklistTemplatesData = [
@@ -128,7 +198,7 @@ export async function seedVmms(prisma: PrismaClient) {
     });
 
     const existingItems = await prisma.checklistItem.findMany({
-      where: { checklistTemplateId: t.id },
+      where: { checklistTemplateId: t.id, deletedAt: null },
       select: { text: true },
     });
     const existingTexts = new Set(existingItems.map((item) => item.text));
@@ -142,25 +212,18 @@ export async function seedVmms(prisma: PrismaClient) {
           text,
           order: templateData.items.indexOf(text),
         })),
+        skipDuplicates: true,
       });
     }
 
     seededTemplates.push(t);
   }
 
-  console.log(`  Created ${seededTemplates.length} checklist templates for VMMS\n`);
+  console.log(
+    `  Processed ${seededTemplates.length} checklist templates for VMMS\n`,
+  );
 
-  console.log('Creating sample maintenance schedules for VMMS...');
-
-  const oilChangeTemplate = seededTemplates.find(t => t.type === 'Oil Change');
-  const brakeInspectionTemplate = seededTemplates.find(t => t.type === 'Brake Inspection');
-  const tireRotationTemplate = seededTemplates.find(t => t.type === 'Tire Rotation');
-  const engineTuneupTemplate = seededTemplates.find(t => t.type === 'Engine Tune-up');
-  const generalInspectionTemplate = seededTemplates.find(t => t.type === 'General Inspection');
-
-  const staRosaGarage = garages.find(g => g.name === 'Sta. Rosa');
-  const marikinaGarage = garages.find(g => g.name === 'Marikina');
-  const pulilanGarage = garages.find(g => g.name === 'Pulilan') ?? garages[2];
+  console.log('Ensuring sample maintenance schedules for VMMS...');
 
   const resolveSeedMechanicId = (
     assignedMechanic: string,
@@ -207,1070 +270,574 @@ export async function seedVmms(prisma: PrismaClient) {
     maintenanceFixtureAnchor.getTime();
   const shiftMaintenanceFixtureDate = (date: Date) =>
     new Date(date.getTime() + maintenanceFixtureOffset);
-  const shiftOptionalMaintenanceFixtureDate = (
-    date: Date | null | undefined,
-  ) => (date == null ? date : shiftMaintenanceFixtureDate(date));
 
-  const maintenanceSchedulesData = [
+  const templateByType = new Map(
+    seededTemplates.map((template) => [template.type, template]),
+  );
+  const checklistItemsByType = new Map(
+    checklistTemplatesData.map((template) => [template.type, template.items]),
+  );
+
+  const demoProviderName = 'VMMS Demo Workshop';
+  const matchingDemoProviders = await prisma.outsourcedProvider.findMany({
+    where: { name: { equals: demoProviderName, mode: 'insensitive' } },
+    orderBy: { name: 'asc' },
+  });
+  if (matchingDemoProviders.length > 1) {
+    throw new Error(
+      `Cannot seed VMMS schedules: multiple providers match "${demoProviderName}".`,
+    );
+  }
+  if (matchingDemoProviders[0] && !matchingDemoProviders[0].isActive) {
+    throw new Error(
+      `Cannot seed VMMS schedules: provider "${demoProviderName}" is inactive.`,
+    );
+  }
+  const existingDemoProvider = matchingDemoProviders[0];
+
+  type SeedScheduleFixture = {
+    identity: string;
+    vehiclePlate: string;
+    title: string;
+    status: MaintenanceStatus;
+    priority: MaintenancePriority;
+    createdDaysAgo: number;
+    mechanicIndex: number;
+    accountType: AccountType;
+    triggerType: MaintenanceTriggerType;
+    intervalKm?: number;
+    bufferDistanceKm?: number;
+    intervalType?: MaintenanceIntervalType;
+    dueOffsetKm?: number;
+    serviceOffsetKm?: number;
+    timeDueInDays?: number;
+    maintenanceClass?: 'REPAIR' | 'PREVENTIVE';
+    progressState?: 'IN_PROGRESS' | 'SUBMITTED';
+    overdueFromStatus?: MaintenanceStatus;
+    partsCost?: number;
+    laborCost?: number;
+  };
+
+  const scheduleFixtures: SeedScheduleFixture[] = [
     {
-      vehicleId: vehicles[0].plateNumber, // NDG 5821
-      title: oilChangeTemplate?.type ?? 'Oil Change',
-      status: MaintenanceStatus.PENDING,
-      createdAt: new Date('2026-06-22T00:00:00.000Z'),
-      assignedMechanic: mechanics[0].name, // Juan dela Cruz
+      identity: 'ndg-oil-change-history',
+      vehiclePlate: 'NDG 5821',
+      title: 'Oil Change',
+      status: MaintenanceStatus.COMPLETED,
+      priority: MaintenancePriority.MEDIUM,
+      createdDaysAgo: 45,
+      mechanicIndex: 0,
       accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: oilChangeTemplate?.id,
-      garageId: staRosaGarage?.id,
-      odometerReading: 45000,
       triggerType: MaintenanceTriggerType.ODOMETER,
-      intervalKm: 10000,
+      intervalKm: 5000,
       bufferDistanceKm: 500,
-      startingReferenceReadingKm: 40000,
+      serviceOffsetKm: 1000,
+      maintenanceClass: 'PREVENTIVE',
+      partsCost: 1200,
+      laborCost: 450,
     },
     {
-      vehicleId: vehicles[1].plateNumber, // CAK 9043
-      title: brakeInspectionTemplate?.type ?? 'Brake Inspection',
-      status: MaintenanceStatus.IN_PROGRESS,
-      createdAt: new Date('2026-06-19T00:00:00.000Z'),
-      assignedMechanic: mechanics[1].name, // Pedro Santos
+      identity: 'cak-engine-tune-up-history',
+      vehiclePlate: 'CAK 9043',
+      title: 'Engine Tune-up',
+      status: MaintenanceStatus.COMPLETED,
+      priority: MaintenancePriority.MEDIUM,
+      createdDaysAgo: 60,
+      mechanicIndex: 1,
       accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: brakeInspectionTemplate?.id,
-      garageId: marikinaGarage?.id,
-      odometerReading: 72500,
       triggerType: MaintenanceTriggerType.ODOMETER,
       intervalKm: 15000,
-      startingReferenceReadingKm: 60000,
+      bufferDistanceKm: 1000,
+      serviceOffsetKm: 2000,
+      maintenanceClass: 'PREVENTIVE',
+      partsCost: 2400,
+      laborCost: 900,
     },
     {
-      vehicleId: vehicles[2].plateNumber, // WOB 2947
-      title: generalInspectionTemplate?.type ?? 'General Inspection',
+      identity: 'wob-oil-change-history',
+      vehiclePlate: 'WOB 2947',
+      title: 'Oil Change',
       status: MaintenanceStatus.COMPLETED,
-      maintenanceClass: 'PREVENTIVE',
-      createdAt: new Date('2026-06-14T00:00:00.000Z'),
-      assignedMechanic: mechanics[1].name, // Pedro Santos
-      accountType: AccountType.OUTSOURCED,
-      checklistTemplateId: generalInspectionTemplate?.id,
-      garageId: staRosaGarage?.id,
-      odometerReading: 32000,
-      triggerType: MaintenanceTriggerType.MANUAL,
-      partsCost: 650.0,
-      laborCost: 320.0,
-      totalCost: 970.0,
-      workOrderProgress: {
-        checklist: [
-          {
-            item: 'Check all fluid levels',
-            completed: true,
-            notes: 'Washer fluid topped up and coolant level confirmed.',
-            selectedOption: 'yes',
-          },
-          {
-            item: 'Inspect belts and hoses',
-            completed: true,
-            notes: 'No cracks found. Tightened the serpentine belt.',
-            selectedOption: 'yes',
-          },
-          {
-            item: 'Test battery and charging system',
-            completed: true,
-            notes: 'Battery voltage stable at 13.8V.',
-            selectedOption: 'yes',
-          },
-          {
-            item: 'Check exterior and interior lights',
-            completed: true,
-            notes: 'All lights operational except one fog lamp replaced.',
-            selectedOption: 'no',
-          },
-          {
-            item: 'Inspect wiper blades',
-            completed: true,
-            notes: 'Front wiper blades replaced with new set.',
-            selectedOption: 'yes',
-          },
-        ],
-      },
-    },
-    {
-      vehicleId: vehicles[3].plateNumber, // PXW 382
-      title: generalInspectionTemplate?.type ?? 'General Inspection',
-      status: MaintenanceStatus.COMPLETED,
-      maintenanceClass: 'PREVENTIVE',
-      createdAt: new Date('2026-06-15T00:00:00.000Z'),
-      assignedMechanic: mechanics[3].name, // Isabel Reyes
+      priority: MaintenancePriority.MEDIUM,
+      createdDaysAgo: 35,
+      mechanicIndex: 2,
       accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: generalInspectionTemplate?.id,
-      garageId: staRosaGarage?.id,
-      odometerReading: 18500,
+      triggerType: MaintenanceTriggerType.ODOMETER,
+      intervalKm: 4000,
+      bufferDistanceKm: 400,
+      serviceOffsetKm: 1200,
+      maintenanceClass: 'PREVENTIVE',
+      partsCost: 1100,
+      laborCost: 450,
+    },
+    {
+      identity: 'pxw-tire-rotation-history',
+      vehiclePlate: 'PXW 382',
+      title: 'Tire Rotation',
+      status: MaintenanceStatus.COMPLETED,
+      priority: MaintenancePriority.LOW,
+      createdDaysAgo: 90,
+      mechanicIndex: 3,
+      accountType: AccountType.IN_HOUSE,
       triggerType: MaintenanceTriggerType.TIME,
-      intervalType: MaintenanceIntervalType.MONTHLY,
-      startReferenceDate: new Date('2026-06-01T00:00:00.000Z'),
-      partsCost: 480.0,
-      laborCost: 290.0,
-      totalCost: 770.0,
-      workOrderProgress: {
-        checklist: [
-          {
-            item: 'Check all fluid levels',
-            completed: true,
-            note: 'Oil level checked and within range.',
-            selectedOption: 'yes',
-          },
-          {
-            item: 'Inspect belts and hoses',
-            completed: true,
-            note: 'Minor wear on hose, no replacement needed.',
-            selectedOption: 'yes',
-          },
-          {
-            item: 'Test battery and charging system',
-            completed: true,
-            note: 'Alternator output normal.',
-            selectedOption: 'yes',
-          },
-          {
-            item: 'Check exterior and interior lights',
-            completed: true,
-            note: 'Replaced one burned-out interior bulb.',
-            selectedOption: 'yes',
-          },
-          {
-            item: 'Inspect wiper blades',
-            completed: true,
-            note: 'Wipers good; no action required.',
-            selectedOption: 'yes',
-          },
-        ],
-      },
+      intervalType: MaintenanceIntervalType.QUARTERLY,
+      serviceOffsetKm: 500,
+      maintenanceClass: 'PREVENTIVE',
+      partsCost: 100,
+      laborCost: 350,
     },
     {
-      vehicleId: vehicles[4].plateNumber, // TGD 908
-      title: seededTemplates.find(t => t.type === 'Engine Tune-up')?.type ?? 'Engine Tune-up',
-      status: MaintenanceStatus.OVERDUE,
-      createdAt: new Date('2026-06-10T00:00:00.000Z'),
-      assignedMechanic: mechanics[0].name, // Juan dela Cruz
+      identity: 'tgd-engine-tune-up-history',
+      vehiclePlate: 'TGD 908',
+      title: 'Engine Tune-up',
+      status: MaintenanceStatus.COMPLETED,
+      priority: MaintenancePriority.MEDIUM,
+      createdDaysAgo: 0,
+      mechanicIndex: 0,
       accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: seededTemplates.find(t => t.type === 'Engine Tune-up')?.id,
-      garageId: marikinaGarage?.id,
-      odometerReading: 92200,
       triggerType: MaintenanceTriggerType.ODOMETER,
       intervalKm: 20000,
       bufferDistanceKm: 1000,
-      startingReferenceReadingKm: 70000,
-    },
-    {
-      vehicleId: vehicles[5].plateNumber, // NRE 471
-      title: generalInspectionTemplate?.type ?? 'General Inspection',
-      status: MaintenanceStatus.PENDING,
-      createdAt: new Date('2026-06-28T00:00:00.000Z'),
-      assignedMechanic: mechanics[4].name, // Carl Santos
-      accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: generalInspectionTemplate?.id,
-      garageId: pulilanGarage?.id,
-      odometerReading: 145100,
-      triggerType: MaintenanceTriggerType.MANUAL,
-    },
-    {
-      vehicleId: vehicles[0].plateNumber, // NDG 5821
-      title: tireRotationTemplate?.type ?? 'Tire Rotation',
-      status: MaintenanceStatus.PENDING,
-      createdAt: new Date('2026-06-30T00:00:00.000Z'),
-      assignedMechanic: mechanics[2].name, // Rommel Cruz
-      accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: tireRotationTemplate?.id,
-      garageId: staRosaGarage?.id,
-      odometerReading: 51000,
-      triggerType: MaintenanceTriggerType.ODOMETER,
-      intervalKm: 8000,
-      bufferDistanceKm: 400,
-      startingReferenceReadingKm: 43000,
-    },
-    {
-      vehicleId: vehicles[1].plateNumber, // CAK 9043
-      title: engineTuneupTemplate?.type ?? 'Engine Tune-up',
-      status: MaintenanceStatus.IN_PROGRESS,
-      createdAt: new Date('2026-06-27T00:00:00.000Z'),
-      assignedMechanic: mechanics[3].name, // Isabel Reyes
-      accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: engineTuneupTemplate?.id,
-      garageId: marikinaGarage?.id,
-      odometerReading: 63800,
-      triggerType: MaintenanceTriggerType.ODOMETER,
-      intervalKm: 12000,
-      bufferDistanceKm: 800,
-      startingReferenceReadingKm: 50000,
-    },
-    {
-      vehicleId: vehicles[2].plateNumber, // WOB 2947
-      title: brakeInspectionTemplate?.type ?? 'Brake Inspection',
-      status: MaintenanceStatus.COMPLETED,
+      serviceOffsetKm: 3000,
       maintenanceClass: 'PREVENTIVE',
-      createdAt: new Date('2026-06-21T00:00:00.000Z'),
-      assignedMechanic: mechanics[2].name, // Rommel Cruz
-      accountType: AccountType.OUTSOURCED,
-      checklistTemplateId: brakeInspectionTemplate?.id,
-      garageId: staRosaGarage?.id,
-      odometerReading: 34800,
-      triggerType: MaintenanceTriggerType.ODOMETER,
-      intervalKm: 6000,
-      bufferDistanceKm: 300,
-      startingReferenceReadingKm: 28800,
-      partsCost: 420.0,
-      laborCost: 260.0,
-      totalCost: 680.0,
-      workOrderProgress: {
-        checklist: [
-          {
-            item: 'Check brake pad thickness',
-            completed: true,
-            notes: 'Brake pads at 7mm, within acceptable limit.',
-            selectedOption: 'yes',
-          },
-          {
-            item: 'Inspect brake rotors for wear',
-            completed: true,
-            notes: 'Rotors cleaned and minor scoring addressed.',
-            selectedOption: 'yes',
-          },
-          {
-            item: 'Check brake fluid level and condition',
-            completed: true,
-            notes: 'Fluid topped off and no contamination found.',
-            selectedOption: 'yes',
-          },
-          {
-            item: 'Inspect brake lines for leaks',
-            completed: true,
-            notes: 'No leaks detected on the brake lines.',
-            selectedOption: 'yes',
-          },
-          {
-            item: 'Test brake pedal feel',
-            completed: true,
-            notes: 'Pedal response is firm and even.',
-            selectedOption: 'yes',
-          },
-        ],
-      },
+      partsCost: 3200,
+      laborCost: 1200,
     },
     {
-      vehicleId: vehicles[3].plateNumber, // PXW 382
-      title: oilChangeTemplate?.type ?? 'Oil Change',
-      status: MaintenanceStatus.OVERDUE,
-      createdAt: new Date('2026-06-16T00:00:00.000Z'),
-      assignedMechanic: mechanics[1].name, // Pedro Santos
+      identity: 'nre-general-inspection-history',
+      vehiclePlate: 'NRE 471',
+      title: 'General Inspection',
+      status: MaintenanceStatus.COMPLETED,
+      priority: MaintenancePriority.MEDIUM,
+      createdDaysAgo: 150,
+      mechanicIndex: 4,
       accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: oilChangeTemplate?.id,
-      garageId: marikinaGarage?.id,
-      odometerReading: 23650,
-      triggerType: MaintenanceTriggerType.TIME,
-      intervalType: MaintenanceIntervalType.MONTHLY,
-      startReferenceDate: new Date('2026-05-16T00:00:00.000Z'),
-    },
-    {
-      vehicleId: vehicles[4].plateNumber, // TGD 908
-      title: generalInspectionTemplate?.type ?? 'General Inspection',
-      status: MaintenanceStatus.PENDING,
-      createdAt: new Date('2026-06-24T00:00:00.000Z'),
-      assignedMechanic: mechanics[0].name, // Juan dela Cruz
-      accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: generalInspectionTemplate?.id,
-      garageId: pulilanGarage?.id,
-      odometerReading: 98500,
-      triggerType: MaintenanceTriggerType.TIME,
-      intervalType: MaintenanceIntervalType.QUARTERLY,
-      startReferenceDate: new Date('2026-03-24T00:00:00.000Z'),
-    },
-    {
-      vehicleId: vehicles[5].plateNumber, // NRE 471
-      title: tireRotationTemplate?.type ?? 'Tire Rotation',
-      status: MaintenanceStatus.PENDING,
-      createdAt: new Date('2026-06-18T00:00:00.000Z'),
-      assignedMechanic: mechanics[4].name, // Carl Santos
-      accountType: AccountType.OUTSOURCED,
-      checklistTemplateId: tireRotationTemplate?.id,
-      garageId: marikinaGarage?.id,
-      odometerReading: 154200,
       triggerType: MaintenanceTriggerType.TIME,
       intervalType: MaintenanceIntervalType.SEMI_ANNUALLY,
-      startReferenceDate: new Date('2026-06-01T00:00:00.000Z'),
-    },
-    {
-      vehicleId: vehicles[0].plateNumber, // NDG 5821
-      title: engineTuneupTemplate?.type ?? 'Engine Tune-up',
-      status: MaintenanceStatus.COMPLETED,
+      serviceOffsetKm: 2500,
       maintenanceClass: 'PREVENTIVE',
-      createdAt: new Date('2026-05-10T00:00:00.000Z'),
-      assignedMechanic: mechanics[0].name,
-      accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: engineTuneupTemplate?.id,
-      garageId: staRosaGarage?.id,
-      odometerReading: 41000,
-      triggerType: MaintenanceTriggerType.ODOMETER,
-      intervalKm: 20000,
-      partsCost: 820.0,
-      laborCost: 450.0,
-      totalCost: 1270.0,
-      workOrderProgress: {
-        checklist: [
-          { item: 'Replace spark plugs', completed: true, notes: 'New spark plugs installed.', selectedOption: 'yes' },
-          { item: 'Inspect ignition coils/wires', completed: true, notes: 'Coils tested good.', selectedOption: 'yes' },
-          { item: 'Replace air filter', completed: true, notes: 'Air filter replaced.', selectedOption: 'yes' },
-          { item: 'Clean fuel injectors', completed: true, notes: 'Cleaned with service fluid.', selectedOption: 'yes' },
-          { item: 'Check engine timing and idle', completed: true, notes: 'Idle set to 750 RPM.', selectedOption: 'yes' },
-        ],
-      },
+      partsCost: 900,
+      laborCost: 650,
     },
     {
-      vehicleId: vehicles[1].plateNumber, // CAK 9043
-      title: oilChangeTemplate?.type ?? 'Oil Change',
+      identity: 'tgd-outsourced-brake-repair',
+      vehiclePlate: 'TGD 908',
+      title: 'Brake Inspection',
       status: MaintenanceStatus.COMPLETED,
-      maintenanceClass: 'PREVENTIVE',
-      createdAt: new Date('2026-04-12T00:00:00.000Z'),
-      assignedMechanic: mechanics[1].name,
-      accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: oilChangeTemplate?.id,
-      garageId: marikinaGarage?.id,
-      odometerReading: 65000,
-      triggerType: MaintenanceTriggerType.ODOMETER,
-      intervalKm: 10000,
-      partsCost: 550.0,
-      laborCost: 250.0,
-      totalCost: 800.0,
-      workOrderProgress: {
-        checklist: [
-          { item: 'Drain old engine oil', completed: true, notes: 'Drained 7L synthetic oil.', selectedOption: 'yes' },
-          { item: 'Replace oil filter', completed: true, notes: 'New spin-on filter.', selectedOption: 'yes' },
-          { item: 'Fill with new engine oil', completed: true, notes: 'Refilled 15W-40 oil.', selectedOption: 'yes' },
-          { item: 'Check for oil leaks', completed: true, notes: 'No leaks found.', selectedOption: 'yes' },
-          { item: 'Reset maintenance light', completed: true, notes: 'Service light cleared.', selectedOption: 'yes' },
-        ],
-      },
-    },
-    {
-      vehicleId: vehicles[2].plateNumber, // WOB 2947
-      title: tireRotationTemplate?.type ?? 'Tire Rotation',
-      status: MaintenanceStatus.DUE,
-      createdAt: new Date('2026-08-01T00:00:00.000Z'),
-      assignedMechanic: mechanics[2].name,
-      accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: tireRotationTemplate?.id,
-      garageId: staRosaGarage?.id,
-      odometerReading: 36000,
-      triggerType: MaintenanceTriggerType.ODOMETER,
-      intervalKm: 8000,
-      bufferDistanceKm: 400,
-      startingReferenceReadingKm: 28000,
-    },
-    {
-      vehicleId: vehicles[3].plateNumber, // PXW 382
-      title: brakeInspectionTemplate?.type ?? 'Brake Inspection',
-      status: MaintenanceStatus.IN_PROGRESS,
-      createdAt: new Date('2026-08-02T00:00:00.000Z'),
-      assignedMechanic: mechanics[3].name,
-      accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: brakeInspectionTemplate?.id,
-      garageId: staRosaGarage?.id,
-      odometerReading: 24200,
-      triggerType: MaintenanceTriggerType.ODOMETER,
-      intervalKm: 12000,
-      startingReferenceReadingKm: 12000,
-    },
-    {
-      vehicleId: vehicles[4].plateNumber, // TGD 908
-      title: oilChangeTemplate?.type ?? 'Oil Change',
-      status: MaintenanceStatus.OVERDUE,
-      createdAt: new Date('2026-07-10T00:00:00.000Z'),
-      assignedMechanic: mechanics[0].name,
-      accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: oilChangeTemplate?.id,
-      garageId: marikinaGarage?.id,
-      odometerReading: 99500,
-      triggerType: MaintenanceTriggerType.ODOMETER,
-      intervalKm: 10000,
-      bufferDistanceKm: 500,
-      startingReferenceReadingKm: 88000,
-    },
-    {
-      vehicleId: vehicles[5].plateNumber, // NRE 471
-      title: generalInspectionTemplate?.type ?? 'General Inspection',
-      status: MaintenanceStatus.COMPLETED,
-      maintenanceClass: 'PREVENTIVE',
-      createdAt: new Date('2026-05-20T00:00:00.000Z'),
-      assignedMechanic: mechanics[4].name,
+      priority: MaintenancePriority.HIGH,
+      createdDaysAgo: 60,
+      mechanicIndex: 0,
       accountType: AccountType.OUTSOURCED,
-      checklistTemplateId: generalInspectionTemplate?.id,
-      garageId: pulilanGarage?.id,
-      odometerReading: 142000,
-      triggerType: MaintenanceTriggerType.TIME,
-      intervalType: MaintenanceIntervalType.MONTHLY,
-      partsCost: 350.0,
-      laborCost: 200.0,
-      totalCost: 550.0,
-      workOrderProgress: {
-        checklist: [
-          { item: 'Check all fluid levels', completed: true, notes: 'Fluids checked.', selectedOption: 'yes' },
-          { item: 'Inspect belts and hoses', completed: true, notes: 'Belts intact.', selectedOption: 'yes' },
-          { item: 'Test battery and charging system', completed: true, notes: '14.1V charging.', selectedOption: 'yes' },
-          { item: 'Check exterior and interior lights', completed: true, notes: 'Lights working.', selectedOption: 'yes' },
-          { item: 'Inspect wiper blades', completed: true, notes: 'Wipers functional.', selectedOption: 'yes' },
-        ],
-      },
+      triggerType: MaintenanceTriggerType.MANUAL,
+      serviceOffsetKm: 500,
+      maintenanceClass: 'REPAIR',
+      partsCost: 4500,
+      laborCost: 1600,
     },
     {
-      vehicleId: vehicles[0].plateNumber, // NDG 5821
-      title: brakeInspectionTemplate?.type ?? 'Brake Inspection',
-      status: MaintenanceStatus.COMPLETED,
-      maintenanceClass: 'PREVENTIVE',
-      createdAt: new Date('2026-03-05T00:00:00.000Z'),
-      assignedMechanic: mechanics[0].name,
-      accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: brakeInspectionTemplate?.id,
-      garageId: staRosaGarage?.id,
-      odometerReading: 38000,
-      triggerType: MaintenanceTriggerType.ODOMETER,
-      intervalKm: 15000,
-      partsCost: 620.0,
-      laborCost: 310.0,
-      totalCost: 930.0,
-      workOrderProgress: {
-        checklist: [
-          { item: 'Check brake pad thickness', completed: true, notes: 'Pad thickness 8mm.', selectedOption: 'yes' },
-          { item: 'Inspect brake rotors for wear', completed: true, notes: 'Rotors resurfaced.', selectedOption: 'yes' },
-          { item: 'Check brake fluid level and condition', completed: true, notes: 'Brake fluid flushed.', selectedOption: 'yes' },
-          { item: 'Inspect brake lines for leaks', completed: true, notes: 'Lines clean.', selectedOption: 'yes' },
-          { item: 'Test brake pedal feel', completed: true, notes: 'Pedal firm.', selectedOption: 'yes' },
-        ],
-      },
-    },
-    {
-      vehicleId: vehicles[1].plateNumber, // CAK 9043
-      title: tireRotationTemplate?.type ?? 'Tire Rotation',
-      status: MaintenanceStatus.COMPLETED,
-      maintenanceClass: 'PREVENTIVE',
-      createdAt: new Date('2026-02-18T00:00:00.000Z'),
-      assignedMechanic: mechanics[1].name,
-      accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: tireRotationTemplate?.id,
-      garageId: marikinaGarage?.id,
-      odometerReading: 58000,
-      triggerType: MaintenanceTriggerType.ODOMETER,
-      intervalKm: 10000,
-      partsCost: 150.0,
-      laborCost: 200.0,
-      totalCost: 350.0,
-      workOrderProgress: {
-        checklist: [
-          { item: 'Check tire pressure on all tires', completed: true, notes: 'Pressures set to 35 PSI.', selectedOption: 'yes' },
-          { item: 'Inspect tire tread depth', completed: true, notes: '6mm tread remaining.', selectedOption: 'yes' },
-          { item: 'Rotate tires according to pattern', completed: true, notes: 'Cross rotation completed.', selectedOption: 'yes' },
-          { item: 'Torque lug nuts to specification', completed: true, notes: 'Torqued to 110 ft-lbs.', selectedOption: 'yes' },
-          { item: 'Check alignment if irregular wear found', completed: true, notes: 'Alignment normal.', selectedOption: 'yes' },
-        ],
-      },
-    },
-    {
-      vehicleId: vehicles[2].plateNumber, // WOB 2947
-      title: oilChangeTemplate?.type ?? 'Oil Change',
-      status: MaintenanceStatus.COMPLETED,
-      maintenanceClass: 'PREVENTIVE',
-      createdAt: new Date('2026-01-25T00:00:00.000Z'),
-      assignedMechanic: mechanics[2].name,
-      accountType: AccountType.OUTSOURCED,
-      checklistTemplateId: oilChangeTemplate?.id,
-      garageId: pulilanGarage?.id,
-      odometerReading: 26000,
-      triggerType: MaintenanceTriggerType.ODOMETER,
-      intervalKm: 8000,
-      partsCost: 480.0,
-      laborCost: 220.0,
-      totalCost: 700.0,
-      workOrderProgress: {
-        checklist: [
-          { item: 'Drain old engine oil', completed: true, notes: 'Oil drained cleanly.', selectedOption: 'yes' },
-          { item: 'Replace oil filter', completed: true, notes: 'Filter replaced.', selectedOption: 'yes' },
-          { item: 'Fill with new engine oil', completed: true, notes: '5.5L 10W-30 filled.', selectedOption: 'yes' },
-          { item: 'Check for oil leaks', completed: true, notes: 'No leaks found.', selectedOption: 'yes' },
-          { item: 'Reset maintenance light', completed: true, notes: 'Light reset.', selectedOption: 'yes' },
-        ],
-      },
-    },
-    {
-      vehicleId: vehicles[3].plateNumber, // PXW 382
-      title: engineTuneupTemplate?.type ?? 'Engine Tune-up',
-      status: MaintenanceStatus.COMPLETED,
-      maintenanceClass: 'PREVENTIVE',
-      createdAt: new Date('2026-03-14T00:00:00.000Z'),
-      assignedMechanic: mechanics[3].name,
-      accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: engineTuneupTemplate?.id,
-      garageId: staRosaGarage?.id,
-      odometerReading: 15000,
-      triggerType: MaintenanceTriggerType.ODOMETER,
-      intervalKm: 15000,
-      partsCost: 950.0,
-      laborCost: 480.0,
-      totalCost: 1430.0,
-      workOrderProgress: {
-        checklist: [
-          { item: 'Replace spark plugs', completed: true, notes: 'Iridium plugs installed.', selectedOption: 'yes' },
-          { item: 'Inspect ignition coils/wires', completed: true, notes: 'Coils in good condition.', selectedOption: 'yes' },
-          { item: 'Replace air filter', completed: true, notes: 'OEM filter installed.', selectedOption: 'yes' },
-          { item: 'Clean fuel injectors', completed: true, notes: 'Injectors cleaned.', selectedOption: 'yes' },
-          { item: 'Check engine timing and idle', completed: true, notes: 'Idle stable.', selectedOption: 'yes' },
-        ],
-      },
-    },
-    {
-      vehicleId: vehicles[4].plateNumber, // TGD 908
-      title: brakeInspectionTemplate?.type ?? 'Brake Inspection',
-      status: MaintenanceStatus.COMPLETED,
-      maintenanceClass: 'PREVENTIVE',
-      createdAt: new Date('2026-02-10T00:00:00.000Z'),
-      assignedMechanic: mechanics[0].name,
-      accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: brakeInspectionTemplate?.id,
-      garageId: marikinaGarage?.id,
-      odometerReading: 85000,
-      triggerType: MaintenanceTriggerType.ODOMETER,
-      intervalKm: 20000,
-      partsCost: 780.0,
-      laborCost: 390.0,
-      totalCost: 1170.0,
-      workOrderProgress: {
-        checklist: [
-          { item: 'Check brake pad thickness', completed: true, notes: 'Heavy duty pads installed.', selectedOption: 'yes' },
-          { item: 'Inspect brake rotors for wear', completed: true, notes: 'Rotors turned.', selectedOption: 'yes' },
-          { item: 'Check brake fluid level and condition', completed: true, notes: 'Fluid flushed DOT4.', selectedOption: 'yes' },
-          { item: 'Inspect brake lines for leaks', completed: true, notes: 'No leaks.', selectedOption: 'yes' },
-          { item: 'Test brake pedal feel', completed: true, notes: 'Brake test passed.', selectedOption: 'yes' },
-        ],
-      },
-    },
-    {
-      vehicleId: vehicles[5].plateNumber, // NRE 471
-      title: oilChangeTemplate?.type ?? 'Oil Change',
-      status: MaintenanceStatus.COMPLETED,
-      maintenanceClass: 'PREVENTIVE',
-      createdAt: new Date('2026-01-10T00:00:00.000Z'),
-      assignedMechanic: mechanics[4].name,
-      accountType: AccountType.OUTSOURCED,
-      checklistTemplateId: oilChangeTemplate?.id,
-      garageId: pulilanGarage?.id,
-      odometerReading: 135000,
-      triggerType: MaintenanceTriggerType.ODOMETER,
-      intervalKm: 12000,
-      partsCost: 680.0,
-      laborCost: 320.0,
-      totalCost: 1000.0,
-      workOrderProgress: {
-        checklist: [
-          { item: 'Drain old engine oil', completed: true, notes: 'Oil drained.', selectedOption: 'yes' },
-          { item: 'Replace oil filter', completed: true, notes: 'Filter replaced.', selectedOption: 'yes' },
-          { item: 'Fill with new engine oil', completed: true, notes: '10L 15W-40 filled.', selectedOption: 'yes' },
-          { item: 'Check for oil leaks', completed: true, notes: 'Checked OK.', selectedOption: 'yes' },
-          { item: 'Reset maintenance light', completed: true, notes: 'Cleared.', selectedOption: 'yes' },
-        ],
-      },
-    },
-    {
-      vehicleId: vehicles[0].plateNumber, // NDG 5821
-      title: generalInspectionTemplate?.type ?? 'General Inspection',
-      status: MaintenanceStatus.DUE,
-      createdAt: new Date('2026-08-05T00:00:00.000Z'),
-      assignedMechanic: mechanics[0].name,
-      accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: generalInspectionTemplate?.id,
-      garageId: staRosaGarage?.id,
-      odometerReading: 46200,
-      triggerType: MaintenanceTriggerType.TIME,
-      intervalType: MaintenanceIntervalType.MONTHLY,
-      startReferenceDate: new Date('2026-08-08T00:00:00.000Z'),
-    },
-    {
-      vehicleId: vehicles[1].plateNumber, // CAK 9043
-      title: engineTuneupTemplate?.type ?? 'Engine Tune-up',
+      identity: 'ndg-tire-rotation-upcoming',
+      vehiclePlate: 'NDG 5821',
+      title: 'Tire Rotation',
       status: MaintenanceStatus.PENDING,
-      createdAt: new Date('2026-08-04T00:00:00.000Z'),
-      assignedMechanic: mechanics[1].name,
+      priority: MaintenancePriority.LOW,
+      createdDaysAgo: 2,
+      mechanicIndex: 2,
       accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: engineTuneupTemplate?.id,
-      garageId: marikinaGarage?.id,
-      odometerReading: 73800,
       triggerType: MaintenanceTriggerType.ODOMETER,
-      intervalKm: 20000,
-      bufferDistanceKm: 1000,
-      startingReferenceReadingKm: 55000,
+      intervalKm: 8000,
+      bufferDistanceKm: 500,
+      dueOffsetKm: 2500,
     },
     {
-      vehicleId: vehicles[2].plateNumber, // WOB 2947
-      title: brakeInspectionTemplate?.type ?? 'Brake Inspection',
+      identity: 'cak-brake-inspection-in-progress',
+      vehiclePlate: 'CAK 9043',
+      title: 'Brake Inspection',
       status: MaintenanceStatus.IN_PROGRESS,
-      createdAt: new Date('2026-08-03T00:00:00.000Z'),
-      assignedMechanic: mechanics[2].name,
-      accountType: AccountType.OUTSOURCED,
-      checklistTemplateId: brakeInspectionTemplate?.id,
-      garageId: staRosaGarage?.id,
-      odometerReading: 35200,
-      triggerType: MaintenanceTriggerType.ODOMETER,
-      intervalKm: 15000,
-      startingReferenceReadingKm: 20000,
+      priority: MaintenancePriority.HIGH,
+      createdDaysAgo: 5,
+      mechanicIndex: 1,
+      accountType: AccountType.IN_HOUSE,
+      triggerType: MaintenanceTriggerType.TIME,
+      intervalType: MaintenanceIntervalType.MONTHLY,
+      timeDueInDays: 10,
+      progressState: 'IN_PROGRESS',
     },
     {
-      vehicleId: vehicles[3].plateNumber, // PXW 382
-      title: tireRotationTemplate?.type ?? 'Tire Rotation',
+      identity: 'wob-brake-inspection-odometer-overdue',
+      vehiclePlate: 'WOB 2947',
+      title: 'Brake Inspection',
       status: MaintenanceStatus.OVERDUE,
-      createdAt: new Date('2026-07-20T00:00:00.000Z'),
-      assignedMechanic: mechanics[3].name,
+      priority: MaintenancePriority.HIGH,
+      createdDaysAgo: 20,
+      mechanicIndex: 2,
       accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: tireRotationTemplate?.id,
-      garageId: marikinaGarage?.id,
-      odometerReading: 25100,
+      triggerType: MaintenanceTriggerType.ODOMETER,
+      intervalKm: 5000,
+      bufferDistanceKm: 500,
+      dueOffsetKm: -750,
+      progressState: 'IN_PROGRESS',
+      overdueFromStatus: MaintenanceStatus.IN_PROGRESS,
+    },
+    {
+      identity: 'pxw-oil-change-due',
+      vehiclePlate: 'PXW 382',
+      title: 'Oil Change',
+      status: MaintenanceStatus.DUE,
+      priority: MaintenancePriority.HIGH,
+      createdDaysAgo: 5,
+      mechanicIndex: 3,
+      accountType: AccountType.IN_HOUSE,
+      triggerType: MaintenanceTriggerType.ODOMETER,
+      intervalKm: 5000,
+      bufferDistanceKm: 500,
+      dueOffsetKm: 0,
+    },
+    {
+      identity: 'tgd-general-inspection-submitted',
+      vehiclePlate: 'TGD 908',
+      title: 'General Inspection',
+      status: MaintenanceStatus.DONE,
+      priority: MaintenancePriority.MEDIUM,
+      createdDaysAgo: 5,
+      mechanicIndex: 4,
+      accountType: AccountType.IN_HOUSE,
       triggerType: MaintenanceTriggerType.TIME,
       intervalType: MaintenanceIntervalType.QUARTERLY,
-      startReferenceDate: new Date('2026-07-25T00:00:00.000Z'),
+      timeDueInDays: 14,
+      maintenanceClass: 'PREVENTIVE',
+      progressState: 'SUBMITTED',
+      partsCost: 150,
+      laborCost: 400,
     },
     {
-      vehicleId: vehicles[4].plateNumber, // TGD 908
-      title: tireRotationTemplate?.type ?? 'Tire Rotation',
-      status: MaintenanceStatus.PENDING,
-      createdAt: new Date('2026-08-06T00:00:00.000Z'),
-      assignedMechanic: mechanics[0].name,
-      accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: tireRotationTemplate?.id,
-      garageId: pulilanGarage?.id,
-      odometerReading: 101000,
-      triggerType: MaintenanceTriggerType.ODOMETER,
-      intervalKm: 10000,
-      bufferDistanceKm: 500,
-      startingReferenceReadingKm: 91000,
-    },
-    {
-      vehicleId: vehicles[5].plateNumber, // NRE 471
-      title: brakeInspectionTemplate?.type ?? 'Brake Inspection',
-      status: MaintenanceStatus.DUE,
-      createdAt: new Date('2026-08-04T00:00:00.000Z'),
-      assignedMechanic: mechanics[4].name,
+      identity: 'tgd-oil-change-time-overdue',
+      vehiclePlate: 'TGD 908',
+      title: 'Oil Change',
+      status: MaintenanceStatus.OVERDUE,
+      priority: MaintenancePriority.HIGH,
+      createdDaysAgo: 20,
+      mechanicIndex: 1,
       accountType: AccountType.OUTSOURCED,
-      checklistTemplateId: brakeInspectionTemplate?.id,
-      garageId: marikinaGarage?.id,
-      odometerReading: 156000,
+      triggerType: MaintenanceTriggerType.TIME,
+      intervalType: MaintenanceIntervalType.QUARTERLY,
+      timeDueInDays: -7,
+      progressState: 'IN_PROGRESS',
+      overdueFromStatus: MaintenanceStatus.IN_PROGRESS,
+    },
+    {
+      identity: 'nre-brake-inspection-upcoming',
+      vehiclePlate: 'NRE 471',
+      title: 'Brake Inspection',
+      status: MaintenanceStatus.PENDING,
+      priority: MaintenancePriority.MEDIUM,
+      createdDaysAgo: 1,
+      mechanicIndex: 3,
+      accountType: AccountType.OUTSOURCED,
       triggerType: MaintenanceTriggerType.ODOMETER,
       intervalKm: 18000,
       bufferDistanceKm: 800,
-      startingReferenceReadingKm: 138000,
+      dueOffsetKm: 4000,
     },
-    // --- ADDITIONAL REALISTIC MAINTENANCE SCHEDULES ---
     {
-      vehicleId: vehicles[0].plateNumber,
-      title: 'Coolant Flush & Radiator Inspection',
-      status: MaintenanceStatus.COMPLETED,
-      maintenanceClass: 'PREVENTIVE',
-      createdAt: new Date('2026-01-15T00:00:00.000Z'),
-      assignedMechanic: mechanics[0].name,
+      identity: 'pxw-general-inspection-cancelled',
+      vehiclePlate: 'PXW 382',
+      title: 'General Inspection',
+      status: MaintenanceStatus.CANCELLED,
+      priority: MaintenancePriority.LOW,
+      createdDaysAgo: 30,
+      mechanicIndex: 4,
       accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: generalInspectionTemplate?.id,
-      garageId: staRosaGarage?.id,
-      odometerReading: 41000,
-      triggerType: MaintenanceTriggerType.TIME,
-      intervalType: MaintenanceIntervalType.SEMI_ANNUALLY,
-      startReferenceDate: new Date('2026-01-15T00:00:00.000Z'),
-      partsCost: 850.0,
-      laborCost: 450.0,
-      totalCost: 1300.0,
-      workOrderProgress: {
-        checklist: [
-          { item: 'Flush radiator coolant', completed: true, notes: 'System flushed and refilled with OEM coolant.', selectedOption: 'yes' },
-          { item: 'Inspect radiator hoses & clamps', completed: true, notes: 'Hoses intact, upper clamp tightened.', selectedOption: 'yes' }
-        ]
-      }
-    },
-    {
-      vehicleId: vehicles[0].plateNumber,
-      title: 'Transmission Fluid & Filter Service',
-      status: MaintenanceStatus.COMPLETED,
-      maintenanceClass: 'PREVENTIVE',
-      createdAt: new Date('2026-03-10T00:00:00.000Z'),
-      assignedMechanic: mechanics[1].name,
-      accountType: AccountType.OUTSOURCED,
-      checklistTemplateId: generalInspectionTemplate?.id,
-      garageId: staRosaGarage?.id,
-      odometerReading: 43000,
-      triggerType: MaintenanceTriggerType.ODOMETER,
-      intervalKm: 20000,
-      startingReferenceReadingKm: 23000,
-      partsCost: 1400.0,
-      laborCost: 600.0,
-      totalCost: 2000.0,
-      workOrderProgress: {
-        checklist: [
-          { item: 'Drain transmission fluid', completed: true, notes: 'Fluid dark, replaced filter pan gasket.', selectedOption: 'yes' },
-          { item: 'Refill fluid to spec level', completed: true, notes: 'Filled 4.5L synthetic ATF.', selectedOption: 'yes' }
-        ]
-      }
-    },
-    {
-      vehicleId: vehicles[0].plateNumber,
-      title: 'Air & Cabin Filter Replacement',
-      status: MaintenanceStatus.DUE,
-      createdAt: new Date('2026-08-01T00:00:00.000Z'),
-      assignedMechanic: mechanics[2].name,
-      accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: generalInspectionTemplate?.id,
-      garageId: staRosaGarage?.id,
-      odometerReading: 45200,
-      triggerType: MaintenanceTriggerType.TIME,
-      intervalType: MaintenanceIntervalType.QUARTERLY,
-      startReferenceDate: new Date('2026-08-05T00:00:00.000Z'),
-    },
-    {
-      vehicleId: vehicles[1].plateNumber,
-      title: 'Battery & Electrical System Check',
-      status: MaintenanceStatus.COMPLETED,
-      maintenanceClass: 'PREVENTIVE',
-      createdAt: new Date('2026-02-18T00:00:00.000Z'),
-      assignedMechanic: mechanics[3].name,
-      accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: generalInspectionTemplate?.id,
-      garageId: marikinaGarage?.id,
-      odometerReading: 68000,
-      triggerType: MaintenanceTriggerType.TIME,
-      intervalType: MaintenanceIntervalType.SEMI_ANNUALLY,
-      startReferenceDate: new Date('2026-02-18T00:00:00.000Z'),
-      partsCost: 350.0,
-      laborCost: 250.0,
-      totalCost: 600.0,
-      workOrderProgress: {
-        checklist: [
-          { item: 'Test battery voltage & load', completed: true, notes: 'Passed load test at 12.6V.', selectedOption: 'yes' },
-          { item: 'Clean battery terminals', completed: true, notes: 'Corrosion cleaned and anti-corrosion spray applied.', selectedOption: 'yes' }
-        ]
-      }
-    },
-    {
-      vehicleId: vehicles[1].plateNumber,
-      title: 'Suspension & Wheel Alignment',
-      status: MaintenanceStatus.COMPLETED,
-      maintenanceClass: 'PREVENTIVE',
-      createdAt: new Date('2026-05-02T00:00:00.000Z'),
-      assignedMechanic: mechanics[4].name,
-      accountType: AccountType.OUTSOURCED,
-      checklistTemplateId: generalInspectionTemplate?.id,
-      garageId: marikinaGarage?.id,
-      odometerReading: 70500,
       triggerType: MaintenanceTriggerType.MANUAL,
-      partsCost: 1100.0,
-      laborCost: 750.0,
-      totalCost: 1850.0,
-      workOrderProgress: {
-        checklist: [
-          { item: 'Perform 4-wheel alignment', completed: true, notes: 'Camber and toe adjusted to factory specs.', selectedOption: 'yes' },
-          { item: 'Inspect leaf springs and shocks', completed: true, notes: 'Rear shocks showing minor weeping, monitor next service.', selectedOption: 'yes' }
-        ]
-      }
     },
-    {
-      vehicleId: vehicles[1].plateNumber,
-      title: 'Exhaust System & Emissions Test',
-      status: MaintenanceStatus.PENDING,
-      createdAt: new Date('2026-08-04T00:00:00.000Z'),
-      assignedMechanic: mechanics[0].name,
-      accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: generalInspectionTemplate?.id,
-      garageId: marikinaGarage?.id,
-      odometerReading: 72100,
-      triggerType: MaintenanceTriggerType.TIME,
-      intervalType: MaintenanceIntervalType.ANNUALLY,
-      startReferenceDate: new Date('2026-08-25T00:00:00.000Z'),
-    },
-    {
-      vehicleId: vehicles[2].plateNumber,
-      title: 'Differential Oil Replacement',
-      status: MaintenanceStatus.COMPLETED,
-      maintenanceClass: 'PREVENTIVE',
-      createdAt: new Date('2026-01-28T00:00:00.000Z'),
-      assignedMechanic: mechanics[1].name,
-      accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: oilChangeTemplate?.id,
-      garageId: pulilanGarage?.id,
-      odometerReading: 28000,
-      triggerType: MaintenanceTriggerType.ODOMETER,
-      intervalKm: 15000,
-      startingReferenceReadingKm: 13000,
-      partsCost: 720.0,
-      laborCost: 380.0,
-      totalCost: 1100.0,
-      workOrderProgress: {
-        checklist: [
-          { item: 'Drain differential gear oil', completed: true, notes: 'Drained gear oil, no metal shavings found.', selectedOption: 'yes' },
-          { item: 'Refill 80W-90 gear oil', completed: true, notes: 'Refilled 3.2L gear oil.', selectedOption: 'yes' }
-        ]
-      }
-    },
-    {
-      vehicleId: vehicles[2].plateNumber,
-      title: 'Fuel Filter Replacement',
-      status: MaintenanceStatus.COMPLETED,
-      maintenanceClass: 'PREVENTIVE',
-      createdAt: new Date('2026-04-15T00:00:00.000Z'),
-      assignedMechanic: mechanics[2].name,
-      accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: generalInspectionTemplate?.id,
-      garageId: pulilanGarage?.id,
-      odometerReading: 30000,
-      triggerType: MaintenanceTriggerType.ODOMETER,
-      intervalKm: 10000,
-      startingReferenceReadingKm: 20000,
-      partsCost: 480.0,
-      laborCost: 220.0,
-      totalCost: 700.0,
-      workOrderProgress: {
-        checklist: [
-          { item: 'Replace primary fuel filter', completed: true, notes: 'Primary filter canister replaced and primed.', selectedOption: 'yes' },
-          { item: 'Bleed fuel lines', completed: true, notes: 'Air purged, engine started smoothly.', selectedOption: 'yes' }
-        ]
-      }
-    },
-    {
-      vehicleId: vehicles[2].plateNumber,
-      title: 'Grease Chassis & Driveshaft U-Joints',
-      status: MaintenanceStatus.OVERDUE,
-      createdAt: new Date('2026-07-15T00:00:00.000Z'),
-      assignedMechanic: mechanics[3].name,
-      accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: generalInspectionTemplate?.id,
-      garageId: pulilanGarage?.id,
-      odometerReading: 31500,
-      triggerType: MaintenanceTriggerType.TIME,
-      intervalType: MaintenanceIntervalType.QUARTERLY,
-      startReferenceDate: new Date('2026-07-20T00:00:00.000Z'),
-    },
-    {
-      vehicleId: vehicles[3].plateNumber,
-      title: 'Engine Valve Clearance Adjustment',
-      status: MaintenanceStatus.COMPLETED,
-      maintenanceClass: 'PREVENTIVE',
-      createdAt: new Date('2026-02-05T00:00:00.000Z'),
-      assignedMechanic: mechanics[4].name,
-      accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: engineTuneupTemplate?.id,
-      garageId: staRosaGarage?.id,
-      odometerReading: 15000,
-      triggerType: MaintenanceTriggerType.MANUAL,
-      partsCost: 950.0,
-      laborCost: 550.0,
-      totalCost: 1500.0,
-      workOrderProgress: {
-        checklist: [
-          { item: 'Check intake/exhaust valve clearance', completed: true, notes: 'Adjusted intake valves to 0.20mm cold spec.', selectedOption: 'yes' },
-          { item: 'Replace valve cover gasket', completed: true, notes: 'New OEM rubber gasket fitted.', selectedOption: 'yes' }
-        ]
-      }
-    },
-    {
-      vehicleId: vehicles[3].plateNumber,
-      title: 'Front & Rear Brake Pad Replacement',
-      status: MaintenanceStatus.COMPLETED,
-      maintenanceClass: 'REPAIR',
-      createdAt: new Date('2026-05-18T00:00:00.000Z'),
-      assignedMechanic: mechanics[0].name,
-      accountType: AccountType.OUTSOURCED,
-      checklistTemplateId: brakeInspectionTemplate?.id,
-      garageId: staRosaGarage?.id,
-      odometerReading: 17200,
-      triggerType: MaintenanceTriggerType.ODOMETER,
-      intervalKm: 15000,
-      startingReferenceReadingKm: 2200,
-      partsCost: 1800.0,
-      laborCost: 650.0,
-      totalCost: 2450.0,
-      workOrderProgress: {
-        checklist: [
-          { item: 'Replace front ceramic brake pads', completed: true, notes: 'Installed ceramic pads, resurfaced rotors.', selectedOption: 'yes' },
-          { item: 'Flush brake fluid', completed: true, notes: 'DOT 4 fluid flushed.', selectedOption: 'yes' }
-        ]
-      }
-    },
-    {
-      vehicleId: vehicles[3].plateNumber,
-      title: 'Drive Belt & Tensioner Replacement',
-      status: MaintenanceStatus.OVERDUE,
-      createdAt: new Date('2026-07-10T00:00:00.000Z'),
-      assignedMechanic: mechanics[1].name,
-      accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: generalInspectionTemplate?.id,
-      garageId: staRosaGarage?.id,
-      odometerReading: 18000,
-      triggerType: MaintenanceTriggerType.TIME,
-      intervalType: MaintenanceIntervalType.SEMI_ANNUALLY,
-      startReferenceDate: new Date('2026-07-15T00:00:00.000Z'),
-    },
-    {
-      vehicleId: vehicles[4].plateNumber,
-      title: 'Turbocharger & Intercooler Hose Check',
-      status: MaintenanceStatus.COMPLETED,
-      maintenanceClass: 'PREVENTIVE',
-      createdAt: new Date('2026-03-22T00:00:00.000Z'),
-      assignedMechanic: mechanics[2].name,
-      accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: generalInspectionTemplate?.id,
-      garageId: marikinaGarage?.id,
-      odometerReading: 88000,
-      triggerType: MaintenanceTriggerType.MANUAL,
-      partsCost: 1250.0,
-      laborCost: 650.0,
-      totalCost: 1900.0,
-      workOrderProgress: {
-        checklist: [
-          { item: 'Inspect intercooler silicone hoses', completed: true, notes: 'Replaced lower boost hose clamp.', selectedOption: 'yes' },
-          { item: 'Check turbo shaft play', completed: true, notes: 'Zero axial play detected.', selectedOption: 'yes' }
-        ]
-      }
-    },
-    {
-      vehicleId: vehicles[4].plateNumber,
-      title: 'Clutch Master & Slave Cylinder Service',
-      status: MaintenanceStatus.COMPLETED,
-      maintenanceClass: 'REPAIR',
-      createdAt: new Date('2026-06-05T00:00:00.000Z'),
-      assignedMechanic: mechanics[3].name,
-      accountType: AccountType.OUTSOURCED,
-      checklistTemplateId: generalInspectionTemplate?.id,
-      garageId: marikinaGarage?.id,
-      odometerReading: 90500,
-      triggerType: MaintenanceTriggerType.ODOMETER,
-      intervalKm: 25000,
-      startingReferenceReadingKm: 65500,
-      partsCost: 1650.0,
-      laborCost: 800.0,
-      totalCost: 2450.0,
-      workOrderProgress: {
-        checklist: [
-          { item: 'Replace clutch slave cylinder', completed: true, notes: 'Replaced leaking slave cylinder.', selectedOption: 'yes' },
-          { item: 'Bleed hydraulic clutch fluid', completed: true, notes: 'Hydraulic system bled, pedal pressure restored.', selectedOption: 'yes' }
-        ]
-      }
-    },
-    {
-      vehicleId: vehicles[4].plateNumber,
-      title: 'Power Steering Pump Fluid Flush',
-      status: MaintenanceStatus.DUE,
-      createdAt: new Date('2026-08-02T00:00:00.000Z'),
-      assignedMechanic: mechanics[4].name,
-      accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: generalInspectionTemplate?.id,
-      garageId: marikinaGarage?.id,
-      odometerReading: 92000,
-      triggerType: MaintenanceTriggerType.TIME,
-      intervalType: MaintenanceIntervalType.QUARTERLY,
-      startReferenceDate: new Date('2026-08-08T00:00:00.000Z'),
-    },
-    {
-      vehicleId: vehicles[5].plateNumber,
-      title: 'Heavy Duty Air Brake Dryer Cartridge Service',
-      status: MaintenanceStatus.COMPLETED,
-      maintenanceClass: 'PREVENTIVE',
-      createdAt: new Date('2026-01-10T00:00:00.000Z'),
-      assignedMechanic: mechanics[0].name,
-      accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: brakeInspectionTemplate?.id,
-      garageId: pulilanGarage?.id,
-      odometerReading: 138000,
-      triggerType: MaintenanceTriggerType.TIME,
-      intervalType: MaintenanceIntervalType.SEMI_ANNUALLY,
-      startReferenceDate: new Date('2026-01-10T00:00:00.000Z'),
-      partsCost: 2100.0,
-      laborCost: 750.0,
-      totalCost: 2850.0,
-      workOrderProgress: {
-        checklist: [
-          { item: 'Replace air dryer desiccant cartridge', completed: true, notes: 'Desiccant cartridge replaced.', selectedOption: 'yes' },
-          { item: 'Drain wet tank moisture', completed: true, notes: 'Wet tank drained, no excessive oil found.', selectedOption: 'yes' }
-        ]
-      }
-    },
-    {
-      vehicleId: vehicles[5].plateNumber,
-      title: 'Diesel Particulate Filter (DPF) Cleaning',
-      status: MaintenanceStatus.COMPLETED,
-      maintenanceClass: 'PREVENTIVE',
-      createdAt: new Date('2026-04-20T00:00:00.000Z'),
-      assignedMechanic: mechanics[1].name,
-      accountType: AccountType.OUTSOURCED,
-      checklistTemplateId: generalInspectionTemplate?.id,
-      garageId: pulilanGarage?.id,
-      odometerReading: 141000,
-      triggerType: MaintenanceTriggerType.ODOMETER,
-      intervalKm: 30000,
-      startingReferenceReadingKm: 111000,
-      partsCost: 3200.0,
-      laborCost: 1500.0,
-      totalCost: 4700.0,
-      workOrderProgress: {
-        checklist: [
-          { item: 'Perform thermal DPF bake & flush', completed: true, notes: 'Soot load reduced from 85% to 4%.', selectedOption: 'yes' },
-          { item: 'Reset DPF differential pressure sensor', completed: true, notes: 'Sensor reset via OBD scanner.', selectedOption: 'yes' }
-        ]
-      }
-    },
-    {
-      vehicleId: vehicles[5].plateNumber,
-      title: 'Fifth Wheel Coupling Plate Lubrication & Inspection',
-      status: MaintenanceStatus.PENDING,
-      createdAt: new Date('2026-08-05T00:00:00.000Z'),
-      assignedMechanic: mechanics[2].name,
-      accountType: AccountType.IN_HOUSE,
-      checklistTemplateId: generalInspectionTemplate?.id,
-      garageId: pulilanGarage?.id,
-      odometerReading: 145000,
-      triggerType: MaintenanceTriggerType.TIME,
-      intervalType: MaintenanceIntervalType.MONTHLY,
-      startReferenceDate: new Date('2026-08-20T00:00:00.000Z'),
-    },
-  ].map((schedule, index) => {
-    const vehicle = vehicles.find((entry) => entry.plateNumber === schedule.vehicleId);
-    if (!vehicle?.garageId) throw new Error(`Cannot seed schedule for ${schedule.vehicleId}: vehicle garage assignment is missing.`);
+  ];
+
+  const dayMilliseconds = 24 * 60 * 60 * 1000;
+  const fixtureDate = (daysFromAnchor: number) =>
+    new Date(
+      maintenanceFixtureAnchor.getTime() + daysFromAnchor * dayMilliseconds,
+    );
+  const subtractTimeInterval = (
+    date: Date,
+    interval: { value: number; unit: 'DAYS' | 'MONTHS' },
+  ) => {
+    const previous = new Date(date);
+    if (interval.unit === 'DAYS') {
+      previous.setUTCDate(previous.getUTCDate() - interval.value);
+    } else {
+      const day = previous.getUTCDate();
+      previous.setUTCDate(1);
+      previous.setUTCMonth(previous.getUTCMonth() - interval.value);
+      const lastDay = new Date(
+        Date.UTC(previous.getUTCFullYear(), previous.getUTCMonth() + 1, 0),
+      ).getUTCDate();
+      previous.setUTCDate(Math.min(day, lastDay));
+    }
+    return previous;
+  };
+
+  const maintenanceSchedulesData = scheduleFixtures.map((fixture, index) => {
+    const vehicle = vehicles.find(
+      (entry) => entry.plateNumber === fixture.vehiclePlate,
+    );
+    if (!vehicle?.garageId) {
+      throw new Error(
+        `Cannot seed schedule "${fixture.identity}": active vehicle or garage assignment is missing.`,
+      );
+    }
+    const mechanic = mechanics[fixture.mechanicIndex];
     const chiefMechanic = chiefMechanics[index % chiefMechanics.length];
-    const seedIdentity = [
-      schedule.vehicleId,
-      schedule.title,
-      schedule.createdAt.toISOString(),
-    ].join(':');
+    const checklistTemplate = templateByType.get(fixture.title);
+    const checklistItems = checklistItemsByType.get(fixture.title);
+    if (!checklistTemplate || !checklistItems?.length) {
+      throw new Error(
+        `Cannot seed schedule "${fixture.identity}": checklist template "${fixture.title}" or its active items are missing.`,
+      );
+    }
+    if (
+      (fixture.accountType === AccountType.IN_HOUSE && !mechanic) ||
+      !chiefMechanic?.userId
+    ) {
+      throw new Error(
+        `Cannot seed schedule "${fixture.identity}": assigned or chief mechanic identity is missing.`,
+      );
+    }
+
+    const rawCreatedAt = fixtureDate(-fixture.createdDaysAgo);
+    const createdAt = shiftMaintenanceFixtureDate(rawCreatedAt);
+    const isCompleted = fixture.status === MaintenanceStatus.COMPLETED;
+    let odometerReading = vehicle.odometer;
+    let startingReferenceReadingKm: number | null = null;
+    const serviceOffsetKm = fixture.serviceOffsetKm;
+    if (
+      isCompleted &&
+      serviceOffsetKm != null &&
+      (!Number.isSafeInteger(serviceOffsetKm) || serviceOffsetKm <= 0)
+    ) {
+      throw new Error(
+        `Cannot seed completed schedule "${fixture.identity}": service offset must be positive.`,
+      );
+    }
+
+    if (fixture.triggerType === MaintenanceTriggerType.ODOMETER) {
+      const intervalKm = fixture.intervalKm;
+      if (
+        intervalKm == null ||
+        !Number.isSafeInteger(intervalKm) ||
+        intervalKm <= 0
+      ) {
+        throw new Error(
+          `Cannot seed schedule "${fixture.identity}": odometer interval must be a positive whole number.`,
+        );
+      }
+      if (isCompleted) {
+        if (serviceOffsetKm == null) {
+          throw new Error(
+            `Cannot seed completed schedule "${fixture.identity}": service offset must be positive.`,
+          );
+        }
+        odometerReading = reconcileSeedOdometerReading(
+          Math.max(1, vehicle.odometer - serviceOffsetKm),
+          vehicle.odometer,
+        )!;
+        startingReferenceReadingKm = odometerReading - intervalKm;
+      } else {
+        const dueOffsetKm = fixture.dueOffsetKm ?? 0;
+        startingReferenceReadingKm =
+          vehicle.odometer + dueOffsetKm - intervalKm;
+      }
+      if (
+        startingReferenceReadingKm < 0 ||
+        startingReferenceReadingKm > odometerReading ||
+        odometerReading > vehicle.odometer
+      ) {
+        throw new Error(
+          `Cannot seed schedule "${fixture.identity}": odometer values do not fit the current vehicle reading.`,
+        );
+      }
+    } else if (isCompleted && serviceOffsetKm != null) {
+      odometerReading = reconcileSeedOdometerReading(
+        Math.max(1, vehicle.odometer - serviceOffsetKm),
+        vehicle.odometer,
+      )!;
+    }
+
+    let startReferenceDate: Date | null = null;
+    if (fixture.triggerType === MaintenanceTriggerType.TIME) {
+      const interval = getTimeInterval({ intervalType: fixture.intervalType });
+      if (!interval) {
+        throw new Error(
+          `Cannot seed time-based schedule "${fixture.identity}": interval preset is missing.`,
+        );
+      }
+      const targetDueFixtureDate = isCompleted
+        ? rawCreatedAt
+        : fixtureDate(fixture.timeDueInDays ?? 30);
+      if (targetDueFixtureDate < rawCreatedAt) {
+        throw new Error(
+          `Cannot seed schedule "${fixture.identity}": target due date precedes its creation date.`,
+        );
+      }
+      startReferenceDate = shiftMaintenanceFixtureDate(
+        subtractTimeInterval(targetDueFixtureDate, interval),
+      );
+    }
+
+    const progressState = fixture.progressState;
+    const hasWorkProgress =
+      isCompleted ||
+      fixture.status === MaintenanceStatus.DONE ||
+      progressState != null;
+    const checklistComplete =
+      isCompleted ||
+      fixture.status === MaintenanceStatus.DONE ||
+      progressState === 'SUBMITTED';
+    const workOrderProgress = hasWorkProgress
+      ? {
+          checklist: checklistItems.map((item, itemIndex) => {
+            const completed = checklistComplete || itemIndex < 2;
+            return {
+              item,
+              completed,
+              ...(completed
+                ? {
+                    notes: `Synthetic ${fixture.title.toLowerCase()} check recorded.`,
+                    selectedOption: 'yes',
+                  }
+                : {}),
+            };
+          }),
+          ...(fixture.overdueFromStatus
+            ? { overdueFromStatus: fixture.overdueFromStatus }
+            : {}),
+          ...(fixture.status === MaintenanceStatus.DONE
+            ? {
+                maintenanceClass: fixture.maintenanceClass ?? 'PREVENTIVE',
+                maintenanceRemarks: `Synthetic work submitted for ${fixture.title}.`,
+                serviceOdometerReading: odometerReading,
+                workCompletedAt: createdAt.toISOString(),
+                laborCost: fixture.laborCost ?? 0,
+              }
+            : {}),
+        }
+      : undefined;
+
+    if (isCompleted && !fixture.maintenanceClass) {
+      throw new Error(
+        `Completed schedule "${fixture.identity}" needs a maintenance classification.`,
+      );
+    }
+    const assignedMechanic =
+      fixture.accountType === AccountType.OUTSOURCED
+        ? 'External workshop technician'
+        : mechanic?.name;
+    if (!assignedMechanic) {
+      throw new Error(
+        `Cannot seed schedule "${fixture.identity}": assigned mechanic identity is missing.`,
+      );
+    }
+    const assignedMechanicId = resolveSeedMechanicId(
+      assignedMechanic,
+      fixture.accountType,
+    );
+    const partsCost = fixture.partsCost;
+    const laborCost = fixture.laborCost;
+
     return {
-      ...schedule,
-      seedIdentity,
-      createdAt: shiftMaintenanceFixtureDate(schedule.createdAt),
-      startReferenceDate: shiftOptionalMaintenanceFixtureDate(
-        schedule.startReferenceDate,
-      ),
+      seedIdentity: fixture.identity,
+      vehicleId: vehicle.plateNumber,
+      title: fixture.title,
+      status: fixture.status,
+      priority: fixture.priority,
+      createdAt,
+      assignedMechanic,
+      accountType: fixture.accountType,
+      outsourcedProvider:
+        fixture.accountType === AccountType.OUTSOURCED
+          ? demoProviderName
+          : null,
+      checklistTemplateId: checklistTemplate.id,
       garageId: vehicle.garageId,
-      startDate: shiftMaintenanceFixtureDate(schedule.createdAt),
-      chiefMechanicId: chiefMechanic.userId!,
+      odometerReading,
+      triggerType: fixture.triggerType,
+      intervalKm: fixture.intervalKm,
+      bufferDistanceKm: fixture.bufferDistanceKm,
+      startingReferenceReadingKm: startingReferenceReadingKm ?? undefined,
+      intervalType: fixture.intervalType,
+      startReferenceDate: startReferenceDate ?? undefined,
+      startDate: createdAt,
+      chiefMechanicId: chiefMechanic.userId,
       chiefMechanic: chiefMechanic.name,
-      assignedMechanicId: resolveSeedMechanicId(
-        schedule.assignedMechanic,
-        schedule.accountType,
-      ),
+      assignedMechanicId,
+      ...(fixture.maintenanceClass
+        ? { maintenanceClass: fixture.maintenanceClass }
+        : {}),
+      ...(workOrderProgress ? { workOrderProgress } : {}),
+      ...(partsCost !== undefined ? { partsCost } : {}),
+      ...(laborCost !== undefined ? { laborCost } : {}),
+      ...(partsCost !== undefined || laborCost !== undefined
+        ? { totalCost: (partsCost ?? 0) + (laborCost ?? 0) }
+        : {}),
     };
   });
 
   const assertCompletedScheduleHasProgress = (schedule: any) => {
-    if (schedule.status === MaintenanceStatus.COMPLETED && schedule.workOrderProgress == null) {
+    if (
+      schedule.status === MaintenanceStatus.COMPLETED &&
+      schedule.workOrderProgress == null
+    ) {
       throw new Error(
         `Completed maintenance schedule for vehicle ${schedule.vehicleId} must include workOrderProgress in seed data.`,
       );
     }
   };
 
-  // Match the partial index's LOWER(BTRIM(...)) identity. Reserve explicit
-  // Pending fixtures up front so generated cycles cannot collide with later rows.
   const pendingScheduleKey = (schedule: { vehicleId: string; title: string }) =>
-    JSON.stringify([schedule.vehicleId, schedule.title].map(value => value.replace(/^ +| +$/g, '').toLowerCase()));
-  const pendingScheduleKeys = new Set(
-    maintenanceSchedulesData
-      .filter(schedule => schedule.status === MaintenanceStatus.PENDING)
-      .map(pendingScheduleKey),
-  );
+    JSON.stringify(
+      [schedule.vehicleId, schedule.title].map((value) =>
+        value.replace(/^ +| +$/g, '').toLowerCase(),
+      ),
+    );
+  const fixturePendingKeys = new Set<string>();
+  for (const schedule of maintenanceSchedulesData) {
+    if (schedule.status !== MaintenanceStatus.PENDING) continue;
+    const key = pendingScheduleKey(schedule);
+    if (fixturePendingKeys.has(key)) {
+      throw new Error(
+        `Cannot seed duplicate pending schedule for ${schedule.vehicleId}: ${schedule.title}.`,
+      );
+    }
+    fixturePendingKeys.add(key);
+  }
+
+  const existingPending = await prisma.maintenanceSchedule.findMany({
+    where: { status: MaintenanceStatus.PENDING, deletedAt: null },
+    select: { id: true, vehicleId: true, title: true },
+  });
+  const pendingScheduleIdsByKey = new Map<string, Set<string>>();
+  const registerPendingSchedule = (schedule: {
+    id: string;
+    vehicleId: string;
+    title: string;
+  }) => {
+    const key = pendingScheduleKey(schedule);
+    const ids = pendingScheduleIdsByKey.get(key) ?? new Set<string>();
+    ids.add(schedule.id);
+    pendingScheduleIdsByKey.set(key, ids);
+  };
+  const hasPendingScheduleConflict = (key: string, exceptId: string) =>
+    [...(pendingScheduleIdsByKey.get(key) ?? [])].some((id) => id !== exceptId);
+  existingPending.forEach(registerPendingSchedule);
+  const existingPendingIds = new Set(existingPending.map(({ id }) => id));
+
+  if (!existingDemoProvider) {
+    await prisma.outsourcedProvider.create({
+      data: {
+        id: seedId('outsourced-provider:vmms-demo-workshop'),
+        name: demoProviderName,
+        isActive: true,
+      },
+    });
+  }
 
   const createNextSeedMaintenanceSchedule = async (completedSchedule: any) => {
     const triggerType = completedSchedule.triggerType;
@@ -1306,13 +873,13 @@ export async function seedVmms(prisma: PrismaClient) {
       unit: 'MONTHS' as const,
     };
     const recurrenceIntervalType = isTimeRecurring
-      ? Object.values(MaintenanceIntervalType).find((intervalType) => {
+      ? (Object.values(MaintenanceIntervalType).find((intervalType) => {
           const preset = getTimeInterval({ intervalType });
           return (
             preset?.value === timeInterval.value &&
             preset.unit === timeInterval.unit
           );
-        }) ?? null
+        }) ?? null)
       : completedSchedule.intervalType;
     const vehicle = vehicles.find(
       (entry) => entry.plateNumber === completedSchedule.vehicleId,
@@ -1343,67 +910,119 @@ export async function seedVmms(prisma: PrismaClient) {
     }
 
     const pendingKey = pendingScheduleKey(completedSchedule);
-    if (pendingScheduleKeys.has(pendingKey)) {
+    const recurrenceId = seedId(`recurrence:${completedSchedule.id}`);
+    const existingSuccessor = await prisma.maintenanceSchedule.findUnique({
+      where: { previousScheduleId: completedSchedule.id },
+      select: { id: true, vehicleId: true, title: true, status: true },
+    });
+    if (existingSuccessor && existingSuccessor.id !== recurrenceId) {
+      console.log(
+        `  Preserved existing maintenance recurrence for ${completedSchedule.vehicleId}: ${completedSchedule.title}; skipped seed recurrence fixture.`,
+      );
+      return existingSuccessor;
+    }
+    if (hasPendingScheduleConflict(pendingKey, recurrenceId)) {
+      console.log(
+        `  Preserved existing pending schedule for ${completedSchedule.vehicleId}: ${completedSchedule.title}; skipped recurrence fixture.`,
+      );
       return null;
     }
 
-    const nextSchedule = await prisma.maintenanceSchedule.upsert({
-      where: { previousScheduleId: completedSchedule.id },
-      update: {},
-      create: {
-        id: seedId(`recurrence:${completedSchedule.id}`),
-        vehicleId: completedSchedule.vehicleId,
+    const nextScheduleData = {
+      vehicleId: completedSchedule.vehicleId,
+      startDate: referenceDate,
+      targetDueDate: sampleTargetDueDate({
+        ...completedSchedule,
+        startReferenceDate: referenceDate,
         startDate: referenceDate,
-        targetDueDate: sampleTargetDueDate({
-          ...completedSchedule,
-          startReferenceDate: referenceDate,
-          startDate: referenceDate,
-          createdAt: referenceDate,
-          timeIntervalValue: isTimeRecurring ? timeInterval.value : null,
-          timeIntervalUnit: isTimeRecurring ? timeInterval.unit : null,
-        }),
-        title: completedSchedule.title,
-        status: MaintenanceStatus.PENDING,
-        assignedMechanic: completedSchedule.assignedMechanic,
-        assignedMechanicId: completedSchedule.assignedMechanicId,
-        chiefMechanicId: completedSchedule.chiefMechanicId,
-        chiefMechanic: completedSchedule.chiefMechanic,
-        accountType: completedSchedule.accountType,
-        checklistTemplateId: completedSchedule.checklistTemplateId,
-        garageId: vehicle.garageId,
-        odometerReading: vehicle.odometer,
-        triggerType: completedSchedule.triggerType,
-        intervalKm: completedSchedule.intervalKm,
-        bufferDistanceKm: completedSchedule.bufferDistanceKm,
-        startingReferenceReadingKm: isOdometerRecurring
-          ? completionOdometer
-          : null,
-        intervalType: recurrenceIntervalType,
+        createdAt: referenceDate,
         timeIntervalValue: isTimeRecurring ? timeInterval.value : null,
         timeIntervalUnit: isTimeRecurring ? timeInterval.unit : null,
-        startReferenceDate: isTimeRecurring ? referenceDate : null,
-        previousScheduleId: completedSchedule.id,
-      },
+      }),
+      title: completedSchedule.title,
+      status: MaintenanceStatus.PENDING,
+      approvalStatus: MaintenanceApprovalStatus.UNVERIFIED,
+      assignedMechanic: completedSchedule.assignedMechanic,
+      assignedMechanicId: completedSchedule.assignedMechanicId,
+      chiefMechanicId: completedSchedule.chiefMechanicId,
+      chiefMechanic: completedSchedule.chiefMechanic,
+      accountType: completedSchedule.accountType,
+      outsourcedProvider: completedSchedule.outsourcedProvider,
+      checklistTemplateId: completedSchedule.checklistTemplateId,
+      garageId: vehicle.garageId,
+      priority: completedSchedule.priority,
+      odometerReading: vehicle.odometer,
+      triggerType: completedSchedule.triggerType,
+      intervalKm: completedSchedule.intervalKm,
+      bufferDistanceKm: completedSchedule.bufferDistanceKm,
+      startingReferenceReadingKm: isOdometerRecurring
+        ? completionOdometer
+        : null,
+      intervalType: recurrenceIntervalType,
+      timeIntervalValue: isTimeRecurring ? timeInterval.value : null,
+      timeIntervalUnit: isTimeRecurring ? timeInterval.unit : null,
+      startReferenceDate: isTimeRecurring ? referenceDate : null,
+      previousScheduleId: completedSchedule.id,
+      workOrderProgress: Prisma.DbNull,
+      partsCost: null,
+      laborCost: null,
+      totalCost: null,
+      logNumber: null,
+      deletedAt: null,
+      completedAt: null,
+      createdAt: referenceDate,
+    };
+    const nextSchedule = await prisma.maintenanceSchedule.upsert({
+      where: { id: recurrenceId },
+      update: nextScheduleData,
+      create: { id: recurrenceId, ...nextScheduleData },
     });
-    pendingScheduleKeys.add(pendingKey);
+    if (nextSchedule.status === MaintenanceStatus.PENDING) {
+      registerPendingSchedule(nextSchedule);
+      existingPendingIds.add(nextSchedule.id);
+    }
     return nextSchedule;
   };
 
   let createdMaintenanceSchedulesCount = 0;
   for (const schedule of maintenanceSchedulesData) {
     assertCompletedScheduleHasProgress(schedule);
+    const scheduleId = seedId(`schedule:${schedule.seedIdentity}`);
+    const pendingKey = pendingScheduleKey(schedule);
+    if (
+      schedule.status === MaintenanceStatus.PENDING &&
+      hasPendingScheduleConflict(pendingKey, scheduleId) &&
+      !existingPendingIds.has(scheduleId)
+    ) {
+      console.log(
+        `  Preserved existing pending schedule for ${schedule.vehicleId}: ${schedule.title}; skipped conflicting fixture.`,
+      );
+      continue;
+    }
 
     const isMaintenanceLog = schedule.status === MaintenanceStatus.COMPLETED;
-    const maintenanceClass = (schedule as typeof schedule & { maintenanceClass?: 'REPAIR' | 'PREVENTIVE' }).maintenanceClass;
+    const maintenanceClass = (
+      schedule as typeof schedule & {
+        maintenanceClass?: 'REPAIR' | 'PREVENTIVE';
+      }
+    ).maintenanceClass;
     if (isMaintenanceLog && !maintenanceClass) {
-      throw new Error(`Completed sample schedule "${schedule.title}" requires an explicit Repair or Preventive classification.`);
+      throw new Error(
+        `Completed sample schedule "${schedule.title}" requires an explicit Repair or Preventive classification.`,
+      );
     }
     const scheduleData = { ...schedule } as Record<string, any>;
     delete scheduleData.maintenanceClass;
     delete scheduleData.seedIdentity;
-    scheduleData.targetDueDate = scheduleData.targetDueDate ?? sampleTargetDueDate(scheduleData);
-    const [generatedLog] = isMaintenanceLog
-      ? await prisma.$queryRaw<Array<{ logNumber: string }>>`
+    scheduleData.targetDueDate =
+      scheduleData.targetDueDate ?? sampleTargetDueDate(scheduleData);
+    const existingSchedule = await prisma.maintenanceSchedule.findUnique({
+      where: { id: scheduleId },
+      select: { logNumber: true },
+    });
+    const [generatedLog] =
+      isMaintenanceLog && !existingSchedule?.logNumber
+        ? await prisma.$queryRaw<Array<{ logNumber: string }>>`
         WITH next_log_number AS (
           SELECT NEXTVAL('maintenance_log_number_seq') AS value
         )
@@ -1411,41 +1030,86 @@ export async function seedVmms(prisma: PrismaClient) {
           LPAD(next_log_number.value::TEXT, GREATEST(4, LENGTH(next_log_number.value::TEXT)), '0') AS "logNumber"
         FROM next_log_number
       `
-      : [];
+        : [];
     const persistedSchedule = {
       ...scheduleData,
-      ...(generatedLog?.logNumber ? { logNumber: generatedLog.logNumber } : {}),
-      ...stateForStorage({
-        ...((schedule.workOrderProgress ?? {}) as Record<string, any>),
-        ...(isMaintenanceLog ? {
-          maintenanceClass,
-          maintenanceRemarks:
-            (schedule.workOrderProgress as Record<string, unknown> | undefined)?.maintenanceRemarks ??
-            `Sample maintenance record: ${schedule.title} service completed.`,
-          serviceOdometerReading: schedule.odometerReading,
-          workCompletedAt:
-            (schedule.workOrderProgress as Record<string, unknown> | undefined)?.workCompletedAt ??
-            schedule.createdAt.toISOString(),
-          laborCost: schedule.laborCost ?? 0,
-        } : {}),
-      }, schedule.status),
+      logNumber: isMaintenanceLog
+        ? (existingSchedule?.logNumber ?? generatedLog?.logNumber ?? null)
+        : null,
+      ...stateForStorage(
+        {
+          ...((schedule.workOrderProgress ?? {}) as Record<string, any>),
+          ...(isMaintenanceLog
+            ? {
+                maintenanceClass,
+                maintenanceRemarks:
+                  (
+                    schedule.workOrderProgress as
+                      Record<string, unknown> | undefined
+                  )?.maintenanceRemarks ??
+                  `Sample maintenance record: ${schedule.title} service completed.`,
+                serviceOdometerReading: schedule.odometerReading,
+                workCompletedAt:
+                  (
+                    schedule.workOrderProgress as
+                      Record<string, unknown> | undefined
+                  )?.workCompletedAt ?? schedule.createdAt.toISOString(),
+                laborCost: schedule.laborCost ?? 0,
+              }
+            : {}),
+        },
+        schedule.status,
+      ),
     };
-    const fixtureKey = schedule.seedIdentity;
-    const createData = (schedule.status === MaintenanceStatus.COMPLETED
-      ? { ...persistedSchedule, completedAt: schedule.createdAt }
-      : persistedSchedule) as any;
+    const createData = (
+      schedule.status === MaintenanceStatus.COMPLETED
+        ? {
+            ...persistedSchedule,
+            approvalStatus: MaintenanceApprovalStatus.VERIFIED,
+            completedAt: schedule.createdAt,
+          }
+        : persistedSchedule
+    ) as any;
+    const updateData = {
+      ...persistedSchedule,
+      approvalStatus: isMaintenanceLog
+        ? MaintenanceApprovalStatus.VERIFIED
+        : MaintenanceApprovalStatus.UNVERIFIED,
+      completedAt: isMaintenanceLog ? schedule.createdAt : null,
+      startingReferenceReadingKm: schedule.startingReferenceReadingKm ?? null,
+      intervalType: schedule.intervalType ?? null,
+      startReferenceDate: schedule.startReferenceDate ?? null,
+      timeIntervalValue: null,
+      timeIntervalUnit: null,
+      previousScheduleId: null,
+      workOrderProgress:
+        schedule.workOrderProgress == null
+          ? Prisma.DbNull
+          : persistedSchedule.workOrderProgress,
+      partsCost: schedule.partsCost ?? null,
+      laborCost: schedule.laborCost ?? null,
+      totalCost: schedule.totalCost ?? null,
+      deletedAt: null,
+    };
     const createdSchedule = await prisma.maintenanceSchedule.upsert({
-      where: { id: seedId(`schedule:${fixtureKey}`) },
-      update: {},
-      create: { ...createData, id: seedId(`schedule:${fixtureKey}`) },
+      where: { id: scheduleId },
+      update: updateData,
+      create: { ...createData, id: scheduleId },
     });
     createdMaintenanceSchedulesCount += 1;
+    if (createdSchedule.status === MaintenanceStatus.PENDING) {
+      registerPendingSchedule(createdSchedule);
+      existingPendingIds.add(createdSchedule.id);
+    }
 
     if (createdSchedule.status === MaintenanceStatus.COMPLETED) {
-      const nextSchedule = await createNextSeedMaintenanceSchedule(createdSchedule);
+      const nextSchedule =
+        await createNextSeedMaintenanceSchedule(createdSchedule);
       if (nextSchedule) createdMaintenanceSchedulesCount += 1;
     }
   }
 
-  console.log(`  Created ${createdMaintenanceSchedulesCount} sample maintenance schedules for VMMS\n`);
+  console.log(
+    `  Processed ${createdMaintenanceSchedulesCount} sample maintenance schedules without replacing existing rows.\n`,
+  );
 }

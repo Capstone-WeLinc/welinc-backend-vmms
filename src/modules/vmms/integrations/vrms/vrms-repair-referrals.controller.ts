@@ -25,4 +25,5 @@ export class VrmsRepairReferralsController {
   retry(@Param('id', ParseUUIDPipe) id: string) {
     return this.referrals.retryFailed(id);
   }
+
 }

@@ -13,6 +13,7 @@ import type { Env } from '../../../../config/env';
 import {
   BMS_FLEET_CHANGE_TOKENS,
   ServiceTokenClient,
+  VRMS_FLEET_CHANGE_TOKENS,
 } from '../../../../auth/verify';
 import { PrismaService } from '../../../../shared/prisma.service';
 
@@ -22,8 +23,11 @@ const RETRY_BASE_SECONDS = 30;
 const RETRY_MAX_SECONDS = 60 * 60;
 
 class IntegrationResponseError extends Error {
-  constructor(readonly status: number) {
-    super(`BMS answered with status ${status}.`);
+  constructor(
+    readonly target: 'BMS' | 'VRMS',
+    readonly status: number,
+  ) {
+    super(`${target} answered with status ${status}.`);
     this.name = 'IntegrationResponseError';
   }
 }
@@ -37,7 +41,9 @@ export class BmsFleetChangesService {
     private readonly prisma: PrismaService,
     config: ConfigService<Env, true>,
     @Inject(BMS_FLEET_CHANGE_TOKENS)
-    private readonly tokens: ServiceTokenClient,
+    private readonly bmsTokens: ServiceTokenClient,
+    @Inject(VRMS_FLEET_CHANGE_TOKENS)
+    private readonly vrmsTokens: ServiceTokenClient,
   ) {
     this.gatewayUrl = config
       .get('SUITE_GATEWAY_INTERNAL_URL', { infer: true })
@@ -133,35 +139,62 @@ export class BmsFleetChangesService {
     changeType: string;
     occurredAt: Date;
   }): Promise<void> {
-    await this.tokens.withToken(async (token) => {
-      const response = await fetch(
-        `${this.gatewayUrl}/bms/integrations/vmms/fleet-changes`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            eventId: event.eventId,
-            entityType: event.entityType,
-            entityId: event.entityId,
-            changeType: event.changeType,
-            occurredAt: event.occurredAt.toISOString(),
-          }),
-          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    const body = {
+      eventId: event.eventId,
+      entityType: event.entityType,
+      entityId: event.entityId,
+      changeType: event.changeType,
+      occurredAt: event.occurredAt.toISOString(),
+    };
+
+    await Promise.all([
+      this.sendTo(
+        this.bmsTokens,
+        'BMS',
+        '/bms/integrations/vmms/fleet-changes',
+        body,
+      ),
+      this.sendTo(
+        this.vrmsTokens,
+        'VRMS',
+        '/vrms/integrations/vmms/fleet-changes',
+        body,
+      ),
+    ]);
+  }
+
+  private async sendTo(
+    tokens: ServiceTokenClient,
+    target: 'BMS' | 'VRMS',
+    path: string,
+    body: {
+      eventId: string;
+      entityType: string;
+      entityId: string;
+      changeType: string;
+      occurredAt: string;
+    },
+  ): Promise<void> {
+    await tokens.withToken(async (token) => {
+      const response = await fetch(`${this.gatewayUrl}${path}`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
         },
-      );
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
 
       if (response.status === 401) throw new UnauthorizedException();
       if (response.status !== 200 && response.status !== 202)
-        throw new IntegrationResponseError(response.status);
+        throw new IntegrationResponseError(target, response.status);
     });
   }
 
   private errorCode(error: unknown): string {
     if (error instanceof IntegrationResponseError)
-      return `http_${error.status}`;
+      return `${error.target.toLowerCase()}_http_${error.status}`;
     if (error instanceof HttpException) return `http_${error.getStatus()}`;
     const name = (error as { name?: unknown } | null)?.name;
     if (name === 'TimeoutError' || name === 'AbortError') return 'timeout';

@@ -139,4 +139,122 @@ describe('FuelService', () => {
     ).rejects.toThrow('do not have access');
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
+
+  it('returns the persisted fill-up total cost for successful import rows', async () => {
+    const prisma = {
+      vehicle: {
+        findMany: jest
+          .fn()
+          .mockResolvedValue([{ id: 'vehicle-id', plateNumber: 'ABC-123' }]),
+      },
+      fuelStation: {
+        findMany: jest.fn().mockResolvedValue([{ id: 'station-id' }]),
+      },
+      fuelFillUp: { findFirst: jest.fn().mockResolvedValue(null) },
+    };
+    const service = new FuelService(prisma as any);
+    jest
+      .spyOn(service, 'create')
+      .mockResolvedValue({ id: 'fill-up-id', totalCost: 137.42 } as any);
+
+    const result = await service.saveImportRows(
+      [
+        {
+          key: 'row-1',
+          sheetName: 'November',
+          worksheetRow: 2,
+          plateNumber: 'ABC-123',
+          stationId: 'station-id',
+          date: '2026-10-10',
+          odometer: 1200,
+          liters: 10,
+          pricePerLiter: 12,
+          filledBy: 'Driver',
+          isFullTank: true,
+        },
+      ],
+      operations,
+    );
+
+    expect(result).toMatchObject({
+      saved: 1,
+      failed: 0,
+      rows: [
+        {
+          status: 'SAVED',
+          fillUpId: 'fill-up-id',
+          totalCost: 137.42,
+        },
+      ],
+    });
+  });
+
+  it('omits fuel amounts and costs from Chief Mechanic anomaly responses', async () => {
+    const referral = {
+      id: 'referral-id',
+      status: 'SENT',
+      repairTicketNumber: 'VR-100',
+      repairStatus: 'OPEN',
+      outcomeReason: null,
+      lastErrorCode: null,
+      createdAt: new Date('2026-11-27T00:00:00.000Z'),
+    };
+    const prisma = {
+      fuelAnomaly: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'anomaly-id',
+            fillUpId: 'entry-id',
+            vehicleId: 'vehicle-id',
+            efficiency: 5,
+            rollingAverage: 10,
+            status: 'OPEN',
+            note: null,
+            acknowledgedAt: null,
+            createdAt: new Date('2026-11-27T00:00:00.000Z'),
+            fillUp: {
+              id: 'entry-id',
+              entryDate: new Date('2026-11-27T00:00:00.000Z'),
+              odometer: 15400,
+              isVoided: false,
+              stationNameSnapshot: 'Petron',
+              station: { name: 'Petron' },
+              repairReferral: referral,
+            },
+            vehicle: {
+              id: 'vehicle-id',
+              plateNumber: 'TGD 908',
+              model: 'Truck',
+            },
+            attachments: [],
+          },
+        ]),
+      },
+    };
+    const service = new FuelService(prisma as any);
+
+    const result = await service.anomalies({
+      sub: 'chief-id',
+      email: 'chief@example.test',
+      roles: [{ system: 'VMMS', role: 'CHIEF_MECHANIC' }],
+    });
+
+    const fillUpSelect =
+      prisma.fuelAnomaly.findMany.mock.calls[0][0].select.fillUp.select;
+    expect(fillUpSelect).toMatchObject({
+      id: true,
+      entryDate: true,
+      odometer: true,
+      isVoided: true,
+    });
+    expect(fillUpSelect).not.toHaveProperty('liters');
+    expect(fillUpSelect).not.toHaveProperty('pricePerLiter');
+    expect(fillUpSelect).not.toHaveProperty('totalCost');
+    expect(result[0].repairReferral).toMatchObject({
+      id: 'referral-id',
+      status: 'SENT',
+    });
+    expect(result[0].fillUp).not.toHaveProperty('pricePerLiter');
+    expect(result[0].fillUp).not.toHaveProperty('totalCost');
+  });
 });

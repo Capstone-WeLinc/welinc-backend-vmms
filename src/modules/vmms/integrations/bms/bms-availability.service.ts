@@ -20,6 +20,10 @@ const REQUEST_TIMEOUT_MS = 5_000;
 const CLAIM_LEASE_MS = 15_000;
 const RETRY_BASE_SECONDS = 30;
 const RETRY_MAX_SECONDS = 60 * 60;
+const retryableAvailabilityEventFilter: Prisma.BmsVehicleAvailabilityEventWhereInput =
+  {
+    OR: [{ lastErrorCode: null }, { lastErrorCode: { not: 'http_400' } }],
+  };
 
 class IntegrationResponseError extends Error {
   constructor(readonly status: number) {
@@ -70,7 +74,11 @@ export class BmsAvailabilityService {
     try {
       const now = new Date();
       const events = await this.prisma.bmsVehicleAvailabilityEvent.findMany({
-        where: { sentAt: null, nextAttemptAt: { lte: now } },
+        where: {
+          sentAt: null,
+          nextAttemptAt: { lte: now },
+          ...retryableAvailabilityEventFilter,
+        },
         orderBy: [{ vehicleId: 'asc' }, { eventVersion: 'asc' }],
         take: 100,
         include: { vehicle: { select: { plateNumber: true } } },
@@ -92,8 +100,22 @@ export class BmsAvailabilityService {
             data: { sentAt: new Date(), lastErrorCode: null },
           });
         } catch (error) {
-          blockedVehicles.add(event.vehicleId);
           const errorCode = this.errorCode(error);
+          if (
+            error instanceof IntegrationResponseError &&
+            error.status === 400
+          ) {
+            await this.prisma.bmsVehicleAvailabilityEvent.updateMany({
+              where: { eventId: event.eventId, sentAt: null },
+              data: { lastErrorCode: errorCode },
+            });
+            this.logger.error(
+              `BMS availability event ${event.eventId} was permanently rejected (${errorCode}); later events for the vehicle may proceed.`,
+            );
+            continue;
+          }
+
+          blockedVehicles.add(event.vehicleId);
           const attempt = event.attempts + 1;
           const delay = Math.min(
             RETRY_BASE_SECONDS * 2 ** Math.min(attempt - 1, 10),
@@ -134,6 +156,7 @@ export class BmsAvailabilityService {
           vehicleId: event.vehicleId,
           eventVersion: { lt: event.eventVersion },
           sentAt: null,
+          ...retryableAvailabilityEventFilter,
         },
         select: { eventId: true },
       });
@@ -144,6 +167,7 @@ export class BmsAvailabilityService {
           eventId: event.eventId,
           sentAt: null,
           nextAttemptAt: { lte: now },
+          ...retryableAvailabilityEventFilter,
         },
         data: {
           attempts: { increment: 1 },
