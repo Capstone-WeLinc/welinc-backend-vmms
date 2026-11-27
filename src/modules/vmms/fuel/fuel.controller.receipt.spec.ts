@@ -4,6 +4,7 @@ import type { FuelActor } from './fuel.service';
 import { FuelController } from './fuel.controller';
 import { FuelReceiptScannerService } from './fuel-receipt-scanner.service';
 import { FuelService } from './fuel.service';
+import { VrmsRepairReferralsService } from '../integrations/vrms/vrms-repair-referrals.service';
 import { JwtAuthGuard } from '../../../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../../auth/guards/roles.guard';
 
@@ -39,6 +40,7 @@ describe('FuelController receipt upload rate limit', () => {
       providers: [
         { provide: FuelService, useValue: fuel },
         { provide: FuelReceiptScannerService, useValue: {} },
+        { provide: VrmsRepairReferralsService, useValue: {} },
       ],
     })
       .overrideGuard(JwtAuthGuard)
